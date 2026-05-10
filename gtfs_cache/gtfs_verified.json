@@ -1,0 +1,14 @@
+{
+  "AU_New South Wales": {
+    "feed_id": "2449",
+    "url": "https://opendata.transport.nsw.gov.au/data/dataset/d1f68d4f-b778-44df-9823-cf2fa922e47f/resource/67974f14-01bf-47b7-bfa5-c7f2f8a950ca/download/full_greater_sydney_gtfs_static_0.zip"
+  },
+  "NZ_Auckland": {
+    "feed_id": "1029",
+    "url": "https://gtfs.at.govt.nz/gtfs.zip"
+  },
+  "AU_Queensland": {
+    "feed_id": "3048",
+    "url": "https://gtfsrt.api.translink.com.au/gtfs/SEQ_SCH_GTFS.zip"
+  }
+}

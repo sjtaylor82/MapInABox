@@ -1,0 +1,126 @@
+{
+  "_comment": [
+    "gtfs_overrides.json — supplementary GTFS feeds for blindmap51.",
+    "These cover operators missing from or poorly indexed in the MobilityData catalog.",
+    "Each region key maps to a list of feed entries. The app loads all entries for",
+    "the current region alongside whatever the MobilityData catalog provides.",
+    "",
+    "Region key format: CC_Subdivision  (e.g. AU_Queensland, US_California)",
+    "For country-wide operators use: CC  (e.g. US, CA, GB)",
+    "",
+    "Fields per entry:",
+    "  feed_id   - local name (arbitrary, must be unique within this file)",
+    "  url       - direct GTFS zip download URL",
+    "  note      - human-readable description",
+    "  verified  - date URL was last confirmed working (YYYY-MM)",
+    "  status    - 'active' | 'unverified' | 'dead' (dead entries are skipped)",
+    "",
+    "URL rot is inevitable. If a feed stops working, set status to 'dead' and",
+    "update the url + verified fields when a new endpoint is found.",
+    "Hosted version: https://YOUR-SERVER/gtfs_overrides.json (update this URL)"
+  ],
+
+  "AU_Victoria": [
+    {
+      "feed_id": "ptv_victoria",
+      "note": "PTV (Public Transport Victoria) is in MobilityData as feed 657. Only add an entry here if 657 stops working.",
+      "url": "https://data.ptv.vic.gov.au/downloads/gtfs.zip",
+      "verified": "2026-03",
+      "status": "unverified",
+      "_note": "PTV requires a developer API key for real-time but the static GTFS is open."
+    }
+  ],
+
+  "AU_New_South_Wales": [
+    {
+      "feed_id": "tfnsw_complete",
+      "url": "https://api.transport.nsw.gov.au/v1/gtfs/schedule/complete",
+      "note": "Transport for NSW complete static GTFS — all operators including regional rail, coaches, light rail. Requires a free TfNSW Open Data API key passed as 'Authorization: apikey YOUR_KEY' header. MobilityData feed 2449 is a pre-authorised mirror that works without a key; prefer that. Use this entry only if 2449 fails.",
+      "verified": "2026-03",
+      "status": "unverified",
+      "requires_auth": true,
+      "_auth_note": "Register free at https://opendata.transport.nsw.gov.au to get an API key."
+    }
+  ],
+
+  "US": [
+    {
+      "feed_id": "amtrak",
+      "url": "https://content.amtrak.com/content/gtfs/GTFS.zip",
+      "note": "Amtrak national passenger rail — all routes across the US. Not in MobilityData catalog. Covers Acela, Northeast Regional, California Zephyr, Empire Builder, Coast Starlight, Crescent, and all other long-distance routes.",
+      "verified": "2026-03",
+      "status": "active"
+    }
+  ],
+
+  "CA": [
+    {
+      "feed_id": "viarail",
+      "url": "https://www.viarail.ca/sites/all/files/gtfs/viarail.zip",
+      "note": "VIA Rail Canada national passenger rail — Toronto-Montreal-Ottawa corridor, The Canadian (Toronto-Vancouver), Ocean (Montreal-Halifax), and regional routes. Not reliably indexed in MobilityData.",
+      "verified": "2026-03",
+      "status": "active"
+    }
+  ],
+
+  "GB": [
+    {
+      "feed_id": "gb_national_rail",
+      "url": "https://opendata.nationalrail.co.uk/api/staticfeeds/4.0/timetable",
+      "note": "National Rail (UK) complete timetable in CIF/GTFS format. Requires free registration at https://opendata.nationalrail.co.uk — free API key needed. Covers all franchised passenger rail in Great Britain.",
+      "verified": "2026-03",
+      "status": "unverified",
+      "requires_auth": true,
+      "_auth_note": "Register at https://opendata.nationalrail.co.uk for a free API key.",
+      "_tfl_note": "Transport for London does NOT publish a static GTFS zip. They use a REST API (https://api.tfl.gov.uk). Third-party GTFS conversions exist but have no stable download URL. MobilityData has no TfL entry. London buses are partially covered by the Traveline National Dataset."
+    },
+    {
+      "feed_id": "gb_traveline_southeast",
+      "url": "https://data.bus-data.dft.gov.uk/timetable/download/gtfs-file/england/",
+      "note": "UK Bus Open Data Service (BODS) — all England bus timetables in GTFS format including London buses. Free, no auth required. Covers all registered bus services in England.",
+      "verified": "2026-03",
+      "status": "active"
+    }
+  ],
+
+  "FR": [
+    {
+      "feed_id": "sncf_intercites",
+      "url": "https://eu.ftp.opendatasoft.com/sncf/gtfs/export-intercites-gtfs-last.zip",
+      "note": "SNCF Intercités long-distance trains in France (non-TGV). Not always in MobilityData. TGV/Ouigo are a separate feed.",
+      "verified": "2026-03",
+      "status": "unverified"
+    },
+    {
+      "feed_id": "sncf_tgv",
+      "url": "https://eu.ftp.opendatasoft.com/sncf/gtfs/export-tgv-gtfs-last.zip",
+      "note": "SNCF TGV/Ouigo high-speed trains in France.",
+      "verified": "2026-03",
+      "status": "unverified"
+    }
+  ],
+
+  "DE": [
+    {
+      "feed_id": "db_fernverkehr",
+      "url": "https://download.gtfs.de/germany/fv_free/latest.zip",
+      "note": "Deutsche Bahn long-distance (Fernverkehr) — ICE, IC, EC trains across Germany and into neighbouring countries. Free tier from gtfs.de.",
+      "verified": "2026-03",
+      "status": "unverified"
+    }
+  ],
+
+  "JP": [
+    {
+      "feed_id": "odpt_tokyo",
+      "url": "https://api.odpt.org/api/4/files/ODPT/data/ODPT_Train.zip",
+      "note": "Open Data for Public Transport (ODPT) — Tokyo metro area rail. Requires free API key from https://developer.odpt.org. MobilityData coverage of Japan is sparse.",
+      "verified": "2026-03",
+      "status": "unverified",
+      "requires_auth": true
+    }
+  ],
+
+  "_schema_version": "1",
+  "_last_updated": "2026-03-13"
+}

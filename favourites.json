@@ -1,0 +1,39 @@
+[
+  {
+    "id": "92f5516bbc7141d6bb65d31f3f7a5a0e",
+    "type": "poi",
+    "name": "Vision Australia Coorparoo",
+    "lat": -27.4936,
+    "lon": 153.061691,
+    "kind": "health",
+    "source": "google",
+    "created_at": 1777236849.9445462,
+    "meta": {
+      "osm_id": 0,
+      "osm_type": "node",
+      "street": ""
+    }
+  },
+  {
+    "id": "a5db1bad9d6a492b88227c94a2a8c8bb",
+    "type": "place",
+    "name": "189 Queen Street, Cleveland",
+    "lat": -27.527573668629806,
+    "lon": 153.25970559041946,
+    "kind": "address",
+    "source": "current_position",
+    "created_at": 1777237474.52391,
+    "meta": {}
+  },
+  {
+    "id": "c250823fd8f34d7ba9da002f91c92de6",
+    "type": "poi",
+    "name": "Banjo's Bakery Cafe",
+    "lat": -27.5261393,
+    "lon": 153.2687657,
+    "kind": "bakery",
+    "source": "poi",
+    "created_at": 1777764967.5039036,
+    "meta": {}
+  }
+]

@@ -1,0 +1,883 @@
+Map in a Box User Manual
+========================
+
+This manual will get you started using MapInABox. It explains what Map in a Box does,
+how to move around, and which keys to press.
+
+
+1. What Map in a Box is
+----------------------
+
+Map in a Box is an accessible map and exploration program.
+
+It is designed especially for blind and low-vision users who wish to explore the world from the comfort of their PC.
+
+MapInABox will not only provide a spatial understanding of the country of the world, but also let you virtually walk around your neighbourhood street by street, and explore points of interests such as restaurants, transport hubs, parks or shopping centres, in any suburb of the world you choose.
+
+
+The program has several main modes:
+
+Map mode:
+  Explore the world map by country, city, coordinates, landmarks, and nearby
+  features.
+
+Street mode:
+  Explore streets, intersections, house numbers, and nearby points of interest.
+
+Walking mode:
+  Move along a street network with controlled choices at intersections. 
+
+Free mode:
+  Explore nearby streets and points of interest relative to your heading.
+
+Tools:
+  Route, transport, flight, hotel, food, toll, and journey planning tools.
+
+Challenge game:
+  A country-finding game for learning geography by sound.
+
+
+2. General screen reader notes
+------------------------------
+
+Map in a Box speaks important messages through accessible output. Many brief
+messages are spoken without moving your keyboard focus.
+
+Some screens use a list. In a list:
+
+Up and Down:
+  Move through items.
+
+Enter:
+  Open, jump to, or select the current item.
+
+Escape:
+  Close the list or dialog.
+
+F1:
+  Open keyboard help for the mode you are currently in.
+
+If you are ever unsure where you are, press F2 in map mode to repeat the current
+location.
+
+
+3. Starting out
+---------------
+
+When Map in a Box opens, it starts at your home location if one has been set.
+If no home location exists, the program asks you to set one.
+
+The main window has a map and a list/status area. Screen reader users will
+mostly interact with the list and spoken messages.
+
+Use the arrow keys to move. The app announces the place, country, remote area,
+ocean, or feature you are over.
+
+
+4. Map mode
+-----------
+
+Map mode is the main world map.
+
+Basic movement:
+
+Arrow keys:
+  Move around the map.
+
+Shift plus arrow keys:
+  Move in smaller steps.
+
+Control plus arrow keys:
+  Jump to the next administrative region in that direction, such as a state,
+  county, or province where available.
+
+Control plus Alt plus arrow keys:
+  Jump to the nearest country in that direction.
+
+F2:
+  Repeat the current location.
+
+F3:
+  Announce latitude.
+
+F4:
+  Announce longitude.
+
+F5:
+  Announce continent.
+
+F6:
+  Announce country facts.
+
+Shift+F6:
+  Fetch and read a Wikipedia-style summary for the current place, state, or country.
+
+F7:
+  Turn map sounds on or off.
+
+F8:
+  Flash the current country on the visible map.
+
+F9:
+  Toggle full-screen map view.
+
+F11:
+  Enter street mode.
+
+Shift+F11:
+  Pre-download street data for the current map position.
+
+F12:
+  Open the tools menu.
+
+Control+comma:
+  Open Settings.
+
+
+5. Jumping to a place
+---------------------
+
+Press J in map mode to jump.
+
+You can enter:
+
+City names:
+  For example, Brisbane, London, Vancouver.
+
+Countries:
+  For example, Japan, New Zealand, South Africa.
+
+Coordinates:
+  For example, -27.47, 153.03.
+
+Landmarks and natural features:
+  Some major deserts, mountains, reefs, gulfs, capes, and similar features are
+  searchable.
+
+If the place is not found, Map in a Box says "not found" and returns you to the
+input box so you can try again.
+
+
+6. Location information keys
+----------------------------
+
+These keys work in map mode.
+
+Shift+F1:
+  Capital city of the current country.
+
+Shift+F2:
+  Climate or latitude zone.
+
+T:
+  Local time.
+
+Shift+T:
+  Timezone.
+
+S:
+  Sunrise and sunset.
+
+W:
+  Weather. If you are over open water, W may give sea temperature instead.
+
+Q:
+  Air quality.
+
+A:
+  Nearest airport.
+
+Shift+A:
+  Aircraft overhead.
+
+Control+Shift+A:
+  Departures and arrivals at the nearest airport. This requires an
+  AviationStack API key.
+
+L:
+  Languages for the current country.
+
+$:
+  Currency for the current country.
+
+N:
+  Nearby geographic features.
+
+P:
+  Point of interest search.
+
+Street-level imagery:
+  Street View will fall back to an open Mapillary view when Google is not
+  configured. Satellite imagery still needs Google. For both Street View and
+  satellite, the image can still open without Gemini, but a Gemini API key is
+  required to fetch the visual description.
+
+
+7. Spatial tones
+----------------
+
+Spatial tones help you understand position by sound.
+
+In map mode, tones represent where you are. Pitch and stereo position help give
+an audio sense of latitude and longitude.
+
+Settings has three spatial tone modes:
+
+World:
+  Tones are based on the whole world.
+
+Country:
+  Tones are based on the current country.
+
+Region:
+  Tones are based on the current state, province, or region where possible.
+
+Region mode is useful in large countries because it gives finer local feedback.
+
+
+8. Marks and destination
+------------------------
+
+Map mode has three mark slots and one destination.
+
+This is useful when comparing several possible origins with one destination.
+For example, you might mark three pickup locations, set an airport as the
+destination, and compare direction and distance.
+
+M:
+  Choose mark 1, 2, or 3. Press the number immediately to store the current
+  location in that slot.
+
+Shift+M:
+  Choose mark 1, 2, or 3 to remove that mark.
+
+D:
+  Set the current location as the destination.
+
+Alt+1:
+  Report distance and direction from mark 1 to the destination.
+
+Alt+2:
+  Report distance and direction from mark 2 to the destination.
+
+Alt+3:
+  Report distance and direction from mark 3 to the destination.
+
+F:
+  Find food between a saved mark and the destination. The food search asks which
+  mark to use.
+
+
+9. Favourites
+-------------
+
+Control+F:
+  Open favourites.
+
+Control+Shift+F:
+  Add the current place, selected point of interest, or current location to
+  favourites.
+
+Favourites are useful for home, work, regular stops, transport hubs, or places
+you want to return to later.
+
+
+10. Street mode
+---------------
+
+Press F11 from map mode to enter street mode.
+
+Street mode loads nearby roads and allows more detailed local exploration.
+Depending on the area and internet connection, loading may take a short time.
+
+Street mode keys:
+
+Arrow keys:
+  Move along the street map.
+
+Shift plus arrow keys:
+  Fine movement.
+
+Control plus arrow keys:
+  Larger movement.
+
+Page Up:
+  Previous known house number.
+
+Page Down:
+  Next known house number.
+
+Control+Page Up:
+  Previous intersection.
+
+Control+Page Down:
+  Next intersection.
+
+Control+Shift+Page Down:
+  Turn onto the cross street.
+
+Control+Shift+Page Up:
+  Turn back onto the street you left.
+
+S:
+  Street search.
+
+A:
+  Address lookup.
+
+X:
+  Nearest cross street.
+
+P:
+  Point of interest list.
+
+O:
+  Shopping centres and transit hubs.
+
+G:
+  Navigate to an address.
+
+Enter:
+  Jump to selected point of interest.
+
+Control+Enter:
+  Explore the selected point of interest, or get transit information if it is a
+  transit stop.
+
+Space:
+  Nearest intersection for the selected point of interest.
+
+Alt+1:
+  Selected point of interest address.
+
+Alt+2:
+  Selected point of interest hours.
+
+Alt+3:
+  Selected point of interest phone.
+
+Alt+4:
+  Selected point of interest website.
+
+Alt+5:
+  Ask Gemini about the selected point of interest. Requires a Gemini API key.
+
+Control+W:
+  Open the selected point of interest website.
+
+Backspace:
+  Go back in point of interest exploration.
+
+Escape:
+  Close a point of interest list.
+
+F11:
+  Return to map mode.
+
+
+11. Walking mode
+----------------
+
+Walking mode is for guided movement along streets and intersections.
+
+Walking mode keys:
+
+Up and Down:
+  Move forward and backward.
+
+Left and Right:
+  Choose turns.
+
+Space:
+  List turn options.
+
+H:
+  Current heading.
+
+X:
+  Nearest intersection.
+
+I:
+  Current position information.
+
+P:
+  Point of interest search.
+
+W:
+  Leave walking mode.
+
+F1:
+  Help.
+
+Walking mode can announce nearby POIs. You can choose the category, radius, and
+whether the category name is included, in Settings.
+
+
+12. Free mode
+-------------
+
+Free mode is another way to explore streets and POIs by heading.
+
+Free mode keys:
+
+Up:
+  Move forward.
+
+Left:
+  Describe points of interest on the left.
+
+Right:
+  Describe points of interest on the right.
+
+Control+Left:
+  Snap to nearest cross street.
+
+Control+Right:
+  Snap to nearest cross street.
+
+H:
+  Current heading.
+
+X:
+  Nearest intersection.
+
+R:
+  Turn around.
+
+A:
+  Nearby address numbers.
+
+P:
+  POI list.
+
+F:
+  Leave free mode.
+
+Delete:
+  Delete a POI.
+
+F2:
+  Rename a POI.
+
+
+13. Points of interest
+----------------------
+
+Points of interest include places such as food, shops, transport, parks,
+medical services, accommodation, community services, arts venues, and landmarks.
+
+When searching for POIs, you can usually choose a category. Available categories
+include:
+
+All nearby
+Food and drink
+Shopping
+Public transport
+Trains and stations
+Health and medical
+Community and services
+Arts, venues and landmarks
+Parks and outdoors
+Accommodation
+
+Some POI details require a HERE API key. Gemini questions require a Gemini API
+key.
+
+
+14. Find food
+-------------
+
+In map mode, press F to find food along a route.
+
+First set a destination with D.
+
+Then make at least one mark with M.
+
+Press F. Map in a Box asks which mark to use as the starting point, then finds
+food options along the way to the destination.
+
+This feature is intended for real travel planning, such as choosing where to
+stop between a pickup point and a destination.
+
+
+15. The tools menu
+------------------
+
+Press F12 in map mode to open Tools.
+
+Tools may include:
+
+Detour Calculator:
+  Compare a direct trip with a trip that includes stop-offs.
+
+Route Explorer:
+  Compare route options, suburbs, and tolls.
+
+Toll Compare:
+  Compare toll and toll-free routes.
+
+Journey Planner:
+  Public transport journey planning.
+
+Departure Board:
+  Find stops and departure boards. The default source is GTFS data, which is
+  the open timetable format used by many transit agencies. If you choose the
+  Google Places option in Settings, the app uses Google to help find transit
+  stations first, then uses any matching timetable data it can resolve.
+
+Flight Search:
+  Search flights between airports.
+
+Hotel Search:
+  Search hotels in a city.
+
+Find Food:
+  Find food between a mark and a destination.
+
+Some tools need internet access or API keys. If a key is missing, Map in a Box
+will tell you.
+
+Some tools have simpler fallbacks. For example, Departure Board can use GTFS
+data without Google, and some POI and route features can still work with local
+or non-Google data when a key is missing.
+
+
+16. Geography challenge game
+----------------------------
+
+Press F10 in map mode to start or stop the country discovery challenge.
+
+The game gives you a country and asks you to find it on the world map.
+
+Challenge sounds:
+
+Map position tone:
+  The normal world-map spatial tone tells you where you currently are.
+
+Sonar pulse:
+  A soft centred pulse rises in pitch as you get closer to the target country.
+
+Heartbeat:
+  A low heartbeat speeds up as time runs down. This is separate from the sonar.
+
+Fanfare:
+  Plays when you find the country.
+
+Buzzer:
+  Plays when time runs out.
+
+Shift+F10:
+  Repeat the current target and time remaining.
+
+Control+F10:
+  Start a scored challenge session.
+
+R:
+  Repeat the target while a challenge is active.
+
+  Jump is disabled during the challenge.
+
+Challenge direction setting:
+
+Map learning:
+  Direction follows the usual left-right world map layout. This is best for
+  teaching where countries are on a map.
+
+Shortest globe:
+  Direction uses the shortest route around the globe, including across the
+  International Date Line.
+
+
+17. Settings
+------------
+
+Press Control+comma to open Settings.
+
+Settings include:
+
+Walking mode POI announcements:
+  Turn nearby POI announcements on or off.
+
+POIs to announce while walking:
+  Choose what kind of nearby POIs walking mode should announce.
+
+Announce POIs within:
+  Choose the walking-mode POI radius.
+
+Include category label:
+  Include the POI category in announcements.
+
+Spatial tones:
+  Choose World, Country, or Region.
+
+Challenge direction:
+  Choose Map learning or Shortest globe.
+
+POI database:
+  Choose OpenStreetMap or HERE for street and free mode POIs.
+
+Named POI search radius:
+  Choose how widely to search for named POIs.
+
+Navigation provider:
+  Choose OpenStreetMap, Google Maps, or HERE for walking routes.
+
+API keys:
+  Enter keys for Google, Gemini, HERE, AviationStack, or RapidAPI if you use
+  features that need them.
+
+Refresh Transit Feed Catalog:
+  Update the public transport feed catalog.
+
+Logging:
+  Choose which events are written to the log.
+
+Set Home Location:
+  Set your home/start location.
+
+
+18. Internet and API keys
+-------------------------
+
+Many basic map features work from local data.
+
+Some features need internet access:
+
+Weather
+Timezone
+Wikipedia summaries
+Rest country information
+Some POI lookups
+Street downloads
+Transport data
+Flights
+Hotels
+Route planning
+
+Some features also need API keys:
+
+HERE:
+  Live POI details and HERE walking routes.
+
+Google:
+  Google Maps navigation.
+
+Gemini:
+  Ask Gemini about a POI or transit question.
+
+AviationStack:
+  Airport arrivals and departures, and some flight information.
+
+RapidAPI:
+  Flight and hotel services used by some tools.
+
+If an API key is missing, the program usually says what is needed.
+
+18.1. What changes when a key is missing
+----------------------------------------
+
+HERE missing:
+  Live POI details are reduced to the local information already available in the
+  map data. HERE walking routes are not available.
+
+Google missing:
+  Google Maps navigation, satellite imagery, and some Google-based lookups are
+  not available. Where possible, the app uses a non-Google fallback instead.
+
+Gemini missing:
+  Descriptions for some POIs, street or satellite imagery, menus, and transit
+  questions are not available. The underlying feature may still work in a
+  simpler form.
+
+AviationStack missing:
+  Airport arrivals and departures are not available.
+
+RapidAPI missing:
+  Flight search and hotel search are not available.
+
+OpenSky missing:
+  Overhead flight destination lookup is not available.
+
+In general, if a key is missing, Map in a Box either uses a simpler source or
+explains what is missing.
+
+
+19. Common workflows
+--------------------
+
+Find a city:
+  Press J.
+  Type the city name.
+  Choose the result.
+  Press Enter.
+
+Find facts about a country:
+  Move onto the country.
+  Press F6 for facts.
+  Press Shift+F1 for capital.
+  Press L for languages.
+  Press $ for currency.
+
+Explore a city at street level:
+  Jump to the city.
+  Press F11.
+  Wait for streets to load.
+  Use arrow keys, S for street search, P for POIs, and A for address lookup.
+
+Plan food between two places:
+  Move to the starting place.
+  Press M, then 1, 2, or 3.
+  Move to the destination.
+  Press D.
+  Press F.
+  Choose the mark to use.
+
+Compare three possible pickup points:
+  Move to each pickup point.
+  Press M and store it as mark 1, 2, or 3.
+  Move to the destination.
+  Press D.
+  Press Alt+1, Alt+2, and Alt+3 to compare.
+
+Play the geography challenge:
+  Press F10.
+  Listen for the target country.
+  Move with arrow keys.
+  Use the map-position tone to know where you are.
+  Use the sonar pitch to know whether you are getting closer.
+  Press Shift+F10 or R to repeat the target.
+
+
+20. Troubleshooting
+-------------------
+
+I pressed a key and nothing happened:
+  Check which mode you are in. Some keys only work in map mode, street mode,
+  walking mode, or free mode.
+
+Street mode says it is loading:
+  Wait a moment. Some areas need data to be downloaded.
+
+A feature says an API key is missing:
+  Open Settings with Control+comma and enter the key if you have one.
+
+The map says remote area:
+  The nearest city may be far away. Try postcode lookup, nearby features, or
+  street mode if street data is available.
+
+The challenge sound is confusing:
+  In Settings, try Challenge direction: Map learning. Also check the spatial
+  tones mode. World mode is usually easiest for learning the world map.
+
+I am lost:
+  Press F2 to repeat location.
+  Press J to jump somewhere known.
+  Press Control+F to open favourites.
+
+
+21. Quick key reference
+-----------------------
+
+Global and map keys:
+
+F1: Help
+F2: Repeat location
+Shift+F2: Climate zone
+F3: Latitude
+F4: Longitude
+Shift+F3: Volume down
+Shift+F4: Volume up
+F5: Continent
+F6: Country facts
+Shift+F6: Wikipedia summary
+F7: Sounds on/off
+F8: Flash country
+F9: Full-screen map on/off
+F10: Challenge game
+Ctrl+F10: Scored challenge session
+Shift+F10: Repeat challenge target
+F11: Street mode
+Shift+F11: Pre-download streets
+F12: Tools menu
+Ctrl+comma: Settings
+J: Jump
+M: Set mark
+Shift+M: Remove mark
+D: Set destination
+Alt+1, Alt+2, Alt+3: Mark to destination report
+F: Find food
+N: Nearby geographic features
+P: POI search
+T: Local time
+Shift+T: Timezone
+S: Sunrise and sunset
+A: Nearest airport
+Shift+A: Overhead flights
+Ctrl+Shift+A: Nearest airport flights
+Q: Air quality
+L: Languages
+Shift+F1: Capital city
+$: Currency
+W: Weather or sea temperature
+Ctrl+F: Favourites
+Ctrl+Shift+F: Add favourite
+
+Street mode keys:
+
+Arrow keys: Move
+Shift+arrows: Fine movement
+Ctrl+arrows: Larger movement
+Page Up: Previous house number
+Page Down: Next house number
+Ctrl+Page Up: Previous intersection
+Ctrl+Page Down: Next intersection
+Ctrl+Shift+Page Down: Turn onto cross street
+Ctrl+Shift+Page Up: Turn back
+S: Street search
+A: Address lookup
+X: Nearest cross street
+P: POI list
+O: Shopping centres and transit hubs
+G: Navigate to address
+Enter: Jump to selected POI
+Ctrl+Enter: Explore selected POI
+Space: Nearest intersection for selected POI
+Alt+1: POI address
+Alt+2: POI hours
+Alt+3: POI phone
+Alt+4: POI website
+Alt+5: Ask Gemini
+Ctrl+W: Open POI website
+Escape: Close POI list
+Backspace: Go back in POI exploration
+F11: Return to map mode
+
+Walking mode keys:
+
+Up and Down: Move forward and backward
+Left and Right: Choose turns
+Space: Turn options
+H: Heading
+X: Nearest intersection
+I: Position information
+P: POI search
+W: Leave walking mode
+
+Free mode keys:
+
+Up: Move forward
+Left: Describe POIs on the left
+Right: Describe POIs on the right
+Ctrl+Left: Snap to nearest cross street
+Ctrl+Right: Snap to nearest cross street
+H: Heading
+X: Nearest intersection
+R: Turn around
+A: Nearby address numbers
+P: POI list
+F: Leave free mode
+Delete: Delete POI
+F2: Rename POI
+
+
+End of manual.

@@ -1,0 +1,64 @@
+name: Build macOS app
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "core.py"
+      - "build.py"
+      - "MapInABox.spec"
+      - ".github/workflows/build-macos-app.yml"
+      - "*.py"
+
+jobs:
+  build:
+    runs-on: macos-13
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Upgrade packaging tools
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+
+      - name: Install app dependencies
+        run: |
+          python -m pip install \
+            pyinstaller \
+            wxPython \
+            numpy \
+            pandas \
+            Pillow \
+            pygame \
+            shapely \
+            h3 \
+            pyarrow \
+            timezonefinder \
+            pycountry \
+            accessible-output2 \
+            google-genai \
+            google-api-core \
+            proto-plus
+
+      - name: Build macOS app bundle
+        run: |
+          python build.py mac
+
+      - name: Package app bundle
+        run: |
+          cd dist
+          ditto -c -k --sequesterRsrc --keepParent "MapInABox.app" "MapInABox-macOS.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MapInABox-macOS
+          path: dist/MapInABox-macOS.zip
