@@ -1,0 +1,66 @@
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+
+# Build outputs
+build/
+dist/
+installer/
+
+# Logs and caches
+*.log
+miab.log
+poi_cache.json
+*.cache
+*.tmp
+
+# Local settings and secrets
+settings.json
+credentials.json
+credentials.json.bak
+
+# Runtime cache directories (rebuilt on first run)
+gtfs_cache/
+road_cache/
+
+# Large runtime data files
+worldcities.feather
+
+# Runtime JSON caches (per-user state)
+google_review_cache.json
+hotel_cache.json
+here_poi_cache.json
+wiki_cache.json
+favourites.json
+flight_dest_cache.json
+
+# Packaging leftovers
+*.spec~
+*.manifest
+
+# Installer and release artifacts
+*.exe
+*.msi
+*.dmg
+*.zip
+
+# Claude Code local session files
+.claude/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Local SSH helper files
+.ssh/
+ssh-git.cmd
+
+# Temporary Git scratch folders
+gitdata/
+gitdir/

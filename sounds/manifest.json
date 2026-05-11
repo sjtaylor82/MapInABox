@@ -1,0 +1,728 @@
+{
+  "Australia": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\australia.ogg",
+    "sound": "Laughing Kookaburra.wav",
+    "query": "kookaburra laughing bird",
+    "ext": "ogg"
+  },
+  "Mexico": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\mexico.ogg",
+    "sound": "Mexican National Anthem on Guitar",
+    "query": "national anthem",
+    "ext": "ogg"
+  },
+  "Papua New Guinea": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\papua_new_guinea.ogg",
+    "sound": "Thailand Phangan Jungle Waterfall 2",
+    "query": "rainforest birds tropical",
+    "ext": "ogg"
+  },
+  "kiribati": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\kiribati.ogg",
+    "sound": "Ukulele_Chill.wav",
+    "query": "ukulele",
+    "ext": "ogg"
+  },
+  "Fiji": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\fiji.ogg",
+    "sound": "Kiholo Bay Rocky Break.wav",
+    "query": "tropical ocean island ambient",
+    "ext": "ogg"
+  },
+  "Indonesia": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\indonesia.ogg",
+    "sound": "Bali Cremmation Ceremony - Conclusion",
+    "query": "gamelan bali percussion",
+    "ext": "ogg"
+  },
+  "Nauru": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\nauru.ogg",
+    "sound": "Kiholo Bay Rocky Break.wav",
+    "query": "tropical island beach",
+    "ext": "ogg"
+  },
+  "Philippines": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\philippines.ogg",
+    "sound": "frying tortilla filling040910 .mp3",
+    "query": "street food",
+    "ext": "ogg"
+  },
+  "Malaysia": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\malaysia.ogg",
+    "sound": "Day Time Sounds in Malaysian Jungle.wav",
+    "query": "rainforest malaysia birds",
+    "ext": "ogg"
+  },
+  "Singapore": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\singapore.ogg",
+    "sound": "Gong - percussion 02_03",
+    "query": "chinese temple bell",
+    "ext": "ogg"
+  },
+  "Thailand": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\thailand.ogg",
+    "sound": "Playing with bells in a buddhist temple.wav",
+    "query": "temple bells thailand",
+    "ext": "ogg"
+  },
+  "Vietnam": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\vietnam.ogg",
+    "sound": "Hoi Ann tuning zither like Dan Tranh instrument music microcassette VIETNAM 030112.wav",
+    "query": "dan tranh vietnam zither",
+    "ext": "ogg"
+  },
+  "Myanmar": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\myanmar.ogg",
+    "sound": "Burmese Harp SOLO",
+    "query": "burmese harp",
+    "ext": "ogg"
+  },
+  "Cambodia": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\cambodia.ogg",
+    "sound": "BR_083_Cambodia_BambooMusic.mp3",
+    "query": "khmer traditional music",
+    "ext": "ogg"
+  },
+  "Laos": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\laos.ogg",
+    "sound": "6_drums_luangprabang.WAV",
+    "query": "laos music",
+    "ext": "ogg"
+  },
+  "Japan": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\japan.ogg",
+    "sound": "Skakuhachi -12 Samples.wav",
+    "query": "shakuhachi flute",
+    "ext": "ogg"
+  },
+  "China": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\china.ogg",
+    "sound": "Chinese Violin - The Enchanted Sound of the Erhu",
+    "query": "erhu chinese violin",
+    "ext": "ogg"
+  },
+  "Taiwan": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\taiwan.ogg",
+    "sound": "Japan_Tokyo_Shinjuku_Street_Promoter_Yelling_City.wav",
+    "query": "night market",
+    "ext": "ogg"
+  },
+  "India": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\india.ogg",
+    "sound": "Mixing and transfromation of sitar, tabla, and bell sounds.wav",
+    "query": "tabla drums indian",
+    "ext": "ogg"
+  },
+  "Republic of Korea": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\republic_of_korea.ogg",
+    "sound": "0153 Advertisements_metro.wav",
+    "query": "korea music",
+    "ext": "ogg"
+  },
+  "Democratic People's Republic of Korea": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\democratic_peoples_republic_of_korea.ogg",
+    "sound": "0153 Advertisements_metro.wav",
+    "query": "korean music",
+    "ext": "ogg"
+  },
+  "Mongolia": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\mongolia.ogg",
+    "sound": "Overtone singing -Khoomei.wav",
+    "query": "throat singing tuvan",
+    "ext": "ogg"
+  },
+  "Nepal": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\nepal.ogg",
+    "sound": "SingingBowl_#84.mp3",
+    "query": "singing bowls tibetan",
+    "ext": "ogg"
+  },
+  "Bhutan": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\bhutan.ogg",
+    "sound": "SingingBowl_#84.mp3",
+    "query": "tibetan singing bowl",
+    "ext": "ogg"
+  },
+  "Sri Lanka": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\sri_lanka.ogg",
+    "sound": "AUD_24092017_184113.wav",
+    "query": "drum sri lanka",
+    "ext": "ogg"
+  },
+  "Pakistan": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\pakistan.ogg",
+    "sound": "AUD_24092017_184113.wav",
+    "query": "music pakistan",
+    "ext": "ogg"
+  },
+  "Afghanistan": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\afghanistan.ogg",
+    "sound": "Herat 4.mp3",
+    "query": "afghan music",
+    "ext": "ogg"
+  },
+  "Bangladesh": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\bangladesh.ogg",
+    "sound": "Percussions tribales Bengali.wav",
+    "query": "bengali music",
+    "ext": "ogg"
+  },
+  "Iran": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\iran.ogg",
+    "sound": "Persian Delight",
+    "query": "persian music",
+    "ext": "ogg"
+  },
+  "Turkey": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\turkey.ogg",
+    "sound": "turkish-baglama.wav",
+    "query": "baglama saz turkish",
+    "ext": "ogg"
+  },
+  "Syrian Arab Republic": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\syrian_arab_republic.ogg",
+    "sound": "CarpetForPeace NL 160319-02.ogg",
+    "query": "syrian music",
+    "ext": "ogg"
+  },
+  "Lebanon": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\lebanon.ogg",
+    "sound": "natural water puddle summer 2.06 pm 220618_0409",
+    "query": "oud",
+    "ext": "ogg"
+  },
+  "Israel": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\israel.ogg",
+    "sound": "klezmerphrase_normal.wav",
+    "query": "klezmer clarinet",
+    "ext": "ogg"
+  },
+  "Jordan": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\jordan.ogg",
+    "sound": "Schelde river ambiance 11.23 AM 220905_0526",
+    "query": "oud middle east",
+    "ext": "ogg"
+  },
+  "Saudi Arabia": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\saudi_arabia.ogg",
+    "sound": "Tambourine 2-bars loop 90BPM 44.1kHz",
+    "query": "tambourine",
+    "ext": "ogg"
+  },
+  "Yemen": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\yemen.ogg",
+    "sound": "natural water puddle summer 2.06 pm 220618_0409",
+    "query": "oud",
+    "ext": "ogg"
+  },
+  "Oman": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\oman.ogg",
+    "sound": "natural water puddle summer 2.06 pm 220618_0409",
+    "query": "oud",
+    "ext": "ogg"
+  },
+  "United Arab Emirates": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\united_arab_emirates.ogg",
+    "sound": "Wind on bushes with muffled gust of wind, twig branch, close to desert ground",
+    "query": "desert wind",
+    "ext": "ogg"
+  },
+  "Qatar": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\qatar.ogg",
+    "sound": "ney-1.wav",
+    "query": "oud arabic",
+    "ext": "ogg"
+  },
+  "Kuwait": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\kuwait.ogg",
+    "sound": "Palestinian Zaffeh Trucks Honking \u2013 Ramallah, Palestine",
+    "query": "arabic traditional",
+    "ext": "ogg"
+  },
+  "Bahrain": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\bahrain.ogg",
+    "sound": "ney-1.wav",
+    "query": "oud arabic",
+    "ext": "ogg"
+  },
+  "Uzbekistan": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\uzbekistan.ogg",
+    "sound": "Uighur Traditional Music 1.wav",
+    "query": "silk road music",
+    "ext": "ogg"
+  },
+  "Kyrgyzstan": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\kyrgyzstan.ogg",
+    "sound": "turkish-baglama.wav",
+    "query": "central asia folk music",
+    "ext": "ogg"
+  },
+  "Tajikistan": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\tajikistan.ogg",
+    "sound": "turkish-baglama.wav",
+    "query": "central asia music",
+    "ext": "ogg"
+  },
+  "Turkmenistan": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\turkmenistan.ogg",
+    "sound": "turkish-baglama.wav",
+    "query": "central asia music",
+    "ext": "ogg"
+  },
+  "United Kingdom": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\united_kingdom.ogg",
+    "sound": "Blackbird in summer",
+    "query": "blackbird birdsong english",
+    "ext": "ogg"
+  },
+  "Ireland": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\ireland.ogg",
+    "sound": "Whistling irish melody",
+    "query": "tin whistle",
+    "ext": "ogg"
+  },
+  "France": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\france.ogg",
+    "sound": "accordion street ambience LONG 121205_01.flac",
+    "query": "accordion",
+    "ext": "ogg"
+  },
+  "Germany": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\germany.ogg",
+    "sound": "Virtual Accordion VST: Oscar Woods' Jig (Oscar Wood) feat. Akkordica Anglo-German Concertina",
+    "query": "accordion german",
+    "ext": "ogg"
+  },
+  "Italy": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\italy.ogg",
+    "sound": "Russian Fest Loop",
+    "query": "mandolin",
+    "ext": "ogg"
+  },
+  "Spain": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\spain.ogg",
+    "sound": "Desert Serenade v1",
+    "query": "flamenco",
+    "ext": "ogg"
+  },
+  "Portugal": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\portugal.ogg",
+    "sound": "portuguese guitar in a typical neighborhood",
+    "query": "portuguese guitar",
+    "ext": "ogg"
+  },
+  "Greece": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\greece.ogg",
+    "sound": "Modal improvisation in A.wav",
+    "query": "bouzouki",
+    "ext": "ogg"
+  },
+  "Norway": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\norway.ogg",
+    "sound": "Skarsv\u00e5g Fjordatmo",
+    "query": "fjord wind norway",
+    "ext": "ogg"
+  },
+  "Faroe Islands": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\faroe_islands.ogg",
+    "sound": "Dark Dramatic Scandinavian Atmo Background.wav",
+    "query": "scandinavian",
+    "ext": "ogg"
+  },
+  "Netherlands": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\netherlands.ogg",
+    "sound": "small city harbour ambience NL 150920_0781.ogg",
+    "query": "dutch folk music",
+    "ext": "ogg"
+  },
+  "Belgium": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\belgium.ogg",
+    "sound": "ChurchBell from pasture city 150408_0593.wav",
+    "query": "carillon bell tower",
+    "ext": "ogg"
+  },
+  "Switzerland": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\switzerland.ogg",
+    "sound": "240815_144118_FR_Alphorns_in_Metzeral",
+    "query": "alphorn swiss",
+    "ext": "ogg"
+  },
+  "Czechia": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\czechia.ogg",
+    "sound": "Irish Trad music Navvy on the shore (fast)",
+    "query": "folk fiddle",
+    "ext": "ogg"
+  },
+  "Hungary": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\hungary.ogg",
+    "sound": "Back Online.wav",
+    "query": "dulcimer",
+    "ext": "ogg"
+  },
+  "Bulgaria": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\bulgaria.ogg",
+    "sound": "Bulgarian vox basin",
+    "query": "bulgarian choir",
+    "ext": "ogg"
+  },
+  "Serbia": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\serbia.ogg",
+    "sound": "Gypsy dream.wav",
+    "query": "balkan folk music",
+    "ext": "ogg"
+  },
+  "Croatia": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\croatia.ogg",
+    "sound": "Birds in Comacchio Lake.wav",
+    "query": "adriatic birds",
+    "ext": "ogg"
+  },
+  "Montenegro": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\montenegro.ogg",
+    "sound": "Gypsy dream.wav",
+    "query": "balkan folk music",
+    "ext": "ogg"
+  },
+  "Ukraine": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\ukraine.ogg",
+    "sound": "Via Rail 692 Train Ambience",
+    "query": "ukrainian horn",
+    "ext": "ogg"
+  },
+  "Russian Federation": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\russian_federation.ogg",
+    "sound": "Balalaika loop",
+    "query": "balalaika russian",
+    "ext": "ogg"
+  },
+  "Estonia": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\estonia.ogg",
+    "sound": "GUZHENG CUSTOMIZE YOUR LOOP 01  G 112 BPM",
+    "query": "zither",
+    "ext": "ogg"
+  },
+  "Latvia": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\latvia.ogg",
+    "sound": "GUZHENG CUSTOMIZE YOUR LOOP 01  G 112 BPM",
+    "query": "zither",
+    "ext": "ogg"
+  },
+  "Lithuania": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\lithuania.ogg",
+    "sound": "GUZHENG CUSTOMIZE YOUR LOOP 01  G 112 BPM",
+    "query": "zither",
+    "ext": "ogg"
+  },
+  "Malta": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\malta.ogg",
+    "sound": "20120609_forest_spring_01.flac",
+    "query": "mediterranean birds",
+    "ext": "ogg"
+  },
+  "Cyprus": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\cyprus.ogg",
+    "sound": "Cicadas_Mediterranean.wav",
+    "query": "mediterranean cicadas",
+    "ext": "ogg"
+  },
+  "Luxembourg": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\luxembourg.ogg",
+    "sound": "CalmWinterWoods NL LONG 140120_01.flac",
+    "query": "carillon bells",
+    "ext": "ogg"
+  },
+  "Kenya": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\kenya.ogg",
+    "sound": "Outdoor suburb day ambience.wav",
+    "query": "african birds",
+    "ext": "ogg"
+  },
+  "Tanzania": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\tanzania.ogg",
+    "sound": "Cowboy Ghost BGM.wav",
+    "query": "wildebeest",
+    "ext": "ogg"
+  },
+  "Nigeria": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\nigeria.ogg",
+    "sound": "Shekere.wav",
+    "query": "yoruba",
+    "ext": "ogg"
+  },
+  "Ghana": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\ghana.ogg",
+    "sound": "20111203_Kora_02.wav",
+    "query": "kora west african harp",
+    "ext": "ogg"
+  },
+  "Mali": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\mali.ogg",
+    "sound": "20111203_Kora_02.wav",
+    "query": "kora west africa",
+    "ext": "ogg"
+  },
+  "Senegal": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\senegal.ogg",
+    "sound": "110611-005_chora_harp_from_gambia.wav",
+    "query": "kora senegal",
+    "ext": "ogg"
+  },
+  "Egypt": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\egypt.ogg",
+    "sound": "Romanticia",
+    "query": "oboe",
+    "ext": "ogg"
+  },
+  "Algeria": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\algeria.ogg",
+    "sound": "250705_141117_FR_Traditional_North_African_wedding",
+    "query": "algerian music",
+    "ext": "ogg"
+  },
+  "South Africa": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\south_africa.ogg",
+    "sound": "Vuvuzelas.wav",
+    "query": "vuvuzela south africa",
+    "ext": "ogg"
+  },
+  "Madagascar": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\madagascar.ogg",
+    "sound": "black_and_white_ruffed_lemur02.wav",
+    "query": "lemur call",
+    "ext": "ogg"
+  },
+  "Cameroon": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\cameroon.ogg",
+    "sound": "KALIMBA MEDITATIVE ASMR SOUND.wav",
+    "query": "mbira thumb piano africa",
+    "ext": "ogg"
+  },
+  "Zambia": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\zambia.ogg",
+    "sound": "Ing'oma ya chishinga (Chishinga Drum0",
+    "query": "african drums zambia",
+    "ext": "ogg"
+  },
+  "Zimbabwe": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\zimbabwe.ogg",
+    "sound": "Mbira.wav",
+    "query": "mbira thumb piano",
+    "ext": "ogg"
+  },
+  "Botswana": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\botswana.ogg",
+    "sound": "GUZHENG CUSTOMIZE YOUR LOOP 01  G 112 BPM",
+    "query": "zither",
+    "ext": "ogg"
+  },
+  "Burkina Faso": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\burkina_faso.ogg",
+    "sound": "Drumming Show, Ghana",
+    "query": "djembe west africa",
+    "ext": "ogg"
+  },
+  "Niger": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\niger.ogg",
+    "sound": "whispers of the inland-dunes heath birds insects wind Loonse en Drunense Duinen Netherlands127 pm 251009_0047",
+    "query": "desert wind sahara",
+    "ext": "ogg"
+  },
+  "Chad": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\chad.ogg",
+    "sound": "whispers of the inland-dunes heath birds insects wind Loonse en Drunense Duinen Netherlands127 pm 251009_0047",
+    "query": "desert wind sahara",
+    "ext": "ogg"
+  },
+  "Sierra Leone": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\sierra_leone.ogg",
+    "sound": "Doumbek_Loop_Stereo5.wav",
+    "query": "african drums",
+    "ext": "ogg"
+  },
+  "Gambia": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\gambia.ogg",
+    "sound": "110611-005_chora_harp_from_gambia.wav",
+    "query": "kora gambia",
+    "ext": "ogg"
+  },
+  "Togo": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\togo.ogg",
+    "sound": "balafon short musical phrase",
+    "query": "west african percussion",
+    "ext": "ogg"
+  },
+  "Benin": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\benin.ogg",
+    "sound": "B\u00e9nin_Porto Novo_Adjara - Percussions.wav",
+    "query": "djembe benin",
+    "ext": "ogg"
+  },
+  "Brazil": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\brazil.ogg",
+    "sound": "190921_0664_FR_Capoeira.wav",
+    "query": "berimbau capoeira",
+    "ext": "ogg"
+  },
+  "Colombia": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\colombia.ogg",
+    "sound": "Amanecer en Facatativ\u00e1-Colombia",
+    "query": "andean birds colombia",
+    "ext": "ogg"
+  },
+  "Peru": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\peru.ogg",
+    "sound": "Panpipe Sicu Zampona Loop 100bpm A",
+    "query": "pan flute andean",
+    "ext": "ogg"
+  },
+  "Argentina": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\argentina.ogg",
+    "sound": "Julian Eltinge Tango - Percy Wenrich - Arranged for Strings",
+    "query": "tango violin",
+    "ext": "ogg"
+  },
+  "Chile": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\chile.ogg",
+    "sound": "Wind is blowing in the grass of a patagonian plain. Wind is blowing in the trees in background. (Tierra del fuego, Argentina)",
+    "query": "wind patagonia howling",
+    "ext": "ogg"
+  },
+  "Bolivia": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\bolivia.ogg",
+    "sound": "Transformed wind chimes: Nature-Symphony 20",
+    "query": "pan pipe",
+    "ext": "ogg"
+  },
+  "Uruguay": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\uruguay.ogg",
+    "sound": "Ensayo de comparsa de mujeres de candombe La Melaza",
+    "query": "candombe drum uruguay",
+    "ext": "ogg"
+  },
+  "Cuba": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\cuba.ogg",
+    "sound": "CONGA LOOP 8BARS 100BPM.wav",
+    "query": "congas cuba",
+    "ext": "ogg"
+  },
+  "United States of America": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\united_states_of_america.ogg",
+    "sound": "Creepy Ethereal Call",
+    "query": "bald eagle",
+    "ext": "ogg"
+  },
+  "Canada": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\canada.ogg",
+    "sound": "heath landscape DeNoise NL 811PM 210711_0301.wav",
+    "query": "common loon call",
+    "ext": "ogg"
+  },
+  "Jamaica": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\jamaica.ogg",
+    "sound": "Arabic/Hindi Loop",
+    "query": "reggae",
+    "ext": "ogg"
+  },
+  "Dominican Republic": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\dominican_republic.ogg",
+    "sound": "Hot summer woods hawk Deer snort Little Grassy RTR Trail July 2 2025",
+    "query": "caribbean birds",
+    "ext": "ogg"
+  },
+  "Guatemala": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\guatemala.ogg",
+    "sound": "KEY Juicy Rhodes (JH).wav",
+    "query": "marimba",
+    "ext": "ogg"
+  },
+  "El Salvador": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\el_salvador.ogg",
+    "sound": "Cancion con marimba El Torito Pinto El Salvador",
+    "query": "marimba el salvador",
+    "ext": "ogg"
+  },
+  "Nicaragua": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\nicaragua.ogg",
+    "sound": "KEY Juicy Rhodes (JH).wav",
+    "query": "marimba",
+    "ext": "ogg"
+  },
+  "Costa Rica": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\costa_rica.ogg",
+    "sound": "Toucans singing in the Amazonian Rainforest (Brazil)",
+    "query": "toucan tropical bird",
+    "ext": "ogg"
+  },
+  "Panama": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\panama.ogg",
+    "sound": "birds in rainforest.wav",
+    "query": "tropical birds panama",
+    "ext": "ogg"
+  },
+  "Trinidad and Tobago": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\trinidad_and_tobago.ogg",
+    "sound": "Hot summer woods hawk Deer snort Little Grassy RTR Trail July 2 2025",
+    "query": "caribbean birds",
+    "ext": "ogg"
+  },
+  "Greenland": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\greenland.ogg",
+    "sound": "Wind on bushes with muffled gust of wind, twig branch, close to desert ground",
+    "query": "wind",
+    "ext": "ogg"
+  },
+  "Antarctica": {
+    "file": "C:\\temp\\BlindMap\\sounds\\countries\\antarctica.ogg",
+    "sound": "snowstorm city 02 171211_1249.wav",
+    "query": "blizzard",
+    "ext": "ogg"
+  },
+  "ocean": {
+    "file": "C:\\temp\\BlindMap\\sounds\\regions\\ocean.ogg",
+    "sound": "winter wind ocean \"ile aux vaches\"6",
+    "query": "ocean waves ambiance",
+    "ext": "ogg"
+  },
+  "africa": {
+    "file": "C:\\temp\\BlindMap\\sounds\\regions\\africa.ogg",
+    "sound": "Defensible Twister",
+    "query": "african savanna birds dawn",
+    "ext": "ogg"
+  },
+  "asia": {
+    "file": "C:\\temp\\BlindMap\\sounds\\regions\\asia.ogg",
+    "sound": "Tropical Orchard in Spring",
+    "query": "asian jungle birds tropical",
+    "ext": "ogg"
+  },
+  "europe": {
+    "file": "C:\\temp\\BlindMap\\sounds\\regions\\europe.ogg",
+    "sound": "edge forest 0738AM 210221_0257.wav",
+    "query": "european forest birds",
+    "ext": "ogg"
+  },
+  "north_america": {
+    "file": "C:\\temp\\BlindMap\\sounds\\regions\\north_america.ogg",
+    "sound": "American_Woodcock_and_Whippoorwills.wav",
+    "query": "american forest birds nature",
+    "ext": "ogg"
+  },
+  "south_america": {
+    "file": "C:\\temp\\BlindMap\\sounds\\regions\\south_america.ogg",
+    "sound": "Silent Night Intro Pan Flute Glissando.wav",
+    "query": "pan flute",
+    "ext": "ogg"
+  },
+  "oceania": {
+    "file": "C:\\temp\\BlindMap\\sounds\\regions\\oceania.ogg",
+    "sound": "EndlessOcean-VeniceBeach-Loop.wav",
+    "query": "pacific ocean waves birds",
+    "ext": "ogg"
+  },
+  "middle_east": {
+    "file": "C:\\temp\\BlindMap\\sounds\\regions\\middle_east.ogg",
+    "sound": "December wind through line of beech trees above Teign Gorge",
+    "query": "desert wind middle east",
+    "ext": "ogg"
+  }
+}

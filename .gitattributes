@@ -1,0 +1,21 @@
+# Normalise line endings on commit; checkout uses OS native
+* text=auto
+
+# Binary files — no line-ending conversion
+*.gz     binary
+*.pkl    binary
+*.feather binary
+*.ico    binary
+*.icns   binary
+*.ogg    binary
+*.mp3    binary
+*.exe    binary
+*.msi    binary
+*.dmg    binary
+*.zip    binary
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.pdf    binary
+*.docx   binary
