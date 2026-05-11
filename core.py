@@ -2557,7 +2557,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             "add_fav": new_id(),
             "tools": new_id(), "sounds": new_id(), "challenge": new_id(),
             "challenge_multi": new_id(),
-            "help": new_id(), "about": new_id(),
+            "help": new_id(), "about": new_id(), "donate": new_id(),
         }
         self._menu_ids = ids
 
@@ -2684,6 +2684,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                  lambda e: self.show_help())
         add_item(help_menu, "about", "&About",
                  lambda e: self._show_about())
+        help_menu.AppendSeparator()
+        add_item(help_menu, "donate", "Donate to Project",
+                 lambda e: __import__("webbrowser").open("https://www.paypal.com/donate?business=samtaylor9%40me.com&currency_code=AUD&item_name=Map+in+a+Box"))
         menubar.Append(help_menu, "&Help")
 
         self.SetMenuBar(menubar)
@@ -7843,7 +7846,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _open_settings(self):
         prev_focus = self.FindFocus()
-        dlg = SettingsDialog(self, self.settings)
+        dlg = SettingsDialog(self, self.settings, user_dir=USER_DIR)
         saved = dlg.ShowModal() == wx.ID_OK
         gtfs_refresh = dlg.gtfs_refreshed
         if saved:

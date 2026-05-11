@@ -13,6 +13,7 @@ StreetSearchDialog    — filterable street/name picker
                          one code path)
 """
 
+import os
 import wx
 import wx.adv
 
@@ -129,12 +130,13 @@ POI_CATEGORY_CHOICES: list[tuple[str, str]] = [
 class SettingsDialog(wx.Dialog):
     """Walk-mode POI announcement settings."""
 
-    def __init__(self, parent, settings: dict) -> None:
+    def __init__(self, parent, settings: dict, user_dir: str = "") -> None:
         super().__init__(
             parent, title="Settings", size=(640, 680),
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
         )
         self.settings = dict(settings)
+        self._user_dir = user_dir
         panel = wx.Panel(self)
         vs = wx.BoxSizer(wx.VERTICAL)
         self.notebook = wx.Notebook(panel)
@@ -338,14 +340,17 @@ class SettingsDialog(wx.Dialog):
         ok_btn     = wx.Button(panel, wx.ID_OK,     "Save")
         cancel_btn = wx.Button(panel, wx.ID_CANCEL, "Cancel")
         btn_home   = wx.Button(panel, label="Set Home Location")
+        btn_folder = wx.Button(panel, label="Open Settings Folder")
         hs.Add(ok_btn, 0, wx.RIGHT, 8)
         hs.Add(cancel_btn, 0, wx.RIGHT, 8)
-        hs.Add(btn_home, 0)
+        hs.Add(btn_home, 0, wx.RIGHT, 8)
+        hs.Add(btn_folder, 0)
         vs.Add(hs, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
         panel.SetSizer(vs)
 
         self.set_home_requested = False
         btn_home.Bind(wx.EVT_BUTTON, self._on_set_home)
+        btn_folder.Bind(wx.EVT_BUTTON, self._on_open_folder)
 
         # Populate from existing settings
         self.cb_walk.SetValue(settings.get("walk_announce_pois", True))
@@ -399,6 +404,11 @@ class SettingsDialog(wx.Dialog):
     def _on_set_home(self, event):
         self.set_home_requested = True
         self._on_ok(event)
+
+    def _on_open_folder(self, event) -> None:
+        if self._user_dir and os.path.isdir(self._user_dir):
+            os.startfile(self._user_dir)
+
 
     def _on_ok(self, event) -> None:
         cat_keys = [k for k, _ in POI_CATEGORY_CHOICES]
