@@ -43,6 +43,12 @@ flight_dest_cache.json
 # Packaging leftovers
 *.spec~
 *.manifest
+*.bak
+
+# Uncompressed source data (only .gz versions are used by the build)
+countries.geojson
+worldcities.csv
+airports.csv
 
 # Installer and release artifacts
 *.exe
