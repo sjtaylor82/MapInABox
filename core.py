@@ -1985,9 +1985,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._region_points = {}
         self._region_indices = {}
         self._region_stats = {}
-        city_values = self.df["city"].astype(str).tolist()
-        admin_values = self.df["admin_name"].astype(str).tolist()
-        country_values = self.df["country"].astype(str).tolist()
+        city_values = self.df["city"].fillna("").astype(str).tolist()
+        admin_values = self.df["admin_name"].fillna("").astype(str).tolist()
+        country_values = self.df["country"].fillna("").astype(str).tolist()
         for i, (city, admin, country, lat, lon) in enumerate(zip(
                 city_values, admin_values, country_values,
                 self._city_lats, self._city_lons)):
