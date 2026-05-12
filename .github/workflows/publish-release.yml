@@ -96,7 +96,7 @@ jobs:
           cp install-macos.sh staging/install-macos.sh
           cp README-macOS.txt staging/README.txt
           chmod +x staging/install-macos.sh
-          ditto -c -k --sequesterRsrc --keepParent staging MapInABox-macOS.zip
+          cd staging && ditto -c -k --sequesterRsrc . ../MapInABox-macOS.zip
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4

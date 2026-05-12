@@ -75,7 +75,7 @@ a = Analysis(
     ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=['rthook_pyarrow_stub.py'],
     excludes=[
         # ── Machine-learning stack (not used) ────────────────────────────
         'torch', 'torchvision', 'torchaudio',
@@ -107,6 +107,8 @@ a = Analysis(
         'psutil',
         'lz4',
         'torch',
+        # ── Arrow / Parquet (replaced by pickle cache) ────────────────────
+        'pyarrow',
     ],
     noarchive=False,
     optimize=1,
