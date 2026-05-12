@@ -87,11 +87,19 @@ jobs:
         run: |
           python build.py mac
 
+      - name: Stage macOS release files
+        run: |
+          mkdir -p staging
+          cp -r dist/MapInABox.app staging/MapInABox.app
+          cp install-macos.sh staging/install-macos.sh
+          cp README-macOS.txt staging/README.txt
+          chmod +x staging/install-macos.sh
+
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: MapInABox-macOS
-          path: dist/MapInABox.app
+          path: staging/
           if-no-files-found: error
 
   publish-release:
@@ -117,9 +125,6 @@ jobs:
 
       - name: Package macOS app
         run: |
-          cp install-macos.sh artifacts/macos/install-macos.sh
-          cp README-macOS.txt artifacts/macos/README.txt
-          chmod +x artifacts/macos/install-macos.sh
           cd artifacts/macos
           zip -r MapInABox-macOS.zip MapInABox.app install-macos.sh README.txt
 
