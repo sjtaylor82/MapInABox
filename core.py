@@ -2458,7 +2458,12 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         )
         if dlg.ShowModal() == wx.ID_YES:
             self._status_update("Downloading update...", force=True)
-            if not self._updater.download_and_install():
+            if self._updater.download_and_install():
+                # On Windows the installer is launching — close the app cleanly
+                import sys as _sys
+                if _sys.platform != "darwin":
+                    self.Close()
+            else:
                 wx.MessageBox(
                     "Update download failed. Please visit the website to download manually.",
                     "Update Failed",

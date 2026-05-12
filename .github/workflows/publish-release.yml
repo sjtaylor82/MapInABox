@@ -115,7 +115,7 @@ jobs:
       - name: Package macOS app
         run: |
           cd artifacts/macos
-          ditto -c -k --sequesterRsrc --keepParent "MapInABox.app" "MapInABox-macOS.zip"
+          zip -r MapInABox-macOS.zip MapInABox.app
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
