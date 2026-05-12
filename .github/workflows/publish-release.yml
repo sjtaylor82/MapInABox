@@ -87,19 +87,21 @@ jobs:
         run: |
           python build.py mac
 
-      - name: Stage macOS release files
+      - name: Stage and package macOS release
         run: |
           mkdir -p staging
           cp -r dist/MapInABox.app staging/MapInABox.app
           cp install-macos.sh staging/install-macos.sh
           cp README-macOS.txt staging/README.txt
           chmod +x staging/install-macos.sh
+          cd staging
+          ditto -c -k --sequesterRsrc --keepParent . MapInABox-macOS.zip
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: MapInABox-macOS
-          path: staging/
+          path: staging/MapInABox-macOS.zip
           if-no-files-found: error
 
   publish-release:
@@ -122,11 +124,6 @@ jobs:
         with:
           name: MapInABox-macOS
           path: artifacts/macos
-
-      - name: Package macOS app
-        run: |
-          cd artifacts/macos
-          zip -r MapInABox-macOS.zip MapInABox.app install-macos.sh README.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

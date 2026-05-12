@@ -126,7 +126,7 @@ exe = EXE(
     name='MapInABox',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
+    strip=sys.platform == "darwin",   # Strip debug symbols on macOS to reduce size
     upx=False,           # UPX disabled — triggers AV false positives, bad for an accessibility app
     console=False,       # No console window; output goes to %APPDATA%\MapInABox\miab.log
     disable_windowed_traceback=False,
@@ -138,7 +138,7 @@ coll = COLLECT(
     a.binaries,
     a.zipfiles,
     a.datas,
-    strip=False,
+    strip=sys.platform == "darwin",   # Strip debug symbols on macOS to reduce size
     upx=False,
     name='MapInABox',
 )
