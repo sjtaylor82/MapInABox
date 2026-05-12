@@ -114,8 +114,11 @@ jobs:
 
       - name: Package macOS app
         run: |
+          cp install-macos.sh artifacts/macos/install-macos.sh
+          cp README-macOS.txt artifacts/macos/README.txt
+          chmod +x artifacts/macos/install-macos.sh
           cd artifacts/macos
-          zip -r MapInABox-macOS.zip MapInABox.app
+          zip -r MapInABox-macOS.zip MapInABox.app install-macos.sh README.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

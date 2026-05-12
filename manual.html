@@ -542,6 +542,26 @@
 
 <h2 id="troubleshooting">21. Troubleshooting</h2>
 
+<h3>First launch on macOS — app blocked by Gatekeeper</h3>
+<p>macOS blocks apps from developers who have not paid for Apple's code signing programme. To open Map in a Box for the first time, use the install script included in the zip:</p>
+<ol>
+  <li>Extract the downloaded zip. You will find <code>MapInABox.app</code> and <code>install-macos.sh</code> in the same folder.</li>
+  <li>Open Terminal (Applications → Utilities → Terminal, or Spotlight search for Terminal).</li>
+  <li>Type <code>bash </code> (with a space after), then drag the <code>install-macos.sh</code> file into the Terminal window. Press <code>Enter</code>.</li>
+  <li>The script removes the restriction, copies the app to your Applications folder, and opens it.</li>
+</ol>
+<p>After running the script once, you can open Map in a Box from your Applications folder normally — the script does not need to be run again.</p>
+<p>Alternatively, in Terminal:</p>
+<pre><code>xattr -rd com.apple.quarantine /path/to/MapInABox.app</code></pre>
+
+<h3>First launch on Windows — SmartScreen warning</h3>
+<p>Windows may show a SmartScreen warning the first time you run the installer because the app does not yet have a widespread download history. This warning will reduce and eventually stop appearing as more people download the app. To proceed:</p>
+<ol>
+  <li>When the SmartScreen dialog appears, press <code>Tab</code> to reach the <strong>More info</strong> link and press <code>Enter</code>.</li>
+  <li>Press <code>Tab</code> again to reach the <strong>Run anyway</strong> button and press <code>Enter</code>.</li>
+</ol>
+
+<h3>General issues</h3>
 <table>
   <tr><th>Problem</th><th>What to try</th></tr>
   <tr><td>A key press does nothing</td><td>Check which mode you are in. Some keys are mode-specific. Press <code>F1</code> for context-sensitive help.</td></tr>
