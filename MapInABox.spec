@@ -52,10 +52,6 @@ a = Analysis(
         ('GeoFeatures',          'GeoFeatures'),
     ],
     hiddenimports=all_hidden + [
-        # pyarrow — needed for .feather read/write
-        'pyarrow',
-        'pyarrow.vendored',
-        'pyarrow.vendored.version',
         # pandas internals that aren't always picked up
         'pandas._libs.tslibs.np_datetime',
         'pandas._libs.tslibs.nattype',

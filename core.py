@@ -137,7 +137,7 @@ SUPPRESSED_POIS_PATH   = os.path.join(USER_DIR,  "suppressed_pois.json")
 RENAMED_POIS_PATH      = os.path.join(USER_DIR,  "renamed_pois.json")
 
 # ── Caches (%LOCALAPPDATA%\MapInABox\Cache) ───────────────────────────────────
-CACHE_PATH             = os.path.join(CACHE_DIR, "worldcities.feather")
+CACHE_PATH             = os.path.join(CACHE_DIR, "worldcities.pkl")
 SHOP_CACHE_PATH        = os.path.join(CACHE_DIR, "shop_cache.json")
 WIKI_CACHE_PATH        = os.path.join(CACHE_DIR, "wiki_cache.json")
 PLACE_CACHE_PATH       = os.path.join(CACHE_DIR, "place_cache.json")
@@ -1366,7 +1366,7 @@ def load_offline_data():
         try:
             if os.path.exists(CSV_PATH) and os.path.getmtime(CSV_PATH) > os.path.getmtime(CACHE_PATH):
                 raise ValueError("stale cache")
-            df = pd.read_feather(CACHE_PATH)
+            df = pd.read_pickle(CACHE_PATH)
             if 'city' not in df.columns or 'population' not in df.columns:
                 raise ValueError("stale cache")
             return df, None
@@ -1382,7 +1382,7 @@ def load_offline_data():
         ).dropna(subset=['lat', 'lng'])
         df = df.reset_index(drop=True)
         try:
-            df.to_feather(CACHE_PATH)
+            df.to_pickle(CACHE_PATH)
         except Exception:
             pass
         return df, None
