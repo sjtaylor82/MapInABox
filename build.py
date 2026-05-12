@@ -48,6 +48,7 @@ print(f"Version: {VERSION}")
 iss_path = os.path.join(HERE, "MapInABox.iss")
 if not DO_MAC_APP:
     iss = open(iss_path, encoding="utf-8").read()
+    iss = re.sub(r'(#define AppVersion\s+")[^"]+(")', rf'\g<1>{VERSION}\2', iss)
     iss = re.sub(r'(AppVersion=).*',                       rf'\g<1>{VERSION}', iss)
     iss = re.sub(r'(OutputBaseFilename=MapInABox-)[\d.]+', rf'\g<1>{VERSION}', iss)
     open(iss_path, "w", encoding="utf-8").write(iss)

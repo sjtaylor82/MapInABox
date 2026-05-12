@@ -1,6 +1,9 @@
 # Normalise line endings on commit; checkout uses OS native
 * text=auto
 
+# Shell scripts must always use LF — CRLF breaks them on macOS/Linux
+*.sh text eol=lf
+
 # Binary files — no line-ending conversion
 *.gz     binary
 *.pkl    binary
