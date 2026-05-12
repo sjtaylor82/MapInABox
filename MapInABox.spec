@@ -47,6 +47,7 @@ a = Analysis(
         ('countries.geojson.gz', '.'),
         ('facts.json',           '.'),
         ('gtfs_overrides.json',  '.'),
+        ('manual.html',          '.'),
         ('sounds',               'sounds'),
         ('GeoFeatures',          'GeoFeatures'),
     ],

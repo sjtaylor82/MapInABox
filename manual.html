@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Map in a Box — User Manual</title>
+  <style>
+    body { font-family: Georgia, serif; max-width: 860px; margin: 2em auto; padding: 0 1.5em; line-height: 1.7; color: #111; }
+    h1 { font-size: 2em; border-bottom: 2px solid #333; padding-bottom: 0.3em; }
+    h2 { font-size: 1.4em; margin-top: 2em; border-bottom: 1px solid #aaa; padding-bottom: 0.2em; }
+    h3 { font-size: 1.1em; margin-top: 1.5em; }
+    code { background: #f4f4f4; padding: 0.1em 0.4em; border-radius: 3px; font-family: monospace; }
+    table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+    th, td { border: 1px solid #ccc; padding: 0.4em 0.8em; text-align: left; }
+    th { background: #f0f0f0; }
+    tr:nth-child(even) { background: #fafafa; }
+    .note { background: #fffbe6; border-left: 4px solid #e6c700; padding: 0.6em 1em; margin: 1em 0; }
+    nav ul { list-style: none; padding: 0; columns: 2; }
+    nav ul li { margin: 0.2em 0; }
+    nav ul li a { text-decoration: none; color: #0055aa; }
+    nav ul li a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+<h1>Map in a Box — User Manual</h1>
+<p><strong>Version 1.0.0</strong> &nbsp;|&nbsp; Windows &amp; macOS</p>
+
+<nav aria-label="Table of contents">
+  <h2>Contents</h2>
+  <ul>
+    <li><a href="#overview">1. Overview</a></li>
+    <li><a href="#screen-reader">2. Screen reader notes</a></li>
+    <li><a href="#starting">3. Starting out</a></li>
+    <li><a href="#map-mode">4. Map mode</a></li>
+    <li><a href="#jumping">5. Jumping to a place</a></li>
+    <li><a href="#location-info">6. Location information</a></li>
+    <li><a href="#spatial-tones">7. Spatial tones</a></li>
+    <li><a href="#marks">8. Marks and destination</a></li>
+    <li><a href="#favourites">9. Favourites</a></li>
+    <li><a href="#street-mode">10. Street mode</a></li>
+    <li><a href="#walking-mode">11. Walking mode</a></li>
+    <li><a href="#free-mode">12. Free mode</a></li>
+    <li><a href="#pois">13. Points of interest</a></li>
+    <li><a href="#satellite-street-view">14. Satellite and Street View</a></li>
+    <li><a href="#find-food">15. Find food</a></li>
+    <li><a href="#tools">16. Tools menu</a></li>
+    <li><a href="#challenge">17. Geography challenge game</a></li>
+    <li><a href="#settings">18. Settings</a></li>
+    <li><a href="#api-keys">19. Internet and API keys</a></li>
+    <li><a href="#workflows">20. Common workflows</a></li>
+    <li><a href="#troubleshooting">21. Troubleshooting</a></li>
+    <li><a href="#key-reference">22. Quick key reference</a></li>
+  </ul>
+</nav>
+
+
+<h2 id="overview">1. Overview</h2>
+
+<p>Map in a Box is an accessible world map and local exploration program designed for blind and low-vision users. It runs on Windows and macOS and works fully with screen readers including NVDA, JAWS, and VoiceOver.</p>
+
+<p>The program combines global geography with street-level navigation. You can explore countries, cities, oceans, and landmarks from the world map, then drop into any street network to walk intersections, look up businesses, plan routes, and check departure boards — all without a visual display.</p>
+
+<p>The program has six main modes:</p>
+
+<table>
+  <tr><th>Mode</th><th>What it does</th></tr>
+  <tr><td>Map mode</td><td>Explore the world map by country, city, coordinates, and geographic features. The default mode on startup.</td></tr>
+  <tr><td>Street mode</td><td>Explore streets, intersections, house numbers, and nearby points of interest at the local level.</td></tr>
+  <tr><td>Walking mode</td><td>Move along a real street network with controlled turn choices at intersections, with optional POI announcements.</td></tr>
+  <tr><td>Free mode</td><td>Explore nearby streets and points of interest relative to a heading, without being locked to a road.</td></tr>
+  <tr><td>Tools</td><td>Route planning, transit, flights, hotels, food, toll calculation, and journey planning.</td></tr>
+  <tr><td>Challenge game</td><td>A geography game that asks you to locate a named country on the world map by sound.</td></tr>
+</table>
+
+
+<h2 id="screen-reader">2. Screen reader notes</h2>
+
+<p>Map in a Box delivers most information through accessible speech output directly — spoken announcements do not require keyboard focus to be on any particular control. When the app speaks a location, distance, or status, it is intentional and does not require you to navigate to a list item to hear it.</p>
+
+<p>Many screens present results in a list. Standard list behaviour applies:</p>
+
+<table>
+  <tr><th>Key</th><th>Action</th></tr>
+  <tr><td><code>Up / Down</code></td><td>Move through items</td></tr>
+  <tr><td><code>Enter</code></td><td>Open, jump to, or select the current item</td></tr>
+  <tr><td><code>Escape</code></td><td>Close the list or dialog</td></tr>
+  <tr><td><code>F1</code></td><td>Keyboard help for the current mode</td></tr>
+</table>
+
+<p>If you are unsure where focus is or what mode you are in, press <code>F2</code> in map mode to repeat the current location, or press <code>F1</code> for context-sensitive keyboard help.</p>
+
+
+<h2 id="starting">3. Starting out</h2>
+
+<p>When Map in a Box opens, it places you at your saved home location. If no home location has been set, the program prompts you to set one before continuing. Home can be changed at any time from the Settings dialog (<code>Ctrl+,</code>) using the <strong>Set Home Location</strong> button.</p>
+
+<p>The main window contains a visual map canvas and a status area. Screen reader users interact primarily through spoken output and the keyboard — the map canvas is not required. All navigation, lookup, and mode-switching functions are keyboard driven.</p>
+
+
+<h2 id="map-mode">4. Map mode</h2>
+
+<p>Map mode is the default. The arrow keys move a cursor across the world map. As you move, the program announces the country, city, region, body of water, or geographic feature at the cursor position.</p>
+
+<h3>Movement</h3>
+<table>
+  <tr><th>Key</th><th>Action</th></tr>
+  <tr><td><code>Arrow keys</code></td><td>Move around the map at normal speed</td></tr>
+  <tr><td><code>Shift + Arrow</code></td><td>Move in smaller steps for finer positioning</td></tr>
+  <tr><td><code>Ctrl + Arrow</code></td><td>Jump to the next administrative region in that direction (state, county, province)</td></tr>
+  <tr><td><code>Ctrl + Alt + Arrow</code></td><td>Jump to the nearest country in that direction</td></tr>
+</table>
+
+<h3>Map function keys</h3>
+<table>
+  <tr><th>Key</th><th>Action</th></tr>
+  <tr><td><code>F2</code></td><td>Repeat current location</td></tr>
+  <tr><td><code>F3</code></td><td>Announce latitude</td></tr>
+  <tr><td><code>F4</code></td><td>Announce longitude</td></tr>
+  <tr><td><code>Shift+F3</code></td><td>Volume down</td></tr>
+  <tr><td><code>Shift+F4</code></td><td>Volume up</td></tr>
+  <tr><td><code>F5</code></td><td>Announce continent</td></tr>
+  <tr><td><code>F6</code></td><td>Country facts (area, population, region)</td></tr>
+  <tr><td><code>Shift+F6</code></td><td>Fetch and read a Wikipedia-style summary for the current place, state, or country</td></tr>
+  <tr><td><code>F7</code></td><td>Toggle map sounds on or off</td></tr>
+  <tr><td><code>F8</code></td><td>Flash the current country on the visible map</td></tr>
+  <tr><td><code>F9</code></td><td>Toggle full-screen map view</td></tr>
+  <tr><td><code>F11</code></td><td>Enter street mode at the current position</td></tr>
+  <tr><td><code>Shift+F11</code></td><td>Pre-download street data for the current map position</td></tr>
+  <tr><td><code>F12</code></td><td>Open the Tools menu</td></tr>
+  <tr><td><code>Ctrl+,</code></td><td>Open Settings</td></tr>
+</table>
+
+
+<h2 id="jumping">5. Jumping to a place</h2>
+
+<p>Press <code>J</code> in map mode to open the jump dialog. Type a search term and press <code>Enter</code>. If multiple results are found, a list is presented — use the arrow keys to choose and press <code>Enter</code> to jump.</p>
+
+<p>Accepted search terms include:</p>
+<ul>
+  <li><strong>City names</strong> — e.g. <em>Brisbane</em>, <em>London</em>, <em>Vancouver</em></li>
+  <li><strong>Countries</strong> — e.g. <em>Japan</em>, <em>New Zealand</em>, <em>South Africa</em></li>
+  <li><strong>Coordinates</strong> — decimal degrees, e.g. <em>-27.47, 153.03</em></li>
+  <li><strong>Geographic features</strong> — major deserts, mountain ranges, reefs, gulfs, capes, and other named natural features</li>
+</ul>
+
+<p>If the search term is not found, the program says "not found" and returns focus to the input field so you can try a different term. Jump is disabled while the geography challenge game is active.</p>
+
+
+<h2 id="location-info">6. Location information</h2>
+
+<p>These keys provide information about the current map position. Most require an internet connection.</p>
+
+<table>
+  <tr><th>Key</th><th>Information</th></tr>
+  <tr><td><code>Shift+F1</code></td><td>Capital city of the current country</td></tr>
+  <tr><td><code>Shift+F2</code></td><td>Climate or latitude zone</td></tr>
+  <tr><td><code>T</code></td><td>Local time at the current position</td></tr>
+  <tr><td><code>Shift+T</code></td><td>Timezone name and UTC offset</td></tr>
+  <tr><td><code>S</code></td><td>Sunrise and sunset times</td></tr>
+  <tr><td><code>W</code></td><td>Current weather. Over open water, may report sea surface temperature instead.</td></tr>
+  <tr><td><code>Q</code></td><td>Air quality index</td></tr>
+  <tr><td><code>A</code></td><td>Nearest airport name and distance</td></tr>
+  <tr><td><code>Shift+A</code></td><td>Aircraft currently overhead</td></tr>
+  <tr><td><code>Ctrl+Shift+A</code></td><td>Departure and arrival board for the nearest airport (requires AviationStack API key)</td></tr>
+  <tr><td><code>L</code></td><td>Official and commonly spoken languages for the current country</td></tr>
+  <tr><td><code>$</code></td><td>Currency name and code for the current country</td></tr>
+  <tr><td><code>N</code></td><td>Nearby named geographic features</td></tr>
+  <tr><td><code>P</code></td><td>Point of interest search at the current position</td></tr>
+</table>
+
+
+<h2 id="spatial-tones">7. Spatial tones</h2>
+
+<p>Spatial tones give you an audio sense of your position on the map without needing speech. Pitch represents latitude (higher pitch toward the north) and stereo panning represents longitude (left for west, right for east).</p>
+
+<p>Three modes are available in Settings:</p>
+
+<table>
+  <tr><th>Mode</th><th>Description</th></tr>
+  <tr><td>World</td><td>Tones are calibrated to the entire world map. Best for global exploration.</td></tr>
+  <tr><td>Country</td><td>Tones are scaled to the current country's bounding box. Gives finer resolution within a single country.</td></tr>
+  <tr><td>Region</td><td>Tones are scaled to the current state, province, or region where available. Most useful in large countries for local navigation.</td></tr>
+</table>
+
+
+<h2 id="marks">8. Marks and destination</h2>
+
+<p>Map mode provides three named mark slots and one destination slot. Marks and destination are independent positions you store for comparison or reference.</p>
+
+<table>
+  <tr><th>Key</th><th>Action</th></tr>
+  <tr><td><code>M</code></td><td>Open the mark menu. Press <code>1</code>, <code>2</code>, or <code>3</code> immediately to store the current position in that slot.</td></tr>
+  <tr><td><code>Shift+M</code></td><td>Open the remove mark menu. Press <code>1</code>, <code>2</code>, or <code>3</code> to clear that slot.</td></tr>
+  <tr><td><code>D</code></td><td>Store the current position as the destination.</td></tr>
+  <tr><td><code>Alt+1</code></td><td>Report distance and bearing from mark 1 to the destination.</td></tr>
+  <tr><td><code>Alt+2</code></td><td>Report distance and bearing from mark 2 to the destination.</td></tr>
+  <tr><td><code>Alt+3</code></td><td>Report distance and bearing from mark 3 to the destination.</td></tr>
+</table>
+
+<p>A typical use is to mark three candidate pickup points, set a common destination (such as an airport), then compare direction and distance for each using <code>Alt+1</code> through <code>Alt+3</code>.</p>
+
+
+<h2 id="favourites">9. Favourites</h2>
+
+<p>Favourites let you save and quickly return to frequently used places, points of interest, or transport stops.</p>
+
+<table>
+  <tr><th>Key</th><th>Action</th></tr>
+  <tr><td><code>Ctrl+F</code></td><td>Open the favourites list</td></tr>
+  <tr><td><code>Ctrl+Shift+F</code></td><td>Add the current map position, selected POI, or current location to favourites</td></tr>
+</table>
+
+<p>Favourites are stored locally and persist across sessions.</p>
+
+
+<h2 id="street-mode">10. Street mode</h2>
+
+<p>Press <code>F11</code> from map mode to enter street mode at the current cursor position. Street data is downloaded from OpenStreetMap on demand and cached locally. The first visit to an area may take a few seconds to load depending on connection speed.</p>
+
+<p>Street mode allows detailed local exploration: moving along roads, checking house numbers and intersections, looking up businesses, and getting walking directions.</p>
+
+<h3>Movement</h3>
+<table>
+  <tr><th>Key</th><th>Action</th></tr>
+  <tr><td><code>Arrow keys</code></td><td>Move along the street map</td></tr>
+  <tr><td><code>Shift + Arrow</code></td><td>Fine movement</td></tr>
+  <tr><td><code>Ctrl + Arrow</code></td><td>Larger movement steps</td></tr>
+  <tr><td><code>Page Up</code></td><td>Previous known house number on the current street</td></tr>
+  <tr><td><code>Page Down</code></td><td>Next known house number on the current street</td></tr>
+  <tr><td><code>Ctrl+Page Up</code></td><td>Jump to the previous intersection</td></tr>
+  <tr><td><code>Ctrl+Page Down</code></td><td>Jump to the next intersection</td></tr>
+  <tr><td><code>Ctrl+Shift+Page Down</code></td><td>Turn onto the cross street at the current intersection</td></tr>
+  <tr><td><code>Ctrl+Shift+Page Up</code></td><td>Turn back onto the street you left</td></tr>
+</table>
+
+<h3>Lookup and navigation</h3>
+<table>
+  <tr><th>Key</th><th>Action</th></tr>
+  <tr><td><code>S</code></td><td>Street search — find a street by name</td></tr>
+  <tr><td><code>A</code></td><td>Address lookup</td></tr>
+  <tr><td><code>X</code></td><td>Announce the nearest cross street</td></tr>
+  <tr><td><code>P</code></td><td>Open the point of interest list</td></tr>
+  <tr><td><code>O</code></td><td>Nearby shopping centres and transit hubs</td></tr>
+  <tr><td><code>G</code></td><td>Get walking directions to a typed address</td></tr>
+  <tr><td><code>F11</code></td><td>Return to map mode</td></tr>
+</table>
+
+<h3>POI interaction</h3>
+<table>
+  <tr><th>Key</th><th>Action</th></tr>
+  <tr><td><code>Enter</code></td><td>Jump to the selected point of interest</td></tr>
+  <tr><td><code>Ctrl+Enter</code></td><td>Explore the selected POI in detail, or get transit information if it is a transit stop</td></tr>
+  <tr><td><code>Space</code></td><td>Announce the nearest intersection to the selected POI</td></tr>
+  <tr><td><code>Alt+1</code></td><td>Address of selected POI</td></tr>
+  <tr><td><code>Alt+2</code></td><td>Opening hours of selected POI</td></tr>
+  <tr><td><code>Alt+3</code></td><td>Phone number of selected POI</td></tr>
+  <tr><td><code>Alt+4</code></td><td>Website of selected POI</td></tr>
+  <tr><td><code>Alt+5</code></td><td>Ask Gemini a question about the selected POI (requires Gemini API key)</td></tr>
+  <tr><td><code>Ctrl+W</code></td><td>Open the selected POI's website in a browser</td></tr>
+  <tr><td><code>Backspace</code></td><td>Go back one level in POI exploration</td></tr>
+  <tr><td><code>Escape</code></td><td>Close the POI list</td></tr>
+</table>
+
+
+<h2 id="walking-mode">11. Walking mode</h2>
+
+<p>Walking mode simulates moving along a real street network. You travel forward and backward along the current street and choose which way to turn at intersections. Nearby points of interest can be announced automatically as you walk.</p>
+
+<table>
+  <tr><th>Key</th><th>Action</th></tr>
+  <tr><td><code>Up / Down</code></td><td>Move forward or backward along the current street</td></tr>
+  <tr><td><code>Left / Right</code></td><td>Select a turn direction at an intersection</td></tr>
+  <tr><td><code>Space</code></td><td>List available turn options at the current intersection</td></tr>
+  <tr><td><code>H</code></td><td>Announce current heading in compass degrees</td></tr>
+  <tr><td><code>X</code></td><td>Announce the nearest intersection</td></tr>
+  <tr><td><code>I</code></td><td>Announce current position information</td></tr>
+  <tr><td><code>P</code></td><td>Search for nearby points of interest</td></tr>
+  <tr><td><code>W</code></td><td>Leave walking mode and return to street mode</td></tr>
+  <tr><td><code>F1</code></td><td>Walking mode keyboard help</td></tr>
+</table>
+
+<p>POI announcements while walking are configured in Settings. You can choose the category of POIs to announce, the detection radius (50, 80, or 120 metres), and whether the category label is included in each announcement.</p>
+
+
+<h2 id="free-mode">12. Free mode</h2>
+
+<p>Free mode lets you explore an area relative to a heading, without being constrained to a road. You move forward along your current heading and can pan left or right to hear what is nearby on either side.</p>
+
+<table>
+  <tr><th>Key</th><th>Action</th></tr>
+  <tr><td><code>Up</code></td><td>Move forward along the current heading</td></tr>
+  <tr><td><code>Left</code></td><td>Describe points of interest to the left</td></tr>
+  <tr><td><code>Right</code></td><td>Describe points of interest to the right</td></tr>
+  <tr><td><code>Ctrl+Left</code></td><td>Snap position to the nearest cross street to the left</td></tr>
+  <tr><td><code>Ctrl+Right</code></td><td>Snap position to the nearest cross street to the right</td></tr>
+  <tr><td><code>H</code></td><td>Announce current heading</td></tr>
+  <tr><td><code>X</code></td><td>Announce the nearest intersection</td></tr>
+  <tr><td><code>R</code></td><td>Reverse direction (turn 180 degrees)</td></tr>
+  <tr><td><code>A</code></td><td>Nearby address numbers</td></tr>
+  <tr><td><code>P</code></td><td>POI list</td></tr>
+  <tr><td><code>F</code></td><td>Leave free mode</td></tr>
+  <tr><td><code>Delete</code></td><td>Delete the selected POI</td></tr>
+  <tr><td><code>F2</code></td><td>Rename the selected POI</td></tr>
+</table>
+
+
+<h2 id="pois">13. Points of interest</h2>
+
+<p>Points of interest (POIs) include businesses, transport stops, parks, medical services, accommodation, and landmarks. POI data is sourced from OpenStreetMap by default. A HERE API key enables richer live detail such as opening hours, phone numbers, and ratings.</p>
+
+<p>When opening the POI list, you are prompted to choose a category:</p>
+
+<ul>
+  <li>All nearby</li>
+  <li>Food and drink</li>
+  <li>Shopping</li>
+  <li>Public transport</li>
+  <li>Trains and stations</li>
+  <li>Health and medical</li>
+  <li>Community and services</li>
+  <li>Arts, venues and landmarks</li>
+  <li>Parks and outdoors</li>
+  <li>Accommodation</li>
+</ul>
+
+<p>Selecting a transit stop and pressing <code>Ctrl+Enter</code> opens departure information for that stop where timetable data is available.</p>
+
+
+<h2 id="satellite-street-view">14. Satellite and Street View</h2>
+
+<p>Map in a Box can open satellite imagery and street-level photographs for the current position. Both features require a Google API key. When a Gemini API key is also configured, the program requests an AI-generated verbal description of the image, which is read aloud.</p>
+
+<h3>Satellite view</h3>
+<p>Satellite view displays an overhead aerial image of the current position in an in-app dialog. The Gemini description appears in a readable text field below the image and is announced through the screen reader. The description covers terrain type, land use, built environment, water bodies, and vegetation. Without a Gemini key, the image is still shown but the text field reads: <em>"Satellite imagery loaded. A Gemini API key is required to fetch a visual description."</em></p>
+
+<h3>Street View</h3>
+<p>Street View fetches up to two ground-level photographs of the current location — one in each direction along the street — and displays them in an in-app dialog. Below the images, the Gemini description is shown in a readable text field and announced through the screen reader. With a Gemini key, the description covers building types, street layout, signage, access features, and surroundings. Without a Gemini key, the images are still displayed but the text field reads: <em>"Street View imagery loaded. A Gemini API key is required to fetch a visual description."</em></p>
+<p>If no Google API key is configured, the program opens <a href="https://www.mapillary.com">Mapillary</a> in your browser as a fallback — a web-based open street-level viewer. No in-app dialog or description is provided in this case. If Google Street View has no coverage at the current location, the program automatically falls back to satellite view instead.</p>
+
+<div class="note">
+  <strong>Note:</strong> Both satellite and Street View open inside the app as dialogs, not in a browser. The Gemini description is announced by the screen reader as well as shown in the dialog text field. The Mapillary browser fallback (no Google key) is the only case where a browser opens.
+</div>
+
+
+<h2 id="find-food">15. Find food</h2>
+
+<p>The Find Food feature searches for food and drink venues along a route between a saved mark and a destination. It is intended for real journey planning — for example, finding somewhere to stop between a departure point and an airport.</p>
+
+<ol>
+  <li>Move to the starting location and press <code>M</code>, then <code>1</code>, <code>2</code>, or <code>3</code> to store it as a mark.</li>
+  <li>Move to the destination and press <code>D</code>.</li>
+  <li>Press <code>F</code>. The program asks which mark to use as the origin, then returns a list of food venues along the route.</li>
+</ol>
+
+<p>Find Food is also accessible from the Tools menu (<code>F12</code>).</p>
+
+
+<h2 id="tools">16. Tools menu</h2>
+
+<p>Press <code>F12</code> in map mode to open the Tools menu. Tools are context-aware — some require marks, a destination, or API keys to be configured.</p>
+
+<table>
+  <tr><th>Tool</th><th>Description</th></tr>
+  <tr><td>Detour Calculator</td><td>Compare a direct trip with a trip that includes one or more stop-offs, showing extra distance and time.</td></tr>
+  <tr><td>Route Explorer</td><td>Compare route options including suburbs traversed and toll roads.</td></tr>
+  <tr><td>Toll Compare</td><td>Compare toll and toll-free route options for a journey.</td></tr>
+  <tr><td>Journey Planner</td><td>Plan a public transport journey between two points.</td></tr>
+  <tr><td>Departure Board</td><td>Find nearby transit stops and fetch live or scheduled departure information. Uses GTFS open timetable data by default; can use Google Places to help identify stops if configured in Settings.</td></tr>
+  <tr><td>Flight Search</td><td>Search available flights between two airports (requires RapidAPI key).</td></tr>
+  <tr><td>Hotel Search</td><td>Search accommodation in a city (requires RapidAPI key).</td></tr>
+  <tr><td>Find Food</td><td>Find food venues along a route between a mark and a destination.</td></tr>
+</table>
+
+<p>If a required API key is missing, the program explains which key is needed and which features are affected. Many tools have simpler fallbacks — for example, Departure Board works with local GTFS data even without a Google key.</p>
+
+
+<h2 id="challenge">17. Geography challenge game</h2>
+
+<p>The challenge game tests your knowledge of world geography by sound. The program names a country and you must locate it on the world map using movement and audio cues.</p>
+
+<table>
+  <tr><th>Key</th><th>Action</th></tr>
+  <tr><td><code>F10</code></td><td>Start or stop the challenge</td></tr>
+  <tr><td><code>Ctrl+F10</code></td><td>Start a scored challenge session</td></tr>
+  <tr><td><code>Shift+F10</code></td><td>Repeat the current target and time remaining</td></tr>
+  <tr><td><code>R</code></td><td>Repeat the target country name while challenge is active</td></tr>
+</table>
+
+<div class="note"><strong>Note:</strong> Jump (<code>J</code>) is disabled during the challenge.</div>
+
+<h3>Audio cues</h3>
+<table>
+  <tr><th>Sound</th><th>Meaning</th></tr>
+  <tr><td>Map position tone</td><td>The normal spatial tone — tells you where you currently are on the world map.</td></tr>
+  <tr><td>Sonar pulse</td><td>A centred pulse that rises in pitch as you approach the target country.</td></tr>
+  <tr><td>Heartbeat</td><td>A low rhythmic beat that speeds up as the time limit approaches.</td></tr>
+  <tr><td>Fanfare</td><td>Plays when you successfully locate the target country.</td></tr>
+  <tr><td>Buzzer</td><td>Plays when time runs out.</td></tr>
+</table>
+
+<h3>Direction mode</h3>
+<table>
+  <tr><th>Mode</th><th>Description</th></tr>
+  <tr><td>Map learning</td><td>Direction feedback follows the standard left-right world map layout. Best for learning where countries appear on a flat map.</td></tr>
+  <tr><td>Shortest globe</td><td>Direction uses the shortest great-circle route, which may cross the International Date Line. More geographically accurate.</td></tr>
+</table>
+
+
+<h2 id="settings">18. Settings</h2>
+
+<p>Press <code>Ctrl+,</code> to open Settings. The dialog has three tabs: General, API Keys, and Logging.</p>
+
+<h3>General tab</h3>
+<table>
+  <tr><th>Setting</th><th>Description</th></tr>
+  <tr><td>Announce nearby POIs while walking</td><td>Enable or disable automatic POI announcements in walking mode.</td></tr>
+  <tr><td>POIs to announce while walking</td><td>Choose which category of POIs to announce (all, food, transport, etc.).</td></tr>
+  <tr><td>Announce POIs within</td><td>Detection radius for walking mode POI announcements: 50, 80, or 120 metres.</td></tr>
+  <tr><td>Include category label</td><td>Whether the POI category is spoken as part of each announcement.</td></tr>
+  <tr><td>Announce climate zones</td><td>Announce climate zone changes during navigation.</td></tr>
+  <tr><td>Spatial tones</td><td>World, Country, or Region — controls the scale of audio position feedback.</td></tr>
+  <tr><td>Challenge direction</td><td>Map learning or Shortest globe — controls how the challenge game indicates direction.</td></tr>
+  <tr><td>Weather temperature units</td><td>Automatic (country-based), Celsius, or Fahrenheit.</td></tr>
+  <tr><td>POI database</td><td>OpenStreetMap or HERE for street and free mode POI data.</td></tr>
+  <tr><td>Named POI search radius</td><td>How widely to search for POIs by name (1–10 km).</td></tr>
+  <tr><td>Navigation provider</td><td>OpenStreetMap, Google Maps, or HERE for walking route calculation.</td></tr>
+  <tr><td>Departure board source</td><td>GTFS data (default, no key required) or Google Places.</td></tr>
+  <tr><td>Refresh Transit Feed Catalog</td><td>Re-download the public transport feed index.</td></tr>
+</table>
+
+<h3>API Keys tab</h3>
+<p>Enter keys for third-party services. See <a href="#api-keys">Section 19</a> for details on what each key enables. All keys are stored locally in your settings file and are never transmitted except to the relevant service.</p>
+
+<h3>Logging tab</h3>
+<p>Controls which events are written to <code>miab.log</code> in your settings folder. Useful for diagnosing problems. Available log categories: errors, street/POI data, street snap, API calls, challenge sessions, feature usage, navigation events, and verbose diagnostics.</p>
+
+<h3>Other buttons</h3>
+<table>
+  <tr><th>Button</th><th>Action</th></tr>
+  <tr><td>Set Home Location</td><td>Set the current map position as your home/startup location.</td></tr>
+  <tr><td>Open Settings Folder</td><td>Open the settings folder in your file manager. Contains <code>settings.json</code>, <code>miab.log</code>, saved POI data, and other user files.</td></tr>
+</table>
+
+
+<h2 id="api-keys">19. Internet and API keys</h2>
+
+<p>Core map features work from local bundled data and do not require an internet connection. The following features require internet access:</p>
+
+<ul>
+  <li>Weather and air quality</li>
+  <li>Timezone and sunrise/sunset</li>
+  <li>Wikipedia summaries</li>
+  <li>Country facts (live data)</li>
+  <li>POI lookups and detail</li>
+  <li>Street data downloads</li>
+  <li>Transit timetable data</li>
+  <li>Route and navigation calculation</li>
+  <li>Flight and hotel search</li>
+  <li>Satellite and Street View imagery</li>
+  <li>Overhead flight information</li>
+</ul>
+
+<h3>API keys and what they unlock</h3>
+
+<table>
+  <tr><th>Key</th><th>Where to get it</th><th>What it enables</th></tr>
+  <tr><td>Google</td><td><a href="https://developers.google.com/maps/get-started">Google Cloud Console</a></td><td>Google Maps navigation, satellite imagery, Street View, Google-based geocoding and routing</td></tr>
+  <tr><td>Gemini</td><td><a href="https://aistudio.google.com/app/apikey">Google AI Studio</a> (free)</td><td>Verbal descriptions of satellite and street view images, POI summaries, transit questions</td></tr>
+  <tr><td>HERE</td><td><a href="https://developer.here.com/sign-up">HERE Developer</a></td><td>Richer live POI details, HERE walking routes, HERE departure board</td></tr>
+  <tr><td>OpenRouteService</td><td><a href="https://openrouteservice.org/sign-up/">openrouteservice.org</a></td><td>Walking and driving distance calculation between marks</td></tr>
+  <tr><td>AviationStack</td><td><a href="https://aviationstack.com/signup/free">aviationstack.com</a></td><td>Airport arrival and departure boards, live flight information</td></tr>
+  <tr><td>OpenSky</td><td><a href="https://opensky-network.org">opensky-network.org</a> (free)</td><td>Overhead flight destination lookup</td></tr>
+  <tr><td>RapidAPI</td><td><a href="https://rapidapi.com/auth/sign-up">rapidapi.com</a></td><td>Flight search (Timetable Lookup API) and hotel search (Priceline API)</td></tr>
+</table>
+
+<h3>What changes when a key is missing</h3>
+
+<table>
+  <tr><th>Missing key</th><th>Effect</th></tr>
+  <tr><td>Google</td><td>Google Maps navigation, satellite imagery, and Street View are unavailable. Street View falls back to Mapillary where possible. Other features use non-Google sources.</td></tr>
+  <tr><td>Gemini</td><td>No verbal descriptions for satellite or street view images, POI summaries, or transit questions. The underlying image or feature may still be available without description.</td></tr>
+  <tr><td>HERE</td><td>POI detail is limited to OpenStreetMap data. HERE navigation and HERE departure board are unavailable.</td></tr>
+  <tr><td>OpenRouteService</td><td>Distance calculations between marks are unavailable.</td></tr>
+  <tr><td>AviationStack</td><td>Airport arrival and departure boards are unavailable.</td></tr>
+  <tr><td>OpenSky</td><td>Overhead flight destination lookup is unavailable.</td></tr>
+  <tr><td>RapidAPI</td><td>Flight search and hotel search are unavailable.</td></tr>
+</table>
+
+<p>When a key is missing and a fallback exists, Map in a Box uses the fallback silently. When no fallback is available, the program explains what is needed.</p>
+
+
+<h2 id="workflows">20. Common workflows</h2>
+
+<h3>Find a city</h3>
+<ol>
+  <li>Press <code>J</code>.</li>
+  <li>Type the city name and press <code>Enter</code>.</li>
+  <li>Choose from the results list if more than one match is found.</li>
+  <li>Press <code>Enter</code> to jump.</li>
+</ol>
+
+<h3>Get facts about a country</h3>
+<ol>
+  <li>Move the cursor onto the country.</li>
+  <li>Press <code>F6</code> for area, population, and regional data.</li>
+  <li>Press <code>Shift+F1</code> for the capital city.</li>
+  <li>Press <code>L</code> for languages, <code>$</code> for currency.</li>
+</ol>
+
+<h3>Explore a neighbourhood at street level</h3>
+<ol>
+  <li>Jump to the city with <code>J</code>.</li>
+  <li>Press <code>F11</code> to enter street mode. Wait for data to load.</li>
+  <li>Use arrow keys to move, <code>S</code> to search for a street by name, <code>P</code> for nearby POIs, <code>A</code> for address lookup, and <code>G</code> for walking directions.</li>
+</ol>
+
+<h3>Plan food stops along a route</h3>
+<ol>
+  <li>Move to the departure point. Press <code>M</code> then <code>1</code>.</li>
+  <li>Move to the destination. Press <code>D</code>.</li>
+  <li>Press <code>F</code>. Choose mark 1 as the origin. Review the list of food options along the route.</li>
+</ol>
+
+<h3>Compare pickup points for a single destination</h3>
+<ol>
+  <li>Move to each pickup point and press <code>M</code>, storing each as mark 1, 2, and 3.</li>
+  <li>Move to the destination and press <code>D</code>.</li>
+  <li>Press <code>Alt+1</code>, <code>Alt+2</code>, and <code>Alt+3</code> to compare distance and bearing from each mark.</li>
+</ol>
+
+<h3>Play the geography challenge</h3>
+<ol>
+  <li>Press <code>F10</code>. The program names a target country.</li>
+  <li>Move with the arrow keys. Use the map-position tone to track where you are and the sonar pulse to judge how close you are to the target.</li>
+  <li>Press <code>Shift+F10</code> or <code>R</code> at any time to hear the target name again.</li>
+</ol>
+
+
+<h2 id="troubleshooting">21. Troubleshooting</h2>
+
+<table>
+  <tr><th>Problem</th><th>What to try</th></tr>
+  <tr><td>A key press does nothing</td><td>Check which mode you are in. Some keys are mode-specific. Press <code>F1</code> for context-sensitive help.</td></tr>
+  <tr><td>Street mode says it is loading</td><td>Wait a moment. Some areas require data to be downloaded over the internet before they can be explored.</td></tr>
+  <tr><td>A feature reports a missing API key</td><td>Open Settings with <code>Ctrl+,</code>, go to the API Keys tab, and enter the relevant key.</td></tr>
+  <tr><td>The map announces "remote area"</td><td>The cursor is in a sparsely populated location. Try postcode lookup, nearby features (<code>N</code>), or street mode if data is available for the area.</td></tr>
+  <tr><td>The challenge direction is confusing</td><td>In Settings, switch Challenge direction to <em>Map learning</em>. Also check that Spatial tones is set to <em>World</em>, which is easiest for global orientation.</td></tr>
+  <tr><td>You are lost or disoriented</td><td>Press <code>F2</code> to repeat your location. Press <code>J</code> to jump to a known place. Press <code>Ctrl+F</code> to open favourites.</td></tr>
+  <tr><td>Log file location</td><td>Open Settings and press <strong>Open Settings Folder</strong>. The file <code>miab.log</code> is in that folder.</td></tr>
+</table>
+
+
+<h2 id="key-reference">22. Quick key reference</h2>
+
+<h3>Global and map mode</h3>
+<table>
+  <tr><th>Key</th><th>Action</th></tr>
+  <tr><td><code>F1</code></td><td>Help</td></tr>
+  <tr><td><code>F2</code></td><td>Repeat location</td></tr>
+  <tr><td><code>Shift+F2</code></td><td>Climate zone</td></tr>
+  <tr><td><code>F3</code></td><td>Latitude</td></tr>
+  <tr><td><code>F4</code></td><td>Longitude</td></tr>
+  <tr><td><code>Shift+F3</code></td><td>Volume down</td></tr>
+  <tr><td><code>Shift+F4</code></td><td>Volume up</td></tr>
+  <tr><td><code>F5</code></td><td>Continent</td></tr>
+  <tr><td><code>F6</code></td><td>Country facts</td></tr>
+  <tr><td><code>Shift+F6</code></td><td>Wikipedia summary</td></tr>
+  <tr><td><code>F7</code></td><td>Sounds on/off</td></tr>
+  <tr><td><code>F8</code></td><td>Flash country</td></tr>
+  <tr><td><code>F9</code></td><td>Full-screen map</td></tr>
+  <tr><td><code>F10</code></td><td>Challenge game</td></tr>
+  <tr><td><code>Ctrl+F10</code></td><td>Scored challenge session</td></tr>
+  <tr><td><code>Shift+F10</code></td><td>Repeat challenge target</td></tr>
+  <tr><td><code>F11</code></td><td>Street mode</td></tr>
+  <tr><td><code>Shift+F11</code></td><td>Pre-download streets</td></tr>
+  <tr><td><code>F12</code></td><td>Tools menu</td></tr>
+  <tr><td><code>Ctrl+,</code></td><td>Settings</td></tr>
+  <tr><td><code>J</code></td><td>Jump to place</td></tr>
+  <tr><td><code>M</code></td><td>Set mark</td></tr>
+  <tr><td><code>Shift+M</code></td><td>Remove mark</td></tr>
+  <tr><td><code>D</code></td><td>Set destination</td></tr>
+  <tr><td><code>Alt+1/2/3</code></td><td>Mark to destination report</td></tr>
+  <tr><td><code>F</code></td><td>Find food</td></tr>
+  <tr><td><code>N</code></td><td>Nearby geographic features</td></tr>
+  <tr><td><code>P</code></td><td>POI search</td></tr>
+  <tr><td><code>T</code></td><td>Local time</td></tr>
+  <tr><td><code>Shift+T</code></td><td>Timezone</td></tr>
+  <tr><td><code>S</code></td><td>Sunrise and sunset</td></tr>
+  <tr><td><code>A</code></td><td>Nearest airport</td></tr>
+  <tr><td><code>Shift+A</code></td><td>Overhead flights</td></tr>
+  <tr><td><code>Ctrl+Shift+A</code></td><td>Airport departure/arrival board</td></tr>
+  <tr><td><code>Q</code></td><td>Air quality</td></tr>
+  <tr><td><code>L</code></td><td>Languages</td></tr>
+  <tr><td><code>Shift+F1</code></td><td>Capital city</td></tr>
+  <tr><td><code>$</code></td><td>Currency</td></tr>
+  <tr><td><code>W</code></td><td>Weather or sea temperature</td></tr>
+  <tr><td><code>Ctrl+F</code></td><td>Favourites</td></tr>
+  <tr><td><code>Ctrl+Shift+F</code></td><td>Add favourite</td></tr>
+</table>
+
+<h3>Street mode</h3>
+<table>
+  <tr><th>Key</th><th>Action</th></tr>
+  <tr><td><code>Arrow keys</code></td><td>Move</td></tr>
+  <tr><td><code>Shift+Arrow</code></td><td>Fine movement</td></tr>
+  <tr><td><code>Ctrl+Arrow</code></td><td>Larger movement</td></tr>
+  <tr><td><code>Page Up</code></td><td>Previous house number</td></tr>
+  <tr><td><code>Page Down</code></td><td>Next house number</td></tr>
+  <tr><td><code>Ctrl+Page Up</code></td><td>Previous intersection</td></tr>
+  <tr><td><code>Ctrl+Page Down</code></td><td>Next intersection</td></tr>
+  <tr><td><code>Ctrl+Shift+Page Down</code></td><td>Turn onto cross street</td></tr>
+  <tr><td><code>Ctrl+Shift+Page Up</code></td><td>Turn back</td></tr>
+  <tr><td><code>S</code></td><td>Street search</td></tr>
+  <tr><td><code>A</code></td><td>Address lookup</td></tr>
+  <tr><td><code>X</code></td><td>Nearest cross street</td></tr>
+  <tr><td><code>P</code></td><td>POI list</td></tr>
+  <tr><td><code>O</code></td><td>Shopping centres and transit hubs</td></tr>
+  <tr><td><code>G</code></td><td>Navigate to address</td></tr>
+  <tr><td><code>Enter</code></td><td>Jump to selected POI</td></tr>
+  <tr><td><code>Ctrl+Enter</code></td><td>Explore selected POI</td></tr>
+  <tr><td><code>Space</code></td><td>Nearest intersection for selected POI</td></tr>
+  <tr><td><code>Alt+1</code></td><td>POI address</td></tr>
+  <tr><td><code>Alt+2</code></td><td>POI hours</td></tr>
+  <tr><td><code>Alt+3</code></td><td>POI phone</td></tr>
+  <tr><td><code>Alt+4</code></td><td>POI website</td></tr>
+  <tr><td><code>Alt+5</code></td><td>Ask Gemini about POI</td></tr>
+  <tr><td><code>Ctrl+W</code></td><td>Open POI website</td></tr>
+  <tr><td><code>Escape</code></td><td>Close POI list</td></tr>
+  <tr><td><code>Backspace</code></td><td>Go back in POI exploration</td></tr>
+  <tr><td><code>F11</code></td><td>Return to map mode</td></tr>
+</table>
+
+<h3>Walking mode</h3>
+<table>
+  <tr><th>Key</th><th>Action</th></tr>
+  <tr><td><code>Up / Down</code></td><td>Move forward and backward</td></tr>
+  <tr><td><code>Left / Right</code></td><td>Choose turns</td></tr>
+  <tr><td><code>Space</code></td><td>List turn options</td></tr>
+  <tr><td><code>H</code></td><td>Heading</td></tr>
+  <tr><td><code>X</code></td><td>Nearest intersection</td></tr>
+  <tr><td><code>I</code></td><td>Position information</td></tr>
+  <tr><td><code>P</code></td><td>POI search</td></tr>
+  <tr><td><code>W</code></td><td>Leave walking mode</td></tr>
+</table>
+
+<h3>Free mode</h3>
+<table>
+  <tr><th>Key</th><th>Action</th></tr>
+  <tr><td><code>Up</code></td><td>Move forward</td></tr>
+  <tr><td><code>Left</code></td><td>Describe POIs on the left</td></tr>
+  <tr><td><code>Right</code></td><td>Describe POIs on the right</td></tr>
+  <tr><td><code>Ctrl+Left</code></td><td>Snap to nearest cross street (left)</td></tr>
+  <tr><td><code>Ctrl+Right</code></td><td>Snap to nearest cross street (right)</td></tr>
+  <tr><td><code>H</code></td><td>Heading</td></tr>
+  <tr><td><code>X</code></td><td>Nearest intersection</td></tr>
+  <tr><td><code>R</code></td><td>Reverse direction</td></tr>
+  <tr><td><code>A</code></td><td>Nearby address numbers</td></tr>
+  <tr><td><code>P</code></td><td>POI list</td></tr>
+  <tr><td><code>F</code></td><td>Leave free mode</td></tr>
+  <tr><td><code>Delete</code></td><td>Delete POI</td></tr>
+  <tr><td><code>F2</code></td><td>Rename POI</td></tr>
+</table>
+
+<hr>
+<p style="font-size:0.85em; color:#555;">Copyright &copy; 2026 Sam Taylor. All rights reserved. Map in a Box is proprietary software. No part of this software or documentation may be reproduced or distributed without permission.</p>
+
+</body>
+</html>

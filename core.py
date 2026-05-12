@@ -2557,7 +2557,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             "add_fav": new_id(),
             "tools": new_id(), "sounds": new_id(), "challenge": new_id(),
             "challenge_multi": new_id(),
-            "help": new_id(), "about": new_id(), "donate": new_id(),
+            "help": new_id(), "about": new_id(), "manual": new_id(), "donate": new_id(),
         }
         self._menu_ids = ids
 
@@ -2682,6 +2682,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         help_menu = wx.Menu()
         add_item(help_menu, "help", "&Help\tF1",
                  lambda e: self.show_help())
+        add_item(help_menu, "manual", "&Manual",
+                 lambda e: __import__("webbrowser").open(
+                     "file:///" + os.path.join(BASE_DIR, "manual.html").replace("\\", "/")))
         add_item(help_menu, "about", "&About",
                  lambda e: self._show_about())
         help_menu.AppendSeparator()
@@ -9647,15 +9650,14 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         style=wx.DEFAULT_DIALOG_STYLE | wx.STAY_ON_TOP)
         vs = wx.BoxSizer(wx.VERTICAL)
 
-        header = wx.StaticText(dlg, label=f"{APP_NAME}\nVersion {APP_VERSION}")
+        header = wx.StaticText(dlg, label=f"{APP_NAME}\nVersion {APP_VERSION}\nCopyright © 2026 Sam Taylor. All rights reserved.")
         vs.Add(header, 0, wx.ALL, 14)
 
         message = (
-            "Every effort has been made to keep Map in a Box open source and "
-            "usable with free endpoints. The app will fall back to those services "
-            "where it can.\n\n"
-            "If you want richer coverage or higher limits, you can still add "
-            "your own API keys in Settings."
+            "Map in a Box works with free data sources by default and will fall "
+            "back to them where it can.\n\n"
+            "For richer coverage or higher limits, you can add your own API keys "
+            "in Settings."
         )
         txt = wx.StaticText(dlg, label=message)
         txt.Wrap(430)
