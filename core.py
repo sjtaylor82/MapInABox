@@ -28,6 +28,11 @@ try:
 except ImportError:
     lookup_streetview_description = None
 
+try:
+    from updater import UpdateChecker
+except ImportError:
+    UpdateChecker = None
+
 import io
 from PIL import Image
 
@@ -2428,6 +2433,32 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         else:
             threading.Thread(target=self._lookup, daemon=True).start()
         threading.Thread(target=self._ensure_airports_csv, daemon=True).start()
+        # Update check — silent background thread
+        self._updater = None
+        if UpdateChecker:
+            self._updater = UpdateChecker(
+                current_version = APP_VERSION,
+                repo            = "sjtaylor82/MapInABox",
+                on_update_found = self._on_update_found,
+            )
+            self._updater.start()
+
+    def _on_update_found(self, latest_version: str) -> None:
+        dlg = wx.MessageDialog(
+            self,
+            f"Version {latest_version} of Map in a Box is available.\n\nWould you like to update now?",
+            "Update Available",
+            wx.YES_NO | wx.YES_DEFAULT | wx.ICON_INFORMATION,
+        )
+        if dlg.ShowModal() == wx.ID_YES:
+            self._status_update("Downloading update...", force=True)
+            if not self._updater.download_and_install():
+                wx.MessageBox(
+                    "Update download failed. Please visit the website to download manually.",
+                    "Update Failed",
+                    wx.OK | wx.ICON_ERROR,
+                )
+        dlg.Destroy()
 
     def _build_info_panel(self, parent):
         """Create the sighted-user information panel. It never takes focus."""
