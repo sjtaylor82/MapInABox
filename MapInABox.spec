@@ -18,6 +18,7 @@ if sys.platform == "darwin":
 
 # ── Collect packages whose internals PyInstaller can't fully auto-detect ─────
 
+pyarrow_d,   pyarrow_b,   pyarrow_h   = collect_all('pyarrow')
 shapely_d,   shapely_b,   shapely_h   = collect_all('shapely')
 
 # h3 Cython extensions — collect_all misses some native modules on Windows
@@ -32,9 +33,9 @@ proto_d,     proto_b,     proto_h     = collect_all('proto')
 ao2_d,       ao2_b,       ao2_h       = collect_all('accessible_output2')
 pygame_d,    pygame_b,    pygame_h    = collect_all('pygame')
 
-all_datas    = shapely_d   + genai_d   + apicore_d + proto_d + ao2_d + pygame_d + h3_d
-all_binaries = shapely_b   + genai_b   + apicore_b + proto_b + ao2_b + pygame_b + h3_b
-all_hidden   = shapely_h   + genai_h   + apicore_h + proto_h + ao2_h + pygame_h + h3_h
+all_datas    = pyarrow_d   + shapely_d  + genai_d   + apicore_d + proto_d + ao2_d + pygame_d + h3_d
+all_binaries = pyarrow_b   + shapely_b  + genai_b   + apicore_b + proto_b + ao2_b + pygame_b + h3_b
+all_hidden   = pyarrow_h   + shapely_h  + genai_h   + apicore_h + proto_h + ao2_h + pygame_h + h3_h
 
 a = Analysis(
     ['core.py'],
@@ -107,8 +108,6 @@ a = Analysis(
         'psutil',
         'lz4',
         'torch',
-        # ── Arrow / Parquet (replaced by pickle cache) ────────────────────
-        'pyarrow',
     ],
     noarchive=False,
     optimize=1,
