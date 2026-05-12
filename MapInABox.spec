@@ -98,7 +98,7 @@ a = Analysis(
         'google.genai.tests',
         'pytest',
         # ── Network / proxy tools ─────────────────────────────────────────
-        'mitmproxy', 'aioquic', 'h2', 'h3', 'hpack', 'hyperframe',
+        'mitmproxy', 'aioquic', 'h2', 'hpack', 'hyperframe',
         # ── Media tools ───────────────────────────────────────────────────
         'yt_dlp', 'streamlink', 'mutagen', 'spotipy',
         # ── Other unused ──────────────────────────────────────────────────
