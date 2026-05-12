@@ -406,7 +406,12 @@ class SettingsDialog(wx.Dialog):
         self._on_ok(event)
 
     def _on_open_folder(self, event) -> None:
-        if self._user_dir and os.path.isdir(self._user_dir):
+        if not (self._user_dir and os.path.isdir(self._user_dir)):
+            return
+        import sys, subprocess
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", self._user_dir])
+        else:
             os.startfile(self._user_dir)
 
 
