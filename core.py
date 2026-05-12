@@ -101,16 +101,22 @@ from here_poi import HereClient as HerePoi
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0'
+APP_VERSION   = '1.0.0'
 
 # Bundled read-only resources — inside the exe (_MEIPASS) or next to the script.
 BASE_DIR      = getattr(_sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 
-# User data (roaming — follows the user on a domain, survives reinstalls).
-USER_DIR      = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'MapInABox')
+# User data — platform-appropriate location.
+if _sys.platform == 'darwin':
+    USER_DIR  = os.path.join(os.path.expanduser('~'), 'Library', 'Application Support', 'MapInABox')
+else:
+    USER_DIR  = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'MapInABox')
 
-# Machine-local caches (large, not worth syncing).
-CACHE_DIR     = os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'MapInABox', 'Cache')
+# Machine-local caches — platform-appropriate location.
+if _sys.platform == 'darwin':
+    CACHE_DIR = os.path.join(os.path.expanduser('~'), 'Library', 'Caches', 'MapInABox')
+else:
+    CACHE_DIR = os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'MapInABox', 'Cache')
 
 for _d in (USER_DIR, CACHE_DIR):
     os.makedirs(_d, exist_ok=True)
