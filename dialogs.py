@@ -17,12 +17,58 @@ import os
 import wx
 import wx.adv
 
+from logging_utils import miab_log
+
 
 def _primary_down(event) -> bool:
     """Treat Control as the main modifier on Windows/Linux and Command on macOS."""
     if wx.Platform == "__WXMAC__" and hasattr(event, "CmdDown"):
         return event.CmdDown()
     return event.ControlDown()
+
+
+def _key_name(keycode) -> str:
+    try:
+        keycode = int(keycode)
+    except Exception:
+        return str(keycode)
+    named = {
+        wx.WXK_BACK: "BACK",
+        wx.WXK_RETURN: "RETURN",
+        wx.WXK_NUMPAD_ENTER: "NUMPAD_ENTER",
+        wx.WXK_ESCAPE: "ESCAPE",
+        wx.WXK_UP: "UP",
+        wx.WXK_DOWN: "DOWN",
+        wx.WXK_LEFT: "LEFT",
+        wx.WXK_RIGHT: "RIGHT",
+        wx.WXK_SPACE: "SPACE",
+        wx.WXK_TAB: "TAB",
+    }
+    return named.get(keycode, chr(keycode) if 32 <= keycode < 127 else str(keycode))
+
+
+def _log_key_event(owner, event, source: str, note: str = "") -> None:
+    settings = getattr(owner, "settings", None)
+    if not settings or not settings.get("logging", {}).get("verbose", False):
+        return
+    try:
+        focus = wx.Window.FindFocus()
+        focus_name = focus.GetName() if focus and focus.GetName() else type(focus).__name__ if focus else "None"
+        target = event.GetEventObject()
+        target_name = target.GetName() if target and target.GetName() else type(target).__name__ if target else "None"
+        miab_log(
+            "verbose",
+            (
+                f"Key {source}: key={_key_name(event.GetKeyCode())} "
+                f"code={event.GetKeyCode()} primary={_primary_down(event)} "
+                f"alt={event.AltDown()} shift={event.ShiftDown()} "
+                f"focus={focus_name} target={target_name}"
+                + (f" note={note}" if note else "")
+            ),
+            settings,
+        )
+    except Exception as exc:
+        miab_log("verbose", f"Key {source} logging failed: {exc}", settings)
 
 
 def show_api_key_required(parent, title: str, message: str,
@@ -321,7 +367,7 @@ class SettingsDialog(wx.Dialog):
         self.cb_log_challenge = wx.CheckBox(self.logging_page, label="Challenge sessions — player, country, time, score")
         self.cb_log_features  = wx.CheckBox(self.logging_page, label="Feature usage — keys pressed, lookups made")
         self.cb_log_nav       = wx.CheckBox(self.logging_page, label="Navigation events — country entries, crossings, jumps")
-        self.cb_log_verbose   = wx.CheckBox(self.logging_page, label="Verbose diagnostics — extra traces written to miab.log")
+        self.cb_log_verbose   = wx.CheckBox(self.logging_page, label="Verbose diagnostics — key sequences and extra traces written to miab.log")
         log_vs.Add(wx.StaticText(self.logging_page, label="Logging (miab.log):"), 0, wx.ALL, 8)
         self.cb_log_errors.SetValue(log.get("errors",    True))
         self.cb_log_street.SetValue(log.get("street",    False))
@@ -774,6 +820,10 @@ class ToolsMenuDialog(wx.Dialog):
         self.selected_tool = ""
         self.listbox.Bind(wx.EVT_LISTBOX_DCLICK, self._on_choose)
         self.listbox.Bind(wx.EVT_KEY_DOWN, self._on_key)
+        self.listbox.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
+        self.dep_listbox.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
+        self.cand_listbox.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
+        self.stops_listbox.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
         self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
         wx.CallAfter(self.listbox.SetFocus)
 
@@ -1100,6 +1150,15 @@ class TransitLookupDialog(wx.Dialog):
         self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
         wx.CallAfter(self.listbox.SetFocus)
 
+    def _on_key_down(self, event):
+        """Listbox fallback for browsers/controls that swallow Backspace."""
+        _log_key_event(self, event, "dialog-key-down", type(event.GetEventObject()).__name__ if event.GetEventObject() else "")
+        code = event.GetKeyCode()
+        if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER, wx.WXK_ESCAPE, wx.WXK_BACK):
+            self._on_char_hook(event)
+            return
+        event.Skip()
+
     def _show_departures(self):
         sel = self.listbox.GetSelection()
         if sel == wx.NOT_FOUND or sel >= len(self._stations):
@@ -1124,7 +1183,7 @@ class TransitLookupDialog(wx.Dialog):
         self.dep_listbox.Show()
         self._level = 1
         self.Layout()
-        self.dep_listbox.SetFocus()
+        wx.CallAfter(self.dep_listbox.SetFocus)
 
     def _show_stops(self):
         if not self._fetch_stops:
@@ -1143,7 +1202,7 @@ class TransitLookupDialog(wx.Dialog):
         self.stops_listbox.Show()
         self._level = 3
         self.Layout()
-        self.stops_listbox.SetFocus()
+        wx.CallAfter(self.stops_listbox.SetFocus)
 
         import threading
         def _fetch():
@@ -1176,7 +1235,7 @@ class TransitLookupDialog(wx.Dialog):
             self.cand_listbox.Show()
             self._level = 2
             self.Layout()
-            self.cand_listbox.SetFocus()
+            wx.CallAfter(self.cand_listbox.SetFocus)
             return
 
         # ── Normal stop list ──────────────────────────────────────────
@@ -1201,7 +1260,7 @@ class TransitLookupDialog(wx.Dialog):
         self.cand_listbox.Hide()
         self.stops_listbox.Show()
         self.Layout()
-        self.stops_listbox.SetFocus()
+        wx.CallAfter(self.stops_listbox.SetFocus)
 
     def _show_stops_for_candidate(self):
         """Load and display the stop sequence for the selected candidate."""
@@ -1227,9 +1286,10 @@ class TransitLookupDialog(wx.Dialog):
         self.stops_listbox.Show()
         self._level = 3
         self.Layout()
-        self.stops_listbox.SetFocus()
+        wx.CallAfter(self.stops_listbox.SetFocus)
 
     def _on_char_hook(self, event):
+        _log_key_event(self, event, "dialog-char-hook", f"level={self._level}")
         code = event.GetKeyCode()
         # Ctrl+Alt+F — find food along the stop sequence shown at level 3
         if (_primary_down(event) and event.AltDown()
@@ -1266,12 +1326,12 @@ class TransitLookupDialog(wx.Dialog):
                     self.cand_listbox.Show()
                     self._level = 2
                     self.Layout()
-                    self.cand_listbox.SetFocus()
+                    wx.CallAfter(self.cand_listbox.SetFocus)
                 else:
                     self.dep_listbox.Show()
                     self._level = 1
                     self.Layout()
-                    self.dep_listbox.SetFocus()
+                    wx.CallAfter(self.dep_listbox.SetFocus)
                 return
             elif self._level == 2:
                 self._candidates = []
@@ -1279,7 +1339,7 @@ class TransitLookupDialog(wx.Dialog):
                 self.dep_listbox.Show()
                 self._level = 1
                 self.Layout()
-                self.dep_listbox.SetFocus()
+                wx.CallAfter(self.dep_listbox.SetFocus)
                 return
             elif self._level == 1:
                 self._title_label.SetLabel("Nearby stops and stations:")
@@ -1287,7 +1347,7 @@ class TransitLookupDialog(wx.Dialog):
                 self.listbox.Show()
                 self._level = 0
                 self.Layout()
-                self.listbox.SetFocus()
+                wx.CallAfter(self.listbox.SetFocus)
                 return
             else:
                 self.EndModal(wx.ID_CLOSE)

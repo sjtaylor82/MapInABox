@@ -136,7 +136,7 @@ class NavigationEngine:
                 "Move into the loaded street area or reload streets.",
                 False,
             )
-        if end_snap_m > 250:
+        if end_snap_m > 750:
             return (
                 f"{dest_name} is {int(end_snap_m)} metres from the loaded street graph. "
                 "OSM local routing cannot safely route there from the current loaded area.",
@@ -149,7 +149,12 @@ class NavigationEngine:
         if not path:
             return f"No walkable route found to {dest_name}.", False
 
-        instructions = self._build_instructions(path, dest_name)
+        approximate_dest = end_snap_m > 250
+        instructions = self._build_instructions(
+            path,
+            dest_name,
+            approximate=approximate_dest,
+        )
         nodes = self._graph["nodes"]
         total_m = sum(
             dist_metres(
@@ -182,6 +187,11 @@ class NavigationEngine:
             f"Step 1 of {n_steps}: {first}  "
             f"Up for next, Down for previous, I to repeat."
         )
+        if approximate_dest:
+            msg += (
+                f"  The destination is about {int(end_snap_m)}m from the nearest "
+                "loaded street, so the final approach is approximate."
+            )
         return msg, True
 
     # ------------------------------------------------------------------
@@ -571,6 +581,7 @@ class NavigationEngine:
         self,
         node_path: list[int],
         dest_name: str,
+        approximate: bool = False,
     ) -> list:
         """Convert a node path to a list of (idx, cum_dist, text, lat, lon)."""
         graph        = self._graph
@@ -623,7 +634,8 @@ class NavigationEngine:
         alat, alon = nodes[last]
         instructions.append((
             n - 1, leg_dist,
-            f"Arriving at {dest_name} on {last_name}.",
+            (f"Arriving near {dest_name} on {last_name}."
+             if approximate else f"Arriving at {dest_name} on {last_name}."),
             alat, alon,
         ))
         return instructions
@@ -1000,6 +1012,8 @@ class NavMixin:
                     f"OpenStreetMap could not calculate a route to {dest_name}. "
                     f"{msg} {suggestion}"
                 )
+                wx.CallAfter(self._nav_update_ui, msg)
+                return
             elif suggestion not in str(msg):
                 msg = f"{msg} {suggestion}"
             wx.CallAfter(self._nav_status, msg)

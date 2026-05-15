@@ -85,6 +85,52 @@ def _braille(msg: str) -> None:
             pass
 
 
+def _key_name(keycode) -> str:
+    """Best-effort human-readable name for a wx keycode."""
+    try:
+        keycode = int(keycode)
+    except Exception:
+        return str(keycode)
+    named = {
+        wx.WXK_BACK: "BACK",
+        wx.WXK_RETURN: "RETURN",
+        wx.WXK_NUMPAD_ENTER: "NUMPAD_ENTER",
+        wx.WXK_ESCAPE: "ESCAPE",
+        wx.WXK_UP: "UP",
+        wx.WXK_DOWN: "DOWN",
+        wx.WXK_LEFT: "LEFT",
+        wx.WXK_RIGHT: "RIGHT",
+        wx.WXK_SPACE: "SPACE",
+        wx.WXK_TAB: "TAB",
+    }
+    return named.get(keycode, chr(keycode) if 32 <= keycode < 127 else str(keycode))
+
+
+def _log_key_event(owner, event, source: str, note: str = "") -> None:
+    """Write a verbose trace for a keyboard event."""
+    settings = getattr(owner, "settings", None)
+    if not settings or not settings.get("logging", {}).get("verbose", False):
+        return
+    try:
+        focus = wx.Window.FindFocus()
+        focus_name = focus.GetName() if focus and focus.GetName() else type(focus).__name__ if focus else "None"
+        target = event.GetEventObject()
+        target_name = target.GetName() if target and target.GetName() else type(target).__name__ if target else "None"
+        miab_log(
+            "verbose",
+            (
+                f"Key {source}: key={_key_name(event.GetKeyCode())} "
+                f"code={event.GetKeyCode()} primary={_primary_down(event)} "
+                f"alt={event.AltDown()} shift={event.ShiftDown()} "
+                f"focus={focus_name} target={target_name}"
+                + (f" note={note}" if note else "")
+            ),
+            settings,
+        )
+    except Exception as exc:
+        miab_log("verbose", f"Key {source} logging failed: {exc}", settings)
+
+
 # ── Sub-modules ──────────────────────────────────────────────────
 from geo import (
     bearing_deg,
@@ -101,7 +147,7 @@ from here_poi import HereClient as HerePoi
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0.0'
+APP_VERSION   = '1.0.0.0'
 
 # Bundled read-only resources — inside the exe (_MEIPASS) or next to the script.
 BASE_DIR      = getattr(_sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -5334,6 +5380,27 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _on_keyboard(self, event):
         """Route keys: listbox navigation only, everything else forwarded to on_key."""
+        _log_key_event(self, event, "frame-router")
+        if getattr(self, "_transit_drill_modal_open", False):
+            key = event.GetKeyCode()
+            if key == wx.WXK_BACK:
+                dlg = getattr(self, "_active_transit_drill_dlg", None)
+                items = getattr(self, "_active_transit_drill_items", [])
+                miab_log(
+                    "verbose",
+                    f"Transit modal backspace: dlg_alive={dlg is not None} items={len(items)}",
+                    self.settings,
+                )
+                if dlg is not None:
+                    idx = dlg._lb.GetSelection() if hasattr(dlg, "_lb") else wx.NOT_FOUND
+                    if 0 <= idx < len(items):
+                        kind = items[idx].get("kind", "")
+                        if kind in ("_leaf", "_transit_stop_seq", "_gemini_stop_seq"):
+                            self._transit_drill_back_one_level = True
+                    dlg.EndModal(wx.ID_CANCEL)
+                    return
+            event.Skip()
+            return
         # If focus is outside the main frame (e.g. a modal dialog is open),
         # let the event go to wherever focus actually is.
         # NB: self.FindFocus() returns None for controls in child dialogs;
@@ -5371,6 +5438,13 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     self._street_confirm_explore()
                 else:
                     self._enter_selected_poi_or_drill()
+                return
+
+            if key == wx.WXK_BACK:
+                if getattr(self, "_poi_explore_stack", []):
+                    self._explore_back()
+                else:
+                    self._close_poi_list()
                 return
 
             if key == wx.WXK_ESCAPE:
@@ -6408,6 +6482,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         dlg.Fit()
         dlg.CentreOnScreen()
         dlg._lb = lb
+        wx.CallAfter(lb.SetFocus)
+        self._transit_drill_back_one_level = False
 
         lb.Bind(wx.EVT_LISTBOX_DCLICK, lambda e: dlg.EndModal(wx.ID_OK))
 
@@ -6415,6 +6491,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             kc   = evt.GetKeyCode()
             primary = _primary_down(evt)
             alt  = evt.AltDown()
+            _log_key_event(self, evt, "transit-drill", f"title={title!r}")
             # Ctrl+Alt+F — find food along this transit line (works from any
             # level of the drill dialog, including the stop-sequence view)
             if primary and alt and kc in (ord('F'), ord('f')):
@@ -6429,151 +6506,171 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     self._status_update(
                         "No active transit route — open a route first.", force=True)
                 return
-            if not lb.HasFocus():
-                evt.Skip()
+            if kc == wx.WXK_BACK:
+                idx = lb.GetSelection()
+                if 0 <= idx < len(child_pois):
+                    kind = child_pois[idx].get("kind", "")
+                    if kind in ("_leaf", "_transit_stop_seq", "_gemini_stop_seq"):
+                        self._transit_drill_back_one_level = True
+                dlg.EndModal(wx.ID_CANCEL)
                 return
             if kc in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
                 dlg.EndModal(wx.ID_OK)
-                return
-            if kc == wx.WXK_BACK:
-                dlg.EndModal(wx.ID_CANCEL)
                 return
             if kc == wx.WXK_ESCAPE:
                 dlg.EndModal(wx.ID_ABORT)
                 return
             evt.Skip()
 
+        lb.Bind(wx.EVT_KEY_DOWN, _hook)
         dlg.Bind(wx.EVT_CHAR_HOOK, _hook)
         dlg.Bind(wx.EVT_CLOSE, lambda e: dlg.EndModal(wx.ID_ABORT))
 
-        while True:
-            result = dlg.ShowModal()
-            idx    = lb.GetSelection()
+        self._transit_drill_modal_open = True
+        self._active_transit_drill_dlg = dlg
+        self._active_transit_drill_items = child_pois
+        miab_log("verbose", f"Transit modal open: title={title!r} items={len(child_pois)}", self.settings)
+        try:
+            while True:
+                result = dlg.ShowModal()
+                idx    = lb.GetSelection()
 
-            if result == wx.ID_ABORT:
-                dlg.Destroy()
-                self._poi_list = []
-                self._poi_index = 0
-                self._poi_explore_stack = []
-                return
+                if result == wx.ID_ABORT:
+                    dlg.Destroy()
+                    self._poi_list = []
+                    self._poi_index = 0
+                    self._poi_explore_stack = []
+                    return
 
-            if result == wx.ID_CANCEL or idx == wx.NOT_FOUND:
-                dlg.Destroy()
-                return
+                if result == wx.ID_CANCEL or idx == wx.NOT_FOUND:
+                    dlg.Destroy()
+                    if self._transit_drill_back_one_level:
+                        self._transit_drill_back_one_level = False
+                        return "back"
+                    return
 
-            poi  = child_pois[idx]
-            kind = poi.get("kind", "")
+                poi  = child_pois[idx]
+                kind = poi.get("kind", "")
 
-            # Leaf — nothing to drill into, just loop back
-            if kind in ("_leaf", "_transit_stop_seq", "_gemini_stop_seq"):
-                continue
-
-            # Get times sentinel
-            if kind == "sentinel" and poi.get("sentinel_type") == "get_times":
-                op = poi.get("operator", "")
-                svc = poi.get("service", "")
-                rn  = poi.get("route_name", "")
-                self._status_update(f"Fetching timetable for {op} {svc}...")
-                def _fetch_t(op=op, svc=svc, rn=rn):
-                    text = self._gemini.ask_times(op, svc, rn)
-                    wx.CallAfter(self._show_transit_drill_dialog,
-                                 [{"label": text, "kind": "_leaf"}],
-                                 f"{op} {svc} timetable",
-                                 "Backspace to go back  |  Escape to close")
-                threading.Thread(target=_fetch_t, daemon=True).start()
-                continue
-
-            # GTFS route -> stop sequence
-            if kind == "_transit_route":
-                route_id   = poi.get("_route_id")
-                feed_id    = poi.get("_feed_id")
-                route_name = poi.get("_route_name", "route")
-                if not route_id or not feed_id:
+                # Leaf — nothing to drill into, just loop back
+                if kind in ("_leaf", "_transit_stop_seq", "_gemini_stop_seq"):
                     continue
-                stops = self._gtfs_stops_for_route(
-                    route_id, feed_id, headsign=poi.get("_headsign", ""))
-                if not stops:
-                    self._status_update(f"No stop sequence for {route_name}.")
-                    continue
-                # Stash raw GTFS stops so Ctrl+Alt+F can find food along the line
-                self._active_transit_route = {"name": route_name, "stops": stops}
-                origin = poi.get("_origin_stop_name", "").lower().strip()
-                def _b(s):
-                    s = re.sub(r",?\s*platform\s*\w+", "", s,
-                               flags=re.IGNORECASE).strip()
-                    for sf in (" station"," stop"," halt",
-                               " busway"," ferry terminal"," wharf"):
-                        if s.endswith(sf):
-                            s = s[:-len(sf)].strip()
-                    return s
-                ob = _b(origin)
-                sp = []; fi = 0; matched = False
-                for si, s in enumerate(stops):
-                    sn = s["name"]
-                    pl = s["platform"]
-                    ps = (f"  platform {pl}"
-                          if pl and f"platform {pl}".lower()
-                          not in sn.lower() else "")
-                    if ob and (_b(sn.lower().strip()) == ob or
-                               ob in _b(sn.lower().strip()) or
-                               _b(sn.lower().strip()) in ob):
-                        sp.append({"label": f"YOU ARE HERE: {sn}{ps}",
-                                   "kind": "_leaf",
-                                   "lat": poi["lat"], "lon": poi["lon"]})
-                        fi = si; matched = True
-                    else:
-                        sp.append({"label": f"{sn}{ps}", "kind": "_leaf",
-                                   "lat": poi["lat"], "lon": poi["lon"]})
-                if ob and not matched:
-                    sp.insert(0, {
-                        "label": f"(Note: {ob.title()} not in this route)",
-                        "kind": "_leaf",
-                        "lat": poi["lat"], "lon": poi["lon"]})
-                    fi = 0
-                self._show_transit_drill_dialog(
-                    sp,
-                    f"{route_name} — {len(sp)} stops",
-                    "Backspace to go back  |  Escape to close",
-                    focus_index=fi)
-                continue
 
-            # Gemini service -> stops + sentinels
-            if kind == "_gemini_service":
-                op  = poi.get("_operator", "")
-                svc = poi.get("_service", "")
-                rn  = poi.get("_route_name", "")
-                sts = poi.get("_stops", [])
-                lat = poi.get("lat", 0); lon = poi.get("lon", 0)
-                sp = [{"label": s, "kind": "_leaf", "lat": lat, "lon": lon}
-                      for s in sts if isinstance(s, str) and s.strip()]
-                sp.append({
-                    "label": f"Get times for {op} {svc}",
-                    "kind": "sentinel", "sentinel_type": "get_times",
-                    "operator": op, "service": svc,
-                    "route_name": rn, "lat": lat, "lon": lon})
-                if len(sts) >= 2:
-                    parts = rn.split(" to ", 1)
-                    rev = (f"{parts[1]} to {parts[0]}"
-                           if len(parts) == 2 else rn)
+                # Get times sentinel
+                if kind == "sentinel" and poi.get("sentinel_type") == "get_times":
+                    op = poi.get("operator", "")
+                    svc = poi.get("service", "")
+                    rn  = poi.get("route_name", "")
+                    self._status_update(f"Fetching timetable for {op} {svc}...")
+                    def _fetch_t(op=op, svc=svc, rn=rn):
+                        text = self._gemini.ask_times(op, svc, rn)
+                        wx.CallAfter(self._show_transit_drill_dialog,
+                                     [{"label": text, "kind": "_leaf"}],
+                                     f"{op} {svc} timetable",
+                                     "Backspace to go back  |  Escape to close")
+                    threading.Thread(target=_fetch_t, daemon=True).start()
+                    continue
+
+                # GTFS route -> stop sequence
+                if kind == "_transit_route":
+                    route_id   = poi.get("_route_id")
+                    feed_id    = poi.get("_feed_id")
+                    route_name = poi.get("_route_name", "route")
+                    if not route_id or not feed_id:
+                        continue
+                    stops = self._gtfs_stops_for_route(
+                        route_id, feed_id, headsign=poi.get("_headsign", ""))
+                    if not stops:
+                        self._status_update(f"No stop sequence for {route_name}.")
+                        continue
+                    # Stash raw GTFS stops so Ctrl+Alt+F can find food along the line
+                    self._active_transit_route = {"name": route_name, "stops": stops}
+                    origin = poi.get("_origin_stop_name", "").lower().strip()
+                    def _b(s):
+                        s = re.sub(r",?\s*platform\s*\w+", "", s,
+                                   flags=re.IGNORECASE).strip()
+                        for sf in (" station"," stop"," halt",
+                                   " busway"," ferry terminal"," wharf"):
+                            if s.endswith(sf):
+                                s = s[:-len(sf)].strip()
+                        return s
+                    ob = _b(origin)
+                    sp = []; fi = 0; matched = False
+                    for si, s in enumerate(stops):
+                        sn = s["name"]
+                        pl = s["platform"]
+                        ps = (f"  platform {pl}"
+                              if pl and f"platform {pl}".lower()
+                              not in sn.lower() else "")
+                        if ob and (_b(sn.lower().strip()) == ob or
+                                   ob in _b(sn.lower().strip()) or
+                                   _b(sn.lower().strip()) in ob):
+                            sp.append({"label": f"YOU ARE HERE: {sn}{ps}",
+                                       "kind": "_leaf",
+                                       "lat": poi["lat"], "lon": poi["lon"]})
+                            fi = si; matched = True
+                        else:
+                            sp.append({"label": f"{sn}{ps}", "kind": "_leaf",
+                                       "lat": poi["lat"], "lon": poi["lon"]})
+                    if ob and not matched:
+                        sp.insert(0, {
+                            "label": f"(Note: {ob.title()} not in this route)",
+                            "kind": "_leaf",
+                            "lat": poi["lat"], "lon": poi["lon"]})
+                        fi = 0
+                    back = self._show_transit_drill_dialog(
+                        sp,
+                        f"{route_name} — {len(sp)} stops",
+                        "Backspace to go back  |  Escape to close",
+                        focus_index=fi)
+                    if back == "back":
+                        continue
+                    continue
+
+                # Gemini service -> stops + sentinels
+                if kind == "_gemini_service":
+                    op  = poi.get("_operator", "")
+                    svc = poi.get("_service", "")
+                    rn  = poi.get("_route_name", "")
+                    sts = poi.get("_stops", [])
+                    lat = poi.get("lat", 0); lon = poi.get("lon", 0)
+                    sp = [{"label": s, "kind": "_leaf", "lat": lat, "lon": lon}
+                          for s in sts if isinstance(s, str) and s.strip()]
                     sp.append({
-                        "label": f"Reverse: {rev}",
-                        "kind": "_gemini_service",
-                        "_operator": op, "_service": svc,
-                        "_route_name": rev,
-                        "_stops": list(reversed(sts)),
-                        "lat": lat, "lon": lon})
-                desc = f"{svc} — {rn}" if rn else svc
-                self._show_transit_drill_dialog(
-                    sp,
-                    f"{op}: {desc}",
-                    "Enter for timetable  |  Backspace to go back  |  Escape to close")
-                continue
+                        "label": f"Get times for {op} {svc}",
+                        "kind": "sentinel", "sentinel_type": "get_times",
+                        "operator": op, "service": svc,
+                        "route_name": rn, "lat": lat, "lon": lon})
+                    if len(sts) >= 2:
+                        parts = rn.split(" to ", 1)
+                        rev = (f"{parts[1]} to {parts[0]}"
+                               if len(parts) == 2 else rn)
+                        sp.append({
+                            "label": f"Reverse: {rev}",
+                            "kind": "_gemini_service",
+                            "_operator": op, "_service": svc,
+                            "_route_name": rev,
+                            "_stops": list(reversed(sts)),
+                            "lat": lat, "lon": lon})
+                    desc = f"{svc} — {rn}" if rn else svc
+                    back = self._show_transit_drill_dialog(
+                        sp,
+                        f"{op}: {desc}",
+                        "Enter for timetable  |  Backspace to go back  |  Escape to close")
+                    if back == "back":
+                        continue
+                    continue
 
-            # Ask Gemini for long-distance services
-            if kind == "_ask_gemini":
-                self._hub_transit_mode = True
-                self._explore_gemini_transit(poi)
-                continue
+                # Ask Gemini for long-distance services
+                if kind == "_ask_gemini":
+                    self._hub_transit_mode = True
+                    self._explore_gemini_transit(poi)
+                    continue
+        finally:
+            self._transit_drill_modal_open = False
+            self._active_transit_drill_dlg = None
+            self._active_transit_drill_items = []
+            miab_log("verbose", f"Transit modal close: title={title!r}", self.settings)
 
     def _show_transit_dialog(self, child_pois, parent_name, n):
         """Wrapper — shows routes level via the drill dialog."""
@@ -8483,6 +8580,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         # True when no modifier is held — used to prevent bare letter/F-key
         # handlers from firing on modifier shortcuts.
         no_mod = not shift and not primary and not alt
+        _log_key_event(self, event, "frame", f"street_mode={self.street_mode} walking={getattr(self, '_walking_mode', False)} nav={getattr(self, '_nav_active', False)}")
 
 
         dist, _ = _nearest_city(self._city_lats, self._city_lons, self.lat, self.lon)
@@ -8842,8 +8940,6 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 elif self._game.active:
                     self._game.repeat_target()
                 return
-            if key == wx.WXK_BACK:
-                self._explore_back(); return
             if key == wx.WXK_RETURN or key == wx.WXK_NUMPAD_ENTER:
                 if primary:
                     if self._street_confirm_explore(): return
