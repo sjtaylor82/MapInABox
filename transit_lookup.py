@@ -85,6 +85,16 @@ def _t2s(t: str) -> int:
         return -1
 
 
+def _ssl_context():
+    """Return an HTTPS context with a trusted CA bundle when available."""
+    import ssl
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
+
 # ---------------------------------------------------------------------------
 # TransitLookup
 # ---------------------------------------------------------------------------
@@ -753,7 +763,7 @@ class TransitLookup:
                 f"https://nominatim.openstreetmap.org/reverse?{params}",
                 headers={"User-Agent": "MapInABox/1.0"},
             )
-            with urllib.request.urlopen(req, timeout=8) as r:
+            with urllib.request.urlopen(req, timeout=8, context=_ssl_context()) as r:
                 data = json.loads(r.read().decode())
             addr = data.get("address", {})
             country_code = addr.get("country_code", "").upper()
@@ -1005,13 +1015,11 @@ class TransitLookup:
                 stale = age_days > OVERRIDES_STALE_DAYS
             if stale:
                 try:
-                    import ssl
-                    ctx = ssl.create_default_context()
                     req = urllib.request.Request(
                         OVERRIDES_SERVER_URL,
                         headers={"User-Agent": "MapInABox/1.0"},
                     )
-                    with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
+                    with urllib.request.urlopen(req, timeout=10, context=_ssl_context()) as r:
                         data = r.read()
                     with open(cache_path, "wb") as f:
                         f.write(data)
@@ -1151,7 +1159,7 @@ class TransitLookup:
                     download_url,
                     headers={"User-Agent": "MapInABox/1.0"},
                 )
-                with urllib.request.urlopen(req, timeout=90) as r:
+                with urllib.request.urlopen(req, timeout=90, context=_ssl_context()) as r:
                     zip_bytes = r.read()
             except Exception as exc:
                 print(f"[Transit] Download failed for {feed_id}: {exc}")
@@ -1375,7 +1383,6 @@ class TransitLookup:
 
         Returns a pandas DataFrame or None on failure.
         """
-        import ssl
         try:
             import pandas as pd
         except ImportError:
@@ -1387,12 +1394,11 @@ class TransitLookup:
             if self._catalog_is_stale():
                 print("[Transit] Downloading MobilityData catalog CSV…")
                 try:
-                    ctx = ssl.create_default_context()
                     req = urllib.request.Request(
                         CATALOG_CSV_URL,
                         headers={"User-Agent": "MapInABox/1.0"},
                     )
-                    with urllib.request.urlopen(req, timeout=60, context=ctx) as r:
+                    with urllib.request.urlopen(req, timeout=60, context=_ssl_context()) as r:
                         data = r.read()
                     with open(p, "wb") as f:
                         f.write(data)
