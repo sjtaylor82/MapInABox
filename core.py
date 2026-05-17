@@ -147,7 +147,7 @@ from here_poi import HereClient as HerePoi
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0.0.0'
+APP_VERSION   = '1.0.0.1'
 
 # Bundled read-only resources — inside the exe (_MEIPASS) or next to the script.
 BASE_DIR      = getattr(_sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
