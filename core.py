@@ -2038,10 +2038,6 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._city_labels = []
         self._city_regions = []
         self._city_grid = {}
-        self._region_probe_cache = {}
-        self._region_points = {}
-        self._region_indices = {}
-        self._region_stats = {}
         city_values = self.df["city"].fillna("").astype(str).tolist()
         admin_values = self.df["admin_name"].fillna("").astype(str).tolist()
         country_values = self.df["country"].fillna("").astype(str).tolist()
@@ -2057,10 +2053,6 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     seen.add(value)
             self._city_labels.append(", ".join(parts))
             self._city_regions.append((admin, country))
-            self._region_indices.setdefault((admin, country), []).append(i)
-            self._region_points.setdefault((admin, country), []).append(
-                (float(lat), float(lon))
-            )
             lat_f = float(lat)
             lon_f = float(lon)
             self._city_grid.setdefault(
@@ -2068,21 +2060,6 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                  int(math.floor(lon_f * 10))),
                 [],
             ).append(i)
-        for region_key, points in self._region_points.items():
-            if not points:
-                continue
-            lats = sorted(p[0] for p in points)
-            lons = sorted(p[1] for p in points)
-            n = len(points)
-            self._region_stats[region_key] = {
-                "min_lat": lats[0],
-                "max_lat": lats[-1],
-                "min_lon": lons[0],
-                "max_lon": lons[-1],
-                "center_lat": lats[n // 2],
-                "center_lon": lons[n // 2],
-                "count": n,
-            }
         self.facts  = facts_data
         self.sound  = SoundEngine()
         self._geo_features = GeoFeatures(GEO_FEATURES_DIR)
@@ -2362,103 +2339,6 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
             if best:
                 return best[1], best[2], best[3]
-        return None
-
-    def _next_region_map_target(self, direction: str):
-        """Return the next named admin region in the given direction.
-
-        This uses the atlas's city coordinates as a fast local estimate of
-        regional extents, rather than probing a live geocoder on every press.
-        """
-        lat0, lon0 = self.lat, self.lon
-        _dist, current_idx = _nearest_city(self._city_lats, self._city_lons, lat0, lon0)
-        current_region = self._city_regions[current_idx]
-        current_country = current_region[1]
-
-        def _label(region: tuple[str, str]) -> str:
-            return ", ".join(value for value in region if value and value.lower() != "nan")
-
-        candidates = []
-        for region, bounds in self._region_stats.items():
-            if region == current_region:
-                continue
-            if current_country and region[1] != current_country:
-                continue
-
-            label = _label(region)
-            if not label:
-                continue
-
-            if direction == "north":
-                ahead = bounds["min_lat"] - lat0
-                if bounds["min_lon"] <= lon0 <= bounds["max_lon"]:
-                    band_gap = 0.0
-                else:
-                    band_gap = min(abs(lon0 - bounds["min_lon"]),
-                                   abs(lon0 - bounds["max_lon"]))
-                target_lat = bounds["min_lat"] + 0.02
-                target_lon = min(max(lon0, bounds["min_lon"]), bounds["max_lon"])
-            elif direction == "south":
-                ahead = lat0 - bounds["max_lat"]
-                if bounds["min_lon"] <= lon0 <= bounds["max_lon"]:
-                    band_gap = 0.0
-                else:
-                    band_gap = min(abs(lon0 - bounds["min_lon"]),
-                                   abs(lon0 - bounds["max_lon"]))
-                target_lat = bounds["max_lat"] - 0.02
-                target_lon = min(max(lon0, bounds["min_lon"]), bounds["max_lon"])
-            elif direction == "east":
-                ahead = bounds["min_lon"] - lon0
-                if bounds["min_lat"] <= lat0 <= bounds["max_lat"]:
-                    band_gap = 0.0
-                else:
-                    band_gap = min(abs(lat0 - bounds["min_lat"]),
-                                   abs(lat0 - bounds["max_lat"]))
-                target_lat = min(max(lat0, bounds["min_lat"]), bounds["max_lat"])
-                target_lon = bounds["min_lon"] + 0.02
-            else:
-                ahead = lon0 - bounds["max_lon"]
-                if bounds["min_lat"] <= lat0 <= bounds["max_lat"]:
-                    band_gap = 0.0
-                else:
-                    band_gap = min(abs(lat0 - bounds["min_lat"]),
-                                   abs(lat0 - bounds["max_lat"]))
-                target_lat = min(max(lat0, bounds["min_lat"]), bounds["max_lat"])
-                target_lon = bounds["max_lon"] - 0.02
-
-            if ahead <= 0:
-                continue
-
-            score = ahead + (band_gap * 4.0)
-            distance_score = math.hypot(ahead, band_gap)
-            region_indices = self._region_indices.get(region, [])
-            if not region_indices:
-                continue
-            anchor_idx = max(
-                region_indices,
-                key=lambda idx: (
-                    self._city_pops[idx],
-                    -(
-                        (self._city_lats[idx] - bounds["center_lat"]) ** 2 +
-                        (self._city_lons[idx] - bounds["center_lon"]) ** 2
-                    ),
-                    -(
-                        (self._city_lats[idx] - target_lat) ** 2 +
-                        (self._city_lons[idx] - target_lon) ** 2
-                    ),
-                    self._city_labels[idx].lower(),
-                ),
-            )
-            anchor_label = self._city_labels[anchor_idx] or label
-            anchor_lat = self._city_lats[anchor_idx]
-            anchor_lon = self._city_lons[anchor_idx]
-            candidates.append((score, ahead, distance_score, region, anchor_label, anchor_lat, anchor_lon))
-
-        if candidates:
-            candidates.sort(key=lambda item: (item[0], item[1], item[2], item[4].lower()))
-            best = candidates[0]
-            return best[5], best[6], best[4]
-
         return None
 
     def _on_activate(self, event):
@@ -9037,36 +8917,13 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self.listbox.SetSelection(self._poi_index)
             return
 
-        map_arrow = key in (wx.WXK_UP, wx.WXK_DOWN, wx.WXK_LEFT, wx.WXK_RIGHT)
-        if (not self.street_mode and not getattr(self, '_walking_mode', False)
-                and map_arrow and primary and not shift and not alt):
-            direction = {
-                wx.WXK_UP: "north",
-                wx.WXK_DOWN: "south",
-                wx.WXK_LEFT: "west",
-                wx.WXK_RIGHT: "east",
-            }[key]
-            target = self._next_region_map_target(direction)
-            if target:
-                new_lat, new_lon, target_label = target
-                self._status_update(target_label, force=True)
-                self._pinned_jump_label = ""
-                self._pinned_jump_label_until = 0
-            else:
-                self._last_region_jump = None
-                self._status_update("No region in that direction.", force=True)
-                return
-        elif key == wx.WXK_UP:
-            self._last_region_jump = None
+        if key == wx.WXK_UP:
             new_lat = min(90, self.lat + step)
         elif key == wx.WXK_DOWN:
-            self._last_region_jump = None
             new_lat = max(-90, self.lat - step)
         elif key == wx.WXK_LEFT:
-            self._last_region_jump = None
             new_lon = ((self.lon - step + 180) % 360) - 180
         elif key == wx.WXK_RIGHT:
-            self._last_region_jump = None
             new_lon = ((self.lon + step + 180) % 360) - 180
 
         if new_lat != self.lat or new_lon != self.lon:
