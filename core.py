@@ -192,7 +192,9 @@ AIRPORTS_CSV_PATH      = os.path.join(CACHE_DIR, "airports.csv")
 AIRPORTS_CSV_SEED      = os.path.join(BASE_DIR,  "airports.csv.gz")
 AIRPORTS_CSV_URL       = "https://davidmegginson.github.io/ourairports-data/airports.csv"
 PLACE_NAME_CLOSE_KM = 5.0
-NEAREST_PLACE_FALLBACK_KM = 250.0
+# Keep remote-area place labels conservative so we do not announce
+# faraway towns when there is no local feature match.
+NEAREST_PLACE_FALLBACK_KM = 20.0
 
 # ── Geographic features (deserts, mountain ranges, oceans etc.) ──────────────
 
@@ -605,6 +607,15 @@ class GeoFeatures:
             match_rank, self._JUMP_TYPE_RANK.get(code, 9), dedupe_key
         )
 
+    def _feature_name_with_type(self, name: str, code: str) -> str:
+        """Return a spoken feature name with a type suffix where helpful."""
+        type_label = {
+            "S.FRM":  "Farm",
+            "S.FRMS": "Farms",
+            "S.HMSD": "Homestead",
+        }.get(code, "")
+        return f"{name} {type_label}".strip() if type_label else name
+
     def lookup(self, lat: float, lon: float, country_code: str = None) -> str:
         """Return desert name for live per-keypress announcement, or ''."""
         best      = None
@@ -622,7 +633,7 @@ class GeoFeatures:
             dist = math.sqrt(dlat*dlat + dlon*dlon)
             if dist < r and dist < best_dist:
                 best_dist = dist
-                best      = feat["name"]
+                best      = self._feature_name_with_type(feat["name"], feat.get("code", ""))
         return best or ""
 
     def lookup_any(self, lat: float, lon: float, country_code: str = None) -> str:
@@ -640,7 +651,7 @@ class GeoFeatures:
             dist = math.sqrt(dlat*dlat + dlon*dlon)
             if dist < r and dist < best_dist:
                 best_dist = dist
-                best      = feat["name"]
+                best      = self._feature_name_with_type(feat["name"], feat.get("code", ""))
         return best or ""
 
     def lookup_precise_label(self, lat: float, lon: float, country_code: str = None) -> str:
@@ -700,7 +711,7 @@ class GeoFeatures:
             dist = math.sqrt(dlat*dlat + dlon*dlon)
             if dist < r and dist < best_dist:
                 best_dist = dist
-                best      = feat["name"]
+                best      = self._feature_name_with_type(feat["name"], code)
         return best or ""
 
     def lookup_context_label(self, lat: float, lon: float, country_code: str = None) -> str:
@@ -736,7 +747,7 @@ class GeoFeatures:
             dist = math.sqrt(dlat*dlat + dlon*dlon)
             if dist < r and feat["name"] not in seen:
                 seen.add(feat["name"])
-                candidates.append((dist * 111.0, code, feat["name"]))
+                candidates.append((dist * 111.0, code, self._feature_name_with_type(feat["name"], code)))
         candidates.sort(key=lambda item: item[0])
         result = []
         for km, _code, name in candidates[:limit]:
@@ -858,7 +869,7 @@ class GeoFeatures:
             dist = math.sqrt(dlat*dlat + dlon*dlon)
             if dist < r and feat["name"] not in seen:
                 seen.add(feat["name"])
-                results.append((feat["name"], feat["code"]))
+                results.append((self._feature_name_with_type(feat["name"], feat["code"]), feat["code"]))
         return results
 AIRPORTS_STALE_DAYS = 90
 
@@ -877,6 +888,8 @@ COUNTRY_ALIASES = {
     "South Korea":     "Republic of Korea",
     "North Korea":     "Democratic People's Republic of Korea",
     "Czech Republic":  "Czechia",
+    "Central African Rep.": "Central African Republic",
+    "Central African Rep":  "Central African Republic",
     "Ivory Coast":     "Cote d'Ivoire",
     "Syria":           "Syrian Arab Republic",
     "Iran":            "Iran",
@@ -966,9 +979,15 @@ KNOWN_OCEANS = {
     "Timor Sea":      [(-13,  -8,  123,  133)],
     "Arafura Sea":    [(-13,  -8,  133,  141)],
     "Gulf of Carpentaria":[(-17, -10, 136, 142)],
+    # Local southeast Queensland water body — keep this ahead of Tasman Sea.
+    "Moreton Bay":    [(-28.6, -26.8, 152.5, 154.2)],
+    # South West Rocks / Arakoon coastline.
+    "Trial Bay":      [(-31.0, -30.8, 152.95, 153.15)],
     "Coral Sea":      [(-25, -10, 147, 165)],
     "Great Australian Bight": [(-50, -32, 115, 145)],
-    "Tasman Sea":     [(-50, -25, 145, 175)],
+    # Broad offshore fallback only; local coastal bays/headlands should win first.
+    # Include Tasmania and the NSW coast under the Tasman Sea rather than Pacific.
+    "Tasman Sea":     [(-50, -38, 140, 175)],
     "Gulf of Mexico":     [( 18,  30,  -97,  -80)],
     "Caribbean Sea":  [( 10,  23,  -87,  -60)],
     "Mediterranean Sea":  [( 30,  46,   -6,   36)],
@@ -989,6 +1008,8 @@ KNOWN_OCEANS = {
     "Bay of Bengal":      [(  5,  23,   78,   99)],
     "Caspian Sea":        [( 37,  47,   49,   55)],
     "Baltic Sea":         [( 53,  66,    9,   30)],
+    # Southern Ocean starts south of Tasmania under Australian conventions.
+    "Southern Ocean (Australia)": [(-60, -43.6, 110, 180)],
     "Pacific Ocean":  [(-60,  60,  120, -80)],
     "Atlantic Ocean": [(-60,  70,  -80,  20)],
     "Indian Ocean":   [(-50,  30,   20, 120)],
@@ -1270,6 +1291,8 @@ class SoundEngine:
         # Aliases already handled by COUNTRY_ALIASES but add region safety net
         "Democratic People's Republic of Korea": "asia",
         "Republic of Korea":        "republic_of_korea",
+        "Democratic Republic of the Congo": "congo_(kinshasa)",
+        "Republic of the Congo":    "congo_(brazzaville)",
         "Russian Federation":       "russian_federation",
         "Syrian Arab Republic":     "syrian_arab_republic",
         "United States of America": "united_states_of_america",
@@ -2984,8 +3007,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             if not location_info and hasattr(self, '_geo_features'):
                 try:
                     cc = getattr(self, '_current_country_code', None)
-                    location_info = (self._geo_features.lookup_precise_label(self.lat, self.lon, cc)
-                                     or self._geo_features.lookup_any(self.lat, self.lon, cc))
+                    location_info = (self._geo_lookup_precise(self.lat, self.lon, cc)
+                                     or self._geo_lookup_any(self.lat, self.lon, cc))
                 except Exception:
                     pass
 
@@ -7690,6 +7713,65 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             country = self._city_regions[idx][1]
         self._status_update(country if country else "Country unknown.", force=True)
 
+    def _announce_nearest_city_only(self):
+        """Shift+C in map mode — speak the nearest city/locality only."""
+        if self.lat < -60.0:
+            self._status_update("Antarctica", force=True)
+            return
+        try:
+            self._status_update(self._nearest_city_distance_label(), force=True)
+        except Exception:
+            self._status_update("Nearest city unknown.", force=True)
+
+    def _geo_features_enabled(self) -> bool:
+        return bool(getattr(self, "_geo_features", None)) and self.settings.get("geo_features_enabled", True)
+
+    def _geo_lookup_precise(self, lat: float, lon: float, country_code: str = None) -> str:
+        if not self._geo_features_enabled():
+            return ""
+        return self._geo_features.lookup_precise_label(lat, lon, country_code)
+
+    def _geo_lookup_any(self, lat: float, lon: float, country_code: str = None) -> str:
+        if not self._geo_features_enabled():
+            return ""
+        return self._geo_features.lookup_any(lat, lon, country_code)
+
+    def _geo_context_items(self, lat: float, lon: float, limit: int = 3, country_code: str = None) -> list[str]:
+        if not self._geo_features_enabled():
+            return []
+        return self._geo_features.context_items(lat, lon, limit=limit, country_code=country_code)
+
+    def _nearest_city_distance_label(self, lat: float = None, lon: float = None) -> str:
+        """Return the nearest city name, distance and direction from a point."""
+        lat = self.lat if lat is None else lat
+        lon = self.lon if lon is None else lon
+        dist, idx = _nearest_city(self._city_lats, self._city_lons, lat, lon)
+        row = self.df.iloc[idx]
+        city = str(row.get("city", "")).strip()
+        if not city or city.lower() == "nan":
+            city = "City unknown"
+        city_lat = float(row.get("lat", lat))
+        city_lon = float(row.get("lng", lon))
+        km = dist * 111.0
+        if km < 1:
+            dist_text = f"{round(km * 1000)} metres"
+        else:
+            dist_text = f"{round(km)} km"
+        direction = compass_name(bearing_deg(lat, lon, city_lat, city_lon)).lower().replace("-", " ")
+        return f"{city} {dist_text} {direction}".strip()
+
+    def _toggle_geo_features(self):
+        enabled = not self.settings.get("geo_features_enabled", True)
+        self.settings["geo_features_enabled"] = enabled
+        save_settings(self.settings)
+        self._status_update(
+            "GeoFeatures on." if enabled else "GeoFeatures off.",
+            force=True,
+        )
+        miab_log("feature_usage",
+                 f"GeoFeatures {'enabled' if enabled else 'disabled'}",
+                 self.settings)
+
 
     def _fetch_all_pois_background(self, address_points=None):
         """Background POI fetch for walk-announce. Delegates to PoiFetcher."""
@@ -8258,8 +8340,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 if hasattr(self, '_geo_features'):
                     try:
                         cc = getattr(self, '_current_country_code', None)
-                        label = (self._geo_features.lookup_precise_label(new_lat, new_lon, cc)
-                                 or self._geo_features.lookup_any(new_lat, new_lon, cc))
+                        label = (self._geo_lookup_precise(new_lat, new_lon, cc)
+                                 or self._geo_lookup_any(new_lat, new_lon, cc))
                     except Exception:
                         pass
                 self.update_ui(f"{label}." if label else "Can't move into water.")
@@ -8666,6 +8748,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 self._announce_current_region(); return
             if no_mod and (key == ord('C') or key == ord('c')):
                 self._announce_current_country(); return
+            if shift and not primary and (key == ord('C') or key == ord('c')):
+                miab_log("feature_usage", "Key: Shift+C (nearest city only)", self.settings)
+                self._announce_nearest_city_only(); return
+            if no_mod and (key == ord('G') or key == ord('g')):
+                self._toggle_geo_features(); return
 
         # ── GPS navigation intercept — Up/Down step through instructions ──
         # Fires regardless of walking mode, street mode or world map mode.
@@ -8950,8 +9037,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         if hasattr(self, '_geo_features'):
                             try:
                                 cc = getattr(self, '_current_country_code', None)
-                                label = (self._geo_features.lookup_precise_label(new_lat, new_lon, cc)
-                                         or self._geo_features.lookup_any(new_lat, new_lon, cc))
+                                label = (self._geo_lookup_precise(new_lat, new_lon, cc)
+                                         or self._geo_lookup_any(new_lat, new_lon, cc))
                             except Exception:
                                 pass
                         self._status_update(f"{label}." if label else "Can't move into water.", force=True)
@@ -9208,6 +9295,16 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 else:
                     country = city_country
                     city_matches_country = True
+                def _with_nearby_town(feature_label: str) -> str:
+                    if not feature_label or not city_matches_country:
+                        return feature_label
+                    if city and city.lower() != 'nan':
+                        if feature_label.endswith((" Homestead", " Farm", " Farms")):
+                            if dist_km <= 1.0:
+                                return f"{feature_label}, {city}"
+                            if dist_km <= 3.0:
+                                return f"{feature_label}, near {city}"
+                    return feature_label
                 close_place = city_matches_country and dist_km <= PLACE_NAME_CLOSE_KM
                 prev_state   = getattr(self, 'last_state_found', '')
                 prev_country = self.last_country_found
@@ -9218,31 +9315,27 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     state if city_matches_country and state and state != 'nan' else ""
                 )
 
-                if close_place:
-                    parts = []
-                    if city and city.lower() != 'nan':
-                        parts.append(city)
-                    if state and state.lower() != 'nan' and state != prev_state:
-                        parts.append(state)
-                    if country and country.lower() != 'nan' and country != prev_country:
-                        parts.append(country)
-                    label = ", ".join(parts) if parts else city
-                elif city_matches_country:
+                if city_matches_country:
                     country_code = getattr(self, "_current_country_code", None)
-                    context = self._geo_features.context_items(
+                    context = self._geo_context_items(
                         self.lat, self.lon, limit=1, country_code=country_code)
-                    feature = self._geo_features.lookup_precise_label(
+                    feature = self._geo_lookup_precise(
                         self.lat, self.lon, country_code=country_code)
-                    feature_any = ""
-                    if not feature:
-                        feature_any = self._geo_features.lookup_any(
-                            self.lat, self.lon, country_code=country_code)
                     if feature:
-                        label = feature
+                        label = _with_nearby_town(feature)
+                    elif close_place:
+                        parts = []
+                        if city and city.lower() != 'nan':
+                            parts.append(city)
+                        if state and state.lower() != 'nan' and state != prev_state:
+                            parts.append(state)
+                        if country and country.lower() != 'nan' and country != prev_country:
+                            parts.append(country)
+                        label = ", ".join(parts) if parts else city
                     elif context:
                         label = ". ".join(context)
-                    elif feature_any:
-                        label = feature_any
+                    elif not self._geo_features_enabled():
+                        label = self._nearest_city_distance_label()
                     elif city and city.lower() != "nan" and dist_km <= NEAREST_PLACE_FALLBACK_KM:
                         label = f"{city} {round(dist_km)} km"
                     else:
@@ -9255,20 +9348,16 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         _only_region = True
                 else:
                     country_code = getattr(self, "_current_country_code", None)
-                    context = self._geo_features.context_items(
+                    context = self._geo_context_items(
                         self.lat, self.lon, limit=1, country_code=country_code)
-                    feature = self._geo_features.lookup_precise_label(
+                    feature = self._geo_lookup_precise(
                         self.lat, self.lon, country_code=country_code)
-                    feature_any = ""
-                    if not feature:
-                        feature_any = self._geo_features.lookup_any(
-                            self.lat, self.lon, country_code=country_code)
                     if feature:
-                        label = feature
+                        label = _with_nearby_town(feature)
                     elif context:
                         label = ". ".join(context)
-                    elif feature_any:
-                        label = feature_any
+                    elif not self._geo_features_enabled():
+                        label = self._nearest_city_distance_label()
                     else:
                         label = country if country and country.lower() != "nan" else "Location unknown"
                         _only_region = True
@@ -9276,13 +9365,13 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 # Named bays, islands and coastal features are often part of the
                 # user's local country context, so keep the nearby country sound.
                 country_code = getattr(self, "_current_country_code", None)
-                context = self._geo_features.context_items(
+                context = self._geo_context_items(
                     self.lat, self.lon, limit=1, country_code=country_code)
                 coastal_feature = (
                     (context[0] if context else "")
-                    or self._geo_features.lookup_precise_label(
+                    or self._geo_lookup_precise(
                         self.lat, self.lon, country_code=country_code)
-                    or self._geo_features.lookup_any(
+                    or self._geo_lookup_any(
                         self.lat, self.lon, country_code=country_code)
                 )
                 if coastal_feature:
@@ -9390,6 +9479,12 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _ocean_name(self, lat, lon):
         """Return the name of the ocean corresponding to a lat/lon point."""
+        # Tasmania needs a special split: east of South East Cape is Tasman Sea,
+        # west/southwest uses the southern-ocean convention.
+        if -43.6 <= lat <= -40.0:
+            if lon >= 146.8:
+                return "Tasman Sea"
+            return "Southern Ocean (Australia)"
         for name, boxes in KNOWN_OCEANS.items():
             for lat_min, lat_max, lon_min, lon_max in boxes:
                 if lat_min <= lat <= lat_max:
@@ -9634,6 +9729,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 "Ctrl+F: favourites.",
                 "Ctrl+Shift+F: add current place to favourites.",
                 "J: jump to city, country, or coordinates.",
+                "G: toggle GeoFeatures on/off.",
+                "Shift+C: nearest city only.",
                 "M: store current location as mark 1, 2, or 3.",
                 "Shift+M: remove mark 1, 2, or 3.",
                 "D: set destination.",

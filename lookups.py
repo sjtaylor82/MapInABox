@@ -519,8 +519,8 @@ class LookupsMixin:
             self._status_update(cached["text"], force=True)
             return
 
-        city = getattr(self, "last_city_found", "") or ""
-        self._status_update(f"Fetching weather for {city or country or 'this location'}...")
+        city = self._weather_place_label()
+        self._status_update("Fetching weather...")
         lat, lon = self.lat, self.lon
 
         wmo = {
@@ -1142,16 +1142,63 @@ class LookupsMixin:
         from core import COUNTRY_ALIASES
         return COUNTRY_ALIASES
 
+    def _weather_place_label(self) -> str:
+        """Return a city-first label for weather announcements."""
+        city = str(getattr(self, "last_city_found", "") or "").strip()
+        if city and city.lower() != "nan":
+            return city
+        try:
+            from core import _nearest_city
+            _dist, idx = _nearest_city(self._city_lats, self._city_lons, self.lat, self.lon)
+            row = self.df.iloc[idx]
+            city = str(row.get("city", "")).strip()
+            if city and city.lower() != "nan":
+                return city
+            region = str(row.get("admin_name", "")).strip()
+            country = str(row.get("country", "")).strip()
+            parts = [p for p in (region, country) if p and p.lower() != "nan"]
+            if parts:
+                return ", ".join(parts)
+        except Exception:
+            pass
+        return str(getattr(self, "last_country_found", "") or "").strip()
+
     def _announce_nearby_features(self):
         """X key (world map) — show nearby geographic features from CSV."""
-        location = getattr(self, 'last_location_str', '') or \
-                   getattr(self, 'last_country_found', '') or 'this location'
+        location = getattr(self, 'last_location_str', '') or 'this location'
+        geo_on = getattr(self, "_geo_features_enabled", lambda: True)()
+
+        if not geo_on:
+            try:
+                from core import _nearest_city
+                dist, idx = _nearest_city(self._city_lats, self._city_lons, self.lat, self.lon)
+                row = self.df.iloc[idx]
+                city = str(row.get("city", "")).strip()
+                if not city or city.lower() == "nan":
+                    city = "City unknown"
+                km = dist * 111.0
+                dist_text = f"{round(km * 1000)} metres" if km < 1 else f"{round(km)} km"
+                self._status_update(f"{city} {dist_text}", force=True)
+            except Exception:
+                self._status_update("Nearest city unknown.", force=True)
+            return
 
         features = self._geo_features.nearby(
             self.lat, self.lon, country_code=getattr(self, "_current_country_code", None))
 
         if not features:
-            self._status_update("No named geographic features found nearby.", force=True)
+            try:
+                from core import _nearest_city
+                dist, idx = _nearest_city(self._city_lats, self._city_lons, self.lat, self.lon)
+                row = self.df.iloc[idx]
+                city = str(row.get("city", "")).strip()
+                if not city or city.lower() == "nan":
+                    city = "City unknown"
+                km = dist * 111.0
+                dist_text = f"{round(km * 1000)} metres" if km < 1 else f"{round(km)} km"
+                self._status_update(f"{city} {dist_text}", force=True)
+            except Exception:
+                self._status_update("No named geographic features found nearby.", force=True)
             return
 
         labels = {
@@ -1172,7 +1219,7 @@ class LookupsMixin:
             'T.DSRT': 'Desert',
         }
 
-        lines = [f"Geographic features near {location}:", ""]
+        lines = ["GeoFeatures nearby:", ""]
         for name, code in features:
             label = labels.get(code, code)
             lines.append(f"{label}: {name}")
@@ -1182,7 +1229,7 @@ class LookupsMixin:
 
     def _show_features_dialog(self, text: str, location: str):
         """Show nearby features in a read-only dialog."""
-        dlg = wx.Dialog(self, title=f"Features near {location}",
+        dlg = wx.Dialog(self, title="GeoFeatures nearby",
                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         vs  = wx.BoxSizer(wx.VERTICAL)
         txt = wx.TextCtrl(dlg, value=text,
