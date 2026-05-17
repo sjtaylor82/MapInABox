@@ -241,12 +241,10 @@ class ToolsMixin:
                 "it will use open geocoding and OSRM routing instead of Google Maps, "
                 "so coverage and turn-by-turn detail may be a little different.",
             )
-        self._thinking()
 
         country_code = self._ask_country_code()
         if not country_code:
             self._status_update("Detour calculator cancelled.", force=True)
-            self._finish_thinking()
             return
 
         def _geocode(prompt_text):
@@ -274,7 +272,6 @@ class ToolsMixin:
             result = _geocode("Where are you starting from?")
             if result is None:
                 self._status_update("Detour calculator cancelled.", force=True)
-                self._finish_thinking()
                 return
             if result != "retry":
                 start = result
@@ -285,7 +282,6 @@ class ToolsMixin:
             result = _geocode("Where do you need to stop?")
             if result is None:
                 self._status_update("Detour calculator cancelled.", force=True)
-                self._finish_thinking()
                 return
             if result != "retry":
                 first_stop = result
@@ -296,7 +292,6 @@ class ToolsMixin:
             result = _geocode("What is your final destination?")
             if result is None:
                 self._status_update("Detour calculator cancelled.", force=True)
-                self._finish_thinking()
                 return
             if result != "retry":
                 destination = result
@@ -318,6 +313,7 @@ class ToolsMixin:
         stops.append(destination)
 
         # Run comparison in background
+        self._thinking()
         def _calc():
             try:
                 result = rt.compare_routes(stops)
@@ -874,12 +870,10 @@ class ToolsMixin:
                 "it will use open geocoding and OSRM routing instead of Google Maps, "
                 "so toll pricing may be unavailable and the comparison will be simpler.",
             )
-        self._thinking()
 
         country_code = self._ask_country_code()
         if not country_code:
             self._status_update("Toll compare cancelled.", force=True)
-            self._finish_thinking()
             return
 
         # Get origin
@@ -888,7 +882,6 @@ class ToolsMixin:
         if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
             dlg.Destroy()
             self._status_update("Toll compare cancelled.", force=True)
-            self._finish_thinking()
             return
         origin_text = dlg.GetValue()
         dlg.Destroy()
@@ -898,13 +891,11 @@ class ToolsMixin:
             resolved = self._resolve_geocode(rt, origin_text, country_code, "starting point")
             if resolved is None:
                 self._status_update("Toll compare cancelled.", force=True)
-                self._finish_thinking()
                 return
             o_lat, o_lon, o_name = resolved
             self._status_update(f"Origin: {o_name}", force=True)
         except Exception as e:
             self._status_update(f"Could not find '{origin_text}': {e}", force=True)
-            self._finish_thinking()
             return
 
         # Get destination
@@ -913,7 +904,6 @@ class ToolsMixin:
         if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
             dlg.Destroy()
             self._status_update("Toll compare cancelled.", force=True)
-            self._finish_thinking()
             return
         dest_text = dlg.GetValue()
         dlg.Destroy()
@@ -923,15 +913,14 @@ class ToolsMixin:
             resolved = self._resolve_geocode(rt, dest_text, country_code, "destination")
             if resolved is None:
                 self._status_update("Toll compare cancelled.", force=True)
-                self._finish_thinking()
                 return
             d_lat, d_lon, d_name = resolved
             self._status_update("Destination found.", force=True)
         except Exception as e:
             self._status_update(f"Could not find '{dest_text}': {e}", force=True)
-            self._finish_thinking()
             return
 
+        self._thinking()
         def _calc():
             try:
                 result = rt.compare_tolls(
@@ -1122,12 +1111,9 @@ class ToolsMixin:
             # No warning needed: GTFS-only mode is already the default fallback.
             pass
 
-        self._thinking()
-
         country_code = self._ask_country_code()
         if not country_code:
             self._status_update("Departure board cancelled.", force=True)
-            self._finish_thinking()
             return
 
         # Ask for location
@@ -1136,7 +1122,6 @@ class ToolsMixin:
         if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
             dlg.Destroy()
             self._status_update("Departure board cancelled.", force=True)
-            self._finish_thinking()
             return
         location_text = dlg.GetValue()
         dlg.Destroy()
@@ -1147,16 +1132,15 @@ class ToolsMixin:
             resolved = self._resolve_geocode(rt, location_text, country_code, "location")
             if resolved is None:
                 self._status_update("Departure board cancelled.", force=True)
-                self._finish_thinking()
                 return
             lat, lon, formatted = resolved
             self._status_update(f"Searching for stops near {formatted}...")
         except Exception as e:
             self._status_update(f"Could not find '{location_text}': {e}", force=True)
-            self._finish_thinking()
             return
 
         # Fetch stations in background
+        self._thinking()
         def _fetch():
             try:
                 if source_pref == "google" and google_key:
