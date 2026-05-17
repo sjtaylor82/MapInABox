@@ -134,3 +134,36 @@ jobs:
             artifacts/windows/*.exe
             artifacts/macos/*.zip
           generate_release_notes: true
+
+  update-winget:
+    needs: publish-release
+    runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Derive winget version from tag
+        id: ver
+        shell: powershell
+        run: |
+          $tag = "${{ github.ref_name }}"          # e.g. v1.0.0.1
+          $appVer = $tag.TrimStart('v')             # e.g. 1.0.0.1
+          $wingetVer = "$appVer.0"                  # e.g. 1.0.0.1.0
+          $url = "https://github.com/sjtaylor82/MapInABox/releases/download/$tag/MapInABox-$appVer-setup.exe"
+          echo "winget_version=$wingetVer" >> $env:GITHUB_OUTPUT
+          echo "installer_url=$url"        >> $env:GITHUB_OUTPUT
+
+      - name: Install wingetcreate
+        shell: powershell
+        run: |
+          $releases = Invoke-RestMethod "https://api.github.com/repos/microsoft/winget-create/releases/latest"
+          $asset = $releases.assets | Where-Object { $_.name -eq "wingetcreate.exe" } | Select-Object -First 1
+          Invoke-WebRequest $asset.browser_download_url -OutFile wingetcreate.exe
+
+      - name: Submit winget update
+        shell: powershell
+        run: |
+          .\wingetcreate.exe update SamTaylor.MapInABox `
+            --version "${{ steps.ver.outputs.winget_version }}" `
+            --urls "${{ steps.ver.outputs.installer_url }}" `
+            --submit `
+            --token "${{ secrets.WINGET_TOKEN }}"
