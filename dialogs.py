@@ -791,7 +791,8 @@ class ToolsMenuDialog(wx.Dialog):
 
     TOOLS = [
         ("Detour Calculator",  "detour_calculator"),
-        ("Route Explorer",     "route_explorer"),
+        ("Suburb Lister",      "route_explorer"),
+        ("Rendezvous Point",   "rendezvous_point"),
         ("Toll Compare",       "toll_compare"),
         ("Journey Planner",    "journey_planner"),
         ("Departure Board",    "departure_board"),
@@ -815,15 +816,11 @@ class ToolsMenuDialog(wx.Dialog):
         vs.Add(self.listbox, 1, wx.ALL | wx.EXPAND, 10)
 
         panel.SetSizer(vs)
-        self.SetSize(300, 250)
+        self.SetSize(320, 285)
 
         self.selected_tool = ""
         self.listbox.Bind(wx.EVT_LISTBOX_DCLICK, self._on_choose)
         self.listbox.Bind(wx.EVT_KEY_DOWN, self._on_key)
-        self.listbox.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
-        self.dep_listbox.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
-        self.cand_listbox.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
-        self.stops_listbox.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
         self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
         wx.CallAfter(self.listbox.SetFocus)
 
@@ -850,8 +847,8 @@ class ToolsMenuDialog(wx.Dialog):
 class StopEntryDialog(wx.Dialog):
     """Prompt the user for an address/suburb name.  Returns the text."""
 
-    def __init__(self, parent, prompt, default=""):
-        super().__init__(parent, title="Enter Stop",
+    def __init__(self, parent, prompt, default="", title="Start"):
+        super().__init__(parent, title=title,
                          style=wx.DEFAULT_DIALOG_STYLE)
         panel = wx.Panel(self)
         vs = wx.BoxSizer(wx.VERTICAL)
@@ -877,6 +874,104 @@ class StopEntryDialog(wx.Dialog):
 
     def GetValue(self):
         return self.text.GetValue().strip()
+
+    def _on_char_hook(self, event):
+        code = event.GetKeyCode()
+        if code == wx.WXK_ESCAPE:
+            self.EndModal(wx.ID_CANCEL)
+            return
+        if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
+            self.EndModal(wx.ID_OK)
+            return
+        event.Skip()
+
+
+class MeetPointDialog(wx.Dialog):
+    """Prompt for rendezvous inputs and match mode."""
+
+    def __init__(self, parent) -> None:
+        super().__init__(parent, title="Rendezvous Point",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        panel = wx.Panel(self)
+        vs = wx.BoxSizer(wx.VERTICAL)
+
+        self.mode = wx.RadioBox(
+            panel,
+            choices=[
+                "Find a pick-up point",
+                "Get dropped off on the way",
+                "Meet in the middle",
+            ],
+            majorDimension=1,
+            style=wx.RA_SPECIFY_ROWS,
+        )
+        self.mode.SetSelection(0)
+        vs.Add(self.mode, 0, wx.ALL | wx.EXPAND, 8)
+
+        self.origin_label = wx.StaticText(panel, label="Your address:")
+        vs.Add(self.origin_label, 0, wx.LEFT | wx.TOP, 8)
+        self.origin = wx.TextCtrl(panel)
+        vs.Add(self.origin, 0, wx.ALL | wx.EXPAND, 8)
+
+        self.dest_a_label = wx.StaticText(panel, label="Friend's address:")
+        vs.Add(self.dest_a_label, 0, wx.LEFT | wx.TOP, 8)
+        self.dest_a = wx.TextCtrl(panel)
+        vs.Add(self.dest_a, 0, wx.ALL | wx.EXPAND, 8)
+
+        self.dest_b_label = wx.StaticText(panel, label="Shared destination:")
+        vs.Add(self.dest_b_label, 0, wx.LEFT | wx.TOP, 8)
+        self.dest_b = wx.TextCtrl(panel)
+        vs.Add(self.dest_b, 0, wx.ALL | wx.EXPAND, 8)
+
+        hs = wx.BoxSizer(wx.HORIZONTAL)
+        ok_btn = wx.Button(panel, wx.ID_OK, "OK")
+        cancel_btn = wx.Button(panel, wx.ID_CANCEL, "Cancel")
+        hs.Add(ok_btn, 0, wx.RIGHT, 8)
+        hs.Add(cancel_btn, 0)
+        vs.Add(hs, 0, wx.LEFT | wx.BOTTOM, 8)
+
+        panel.SetSizer(vs)
+        self.SetSize(420, 400)
+
+        ok_btn.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_OK))
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+        self.mode.Bind(wx.EVT_RADIOBOX, self._on_mode_changed)
+        self._apply_mode_labels()
+        wx.CallAfter(self.mode.SetFocus)
+
+    def GetValues(self):
+        return (
+            self.origin.GetValue().strip(),
+            self.dest_a.GetValue().strip(),
+            self.dest_b.GetValue().strip(),
+            ["pickup", "dropoff", "meeting"][self.mode.GetSelection()],
+        )
+
+    def _apply_mode_labels(self):
+        sel = self.mode.GetSelection()
+        if sel == 0:  # pickup
+            self.origin_label.SetLabel("Your address:")
+            self.dest_a_label.SetLabel("Friend's address:")
+            self.dest_b_label.SetLabel("Shared destination:")
+            self.dest_b_label.Show(True)
+            self.dest_b.Show(True)
+        elif sel == 1:  # dropoff
+            self.origin_label.SetLabel("Shared starting point:")
+            self.dest_a_label.SetLabel("Your destination:")
+            self.dest_b_label.SetLabel("Friend's destination:")
+            self.dest_b_label.Show(True)
+            self.dest_b.Show(True)
+        else:  # meeting
+            self.origin_label.SetLabel("Friend's suburb/address:")
+            self.dest_a_label.SetLabel("Your suburb/address:")
+            self.dest_b_label.Show(False)
+            self.dest_b.Show(False)
+        self.Layout()
+        self.Fit()
+
+    def _on_mode_changed(self, event):
+        self._apply_mode_labels()
+        event.Skip()
 
     def _on_char_hook(self, event):
         code = event.GetKeyCode()
@@ -917,6 +1012,77 @@ class RouteResultsDialog(wx.Dialog):
     def _on_char_hook(self, event):
         if event.GetKeyCode() == wx.WXK_ESCAPE:
             self.EndModal(wx.ID_CLOSE)
+            return
+        event.Skip()
+
+
+class RendezvousResultsDialog(wx.Dialog):
+    """Browsable list of rendezvous candidates ranked from best to worst."""
+
+    def __init__(self, parent, title, intro, candidates):
+        super().__init__(parent, title=title,
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self._candidates = candidates
+
+        panel = wx.Panel(self)
+        vs = wx.BoxSizer(wx.VERTICAL)
+
+        vs.Add(wx.StaticText(panel, label=intro), 0, wx.ALL | wx.EXPAND, 10)
+
+        self.listbox = wx.ListBox(
+            panel,
+            choices=[c["summary"] for c in candidates],
+            style=wx.LB_SINGLE,
+        )
+        if candidates:
+            self.listbox.SetSelection(0)
+        vs.Add(self.listbox, 1, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
+
+        self.detail = wx.TextCtrl(
+            panel,
+            value="",
+            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP,
+        )
+        vs.Add(self.detail, 1, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
+
+        close_btn = wx.Button(panel, wx.ID_CLOSE, "Close")
+        vs.Add(close_btn, 0, wx.LEFT | wx.BOTTOM, 10)
+
+        panel.SetSizer(vs)
+        self.SetSize(700, 480)
+
+        close_btn.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CLOSE))
+        self.listbox.Bind(wx.EVT_LISTBOX, self._on_select)
+        self.listbox.Bind(wx.EVT_LISTBOX_DCLICK, self._on_choose)
+        self.listbox.Bind(wx.EVT_KEY_DOWN, self._on_key)
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+        wx.CallAfter(self.listbox.SetFocus)
+        if candidates:
+            self._set_detail(0)
+
+    def _set_detail(self, sel: int):
+        if sel == wx.NOT_FOUND or sel >= len(self._candidates):
+            return
+        self.detail.SetValue(self._candidates[sel]["detail_text"])
+        self.detail.SetInsertionPoint(0)
+
+    def _on_select(self, event):
+        self._set_detail(self.listbox.GetSelection())
+        event.Skip()
+
+    def _on_choose(self, event=None):
+        self.EndModal(wx.ID_OK)
+
+    def _on_key(self, event):
+        event.Skip()
+
+    def _on_char_hook(self, event):
+        code = event.GetKeyCode()
+        if code == wx.WXK_ESCAPE:
+            self.EndModal(wx.ID_CLOSE)
+            return
+        if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
+            self._on_choose()
             return
         event.Skip()
 

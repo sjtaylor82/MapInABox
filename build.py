@@ -54,6 +54,17 @@ if not DO_MAC_APP:
     open(iss_path, "w", encoding="utf-8").write(iss)
     print(f"Updated MapInABox.iss -> version {VERSION}")
 
+# ── Sync version into manual.html ────────────────────────────────────────────
+manual_path = os.path.join(HERE, "manual.html")
+manual = open(manual_path, encoding="utf-8").read()
+manual = re.sub(
+    r'(<p><strong>Version\s+)[^<]+(</strong>\s*&nbsp;\|&nbsp; Windows &amp; macOS</p>)',
+    rf'\g<1>{VERSION}\2',
+    manual,
+)
+open(manual_path, "w", encoding="utf-8").write(manual)
+print(f"Updated manual.html -> version {VERSION}")
+
 
 # ── Step 1: Compress bundled resources ───────────────────────────────────────
 step(1, "Compressing resources")

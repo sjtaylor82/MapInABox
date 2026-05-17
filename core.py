@@ -5167,6 +5167,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 "_gemini_stop_seq",
                 "_transit_route",
                 "_transit_stop_seq",
+                "sentinel",
             }
             if plat is not None and plon is not None and not suppress_travel:
                 live_m = int(math.sqrt(
@@ -7570,7 +7571,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         """F8 — flash the current country name and highlight its polygon on the map."""
         country = getattr(self, 'last_country_found', '')
         if not country or country == 'Open Water':
-            return
+            return False
         # Find matching entry in _GEO_COUNTRIES
         c_lower = country.lower()
         match = None
@@ -7594,6 +7595,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         else:
             # Country not in GeoJSON — just flash the name at current position
             self.map_panel.set_flash(country, [], self.lon, self.lat)
+        return True
 
     def toggle_sounds(self):
         self.sounds_enabled = not getattr(self, 'sounds_enabled', True)
@@ -7617,13 +7619,34 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _status_update(self, msg, force=False):
         """Transient background status (loading, connecting) — AO2 only."""
+        msg_text = str(msg)
+        lower_msg = msg_text.lower()
+        if getattr(self, "_thinking_active", False) and not lower_msg.startswith("thinking"):
+            if not (
+                lower_msg.startswith("no ")
+                or lower_msg.startswith("could not")
+                or lower_msg.startswith("invalid ")
+                or lower_msg.startswith("cancelled")
+                or "failed" in lower_msg
+            ):
+                self._verbose_trace(f"status suppressed during thinking: {msg!r}")
+                return
         if (not force
                 and time.time() < getattr(self, '_suppress_status_until', 0)
                 and not str(msg).startswith("Looking up address")
                 and not getattr(self, '_address_lookup_in_progress', False)):
-            print(f"[Status] Suppressed: {msg}")
+            self._verbose_trace(f"status suppressed: {msg!r}")
             return
         _speak(msg)
+
+    def _verbose_trace(self, msg: str) -> None:
+        """Write a verbose trace when diagnostics are enabled."""
+        try:
+            settings = getattr(self, "settings", None) or {}
+            if settings.get("logging", {}).get("verbose", False):
+                miab_log("verbose", msg, settings)
+        except Exception:
+            pass
 
     def _accessible_status(self, msg):
         """wx-safe AO2/Braille announcement that does not move list focus."""
@@ -7643,9 +7666,15 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         Listbox always populated so focus-return never says unknown.
         Suppressed while user is browsing a POI list."""
         if getattr(self, '_poi_explore_stack', []):
+            self._verbose_trace(f"update_ui suppressed during POI browse: {msg!r}")
+            return
+        if getattr(self, "_thinking_active", False) or getattr(self, "_suppress_location_restore", False):
+            self._verbose_trace(f"update_ui suppressed while thinking: {msg!r}")
             return
         if not force and time.time() < getattr(self, '_suppress_update_ui_until', 0):
+            self._verbose_trace(f"update_ui suppressed by timeout: {msg!r}")
             return
+        self._verbose_trace(f"update_ui applied: {msg!r}")
         _braille(msg)
         self._refresh_info_panel()
         self._poi_populating = True
@@ -7655,6 +7684,10 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _update_location_focus(self, msg):
         """Update the focused location row, for real position changes."""
+        if getattr(self, "_thinking_active", False) or getattr(self, "_suppress_location_restore", False):
+            self._verbose_trace(f"_update_location_focus suppressed while thinking: {msg!r}")
+            return
+        self._verbose_trace(f"_update_location_focus applied: {msg!r}")
         self._suppress_update_ui_until = 0
         self.update_ui(msg, force=True)
         wx.CallAfter(self.listbox.SetFocus)
@@ -7975,7 +8008,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _on_loading_tick(self, event):
         """1s timer — tick while streets or POIs are loading."""
-        if getattr(self, '_loading', False):
+        if getattr(self, '_loading', False) or getattr(self, '_thinking_beep_active', False):
             self.sound.play_poi_tone("both")
 
     def _play_pois_ready_sound(self):
@@ -8577,6 +8610,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         shift = event.ShiftDown()
         primary = _primary_down(event)
         alt = event.AltDown()
+        if getattr(self, "_thinking_active", False) or getattr(self, "_suppress_location_restore", False):
+            _log_key_event(self, event, "frame", "suppressed while thinking")
+            return
         # True when no modifier is held — used to prevent bare letter/F-key
         # handlers from firing on modifier shortcuts.
         no_mod = not shift and not primary and not alt
@@ -8685,7 +8721,13 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             miab_log("feature_usage", f"Key: Shift+F6 (Wikipedia) at {self.last_country_found}", self.settings)
             self.announce_wikipedia_summary(); return
         if no_mod and key == wx.WXK_F7:    self.toggle_sounds();    return
-        if no_mod and key == wx.WXK_F8:    self._flash_current_country(); return
+        if no_mod and key == wx.WXK_F8:
+            flashed = self._flash_current_country()
+            if flashed:
+                self._accessible_status("F8: current country flashed on the map.")
+            else:
+                self._accessible_status("F8: no current country to flash.")
+            return
         if no_mod and key == wx.WXK_F9:    self._toggle_map_fullscreen(); return
         if shift and not primary and key == wx.WXK_F10:
             self._game.repeat_target()
@@ -9611,6 +9653,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _resume_location_sound(self):
         """Re-start the country/region ambient sound and refresh the UI label."""
+        if getattr(self, "_thinking_active", False) or getattr(self, "_suppress_location_restore", False):
+            self._verbose_trace("_resume_location_sound suppressed while thinking.")
+            return
         country = getattr(self, 'last_country_found', '')
         continent = getattr(self, 'current_continent', '')
         if country and country != "Open Water":
@@ -9618,6 +9663,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         # Restore the location label in the listbox
         label = getattr(self, 'last_location_str', '')
         if label:
+            self._verbose_trace(f"_resume_location_sound restoring label: {label!r}")
             self.update_ui(label)
 
     def show_help(self):
@@ -9788,7 +9834,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         style=wx.DEFAULT_DIALOG_STYLE | wx.STAY_ON_TOP)
         vs = wx.BoxSizer(wx.VERTICAL)
 
-        header = wx.StaticText(dlg, label=f"{APP_NAME}\nVersion {APP_VERSION}\nCopyright © 2026 Sam Taylor. All rights reserved.")
+        header = wx.StaticText(dlg, label=f"{APP_NAME}\nVersion {APP_VERSION}\nCopyright © 2026 Sam Taylor. Licensed under the MIT License.")
         vs.Add(header, 0, wx.ALL, 14)
 
         message = (

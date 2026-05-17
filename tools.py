@@ -6,11 +6,13 @@ journey planner, departure board) as a mixin class.
 
 import json
 import math
+import re
 import threading
 import urllib.parse
 import urllib.request
 
 import wx
+from logging_utils import miab_log
 
 try:
     from route_tools import RouteTools
@@ -26,11 +28,11 @@ def _get_dialogs():
     from dialogs import (
         ToolsMenuDialog, StopEntryDialog, DateTimePickerDialog,
         JourneyResultsDialog, TransitLookupDialog, RouteResultsDialog,
-        FindFoodDialog,
+        RendezvousResultsDialog, FindFoodDialog, MeetPointDialog,
     )
     return (ToolsMenuDialog, StopEntryDialog, DateTimePickerDialog,
             JourneyResultsDialog, TransitLookupDialog, RouteResultsDialog,
-            FindFoodDialog)
+            RendezvousResultsDialog, FindFoodDialog, MeetPointDialog)
 
 def _key_required(parent, title, message, link_label, link_url):
     from dialogs import show_api_key_required
@@ -38,6 +40,24 @@ def _key_required(parent, title, message, link_label, link_url):
 
 
 class ToolsMixin:
+    def _tool_trace(self, msg: str) -> None:
+        """Write a verbose trace when diagnostics are enabled."""
+        try:
+            settings = getattr(self, "settings", None) or {}
+            if settings.get("logging", {}).get("verbose", False):
+                miab_log("verbose", msg, settings)
+        except Exception:
+            pass
+
+    def _announce_thinking(self) -> None:
+        """Emit the lightweight busy cue through AO2."""
+        try:
+            from core import _speak, _braille
+            _speak("Thinking...", interrupt=True)
+            _braille("Thinking...")
+        except Exception:
+            pass
+
     def _warn_optional_key(self, tool_name: str, key_name: str, limitation: str) -> None:
         """Announce that a tool can continue, but with reduced coverage."""
         from dialogs import show_optional_key_warning
@@ -47,6 +67,25 @@ class ToolsMixin:
             f"Warning: {key_name} API key not detected.\n\n"
             f"{tool_name} will still work, but {limitation}",
         )
+
+    def _thinking(self, msg: str = "Thinking...") -> None:
+        """Announce that a longer tool action is still running."""
+        self._thinking_active = True
+        self._thinking_beep_active = True
+        self._suppress_location_restore = True
+        try:
+            wx.CallLater(75, self._announce_thinking)
+        except Exception:
+            self._announce_thinking()
+
+    def _finish_thinking(self) -> None:
+        """Clear the thinking state and resume the normal location sound."""
+        self._thinking_active = False
+        self._thinking_beep_active = False
+        self._suppress_location_restore = False
+        if getattr(self, "_tools_sound_was_on", True):
+            self._resume_location_sound()
+        self._tools_sound_was_on = False
 
     @property
     def _dlgs(self):
@@ -64,6 +103,7 @@ class ToolsMixin:
 
     def _open_tools_menu(self):
         """F12 — open the tools menu dialog."""
+        self._tools_sound_was_on = bool(getattr(self.sound, "_current", None))
         self.sound.stop()
         if self._dlgs is None:
             return
@@ -77,6 +117,8 @@ class ToolsMixin:
                     self._tool_detour_calculator()
                 elif tool == "route_explorer":
                     self._tool_route_explorer()
+                elif tool == "rendezvous_point":
+                    self._tool_rendezvous_point()
                 elif tool == "toll_compare":
                     self._tool_toll_compare()
                 elif tool == "journey_planner":
@@ -88,15 +130,19 @@ class ToolsMixin:
                 elif tool == "hotel_search":
                     self._tool_hotel_search()
                 else:
-                    self._resume_location_sound()
+                    self._restore_tools_sound()
             else:
                 dlg.Destroy()
-                self._resume_location_sound()
+                self._restore_tools_sound()
         except Exception as exc:
             import wx as _wx
             _wx.MessageBox(f"Tools menu error:\n\n{exc}", "Error", _wx.OK | _wx.ICON_ERROR)
-            self._resume_location_sound()
+            self._restore_tools_sound()
         self.listbox.SetFocus()
+
+    def _restore_tools_sound(self):
+        """Restore the pre-F12 sound state after leaving the tools menu."""
+        self._finish_thinking()
 
     def _get_route_tools(self) -> "RouteTools | None":
         """Return a configured RouteTools instance, or None."""
@@ -139,6 +185,49 @@ class ToolsMixin:
         dlg.Destroy()
         return self._country_name_to_code(country_name)
 
+    def _resolve_geocode(self, rt, value: str, country_code: str, purpose: str = "location"):
+        """Resolve an address and let the user choose when multiple matches exist."""
+        try:
+            candidates = rt.geocode_candidates(value, country_code, limit=8)
+        except Exception as exc:
+            self._tool_trace(f"Geocode candidate lookup failed for {value!r}: {exc}")
+            candidates = []
+
+        if not candidates:
+            raise RuntimeError(f"Could not find '{value}'.")
+        if len(candidates) == 1:
+            return candidates[0]
+
+        labels = []
+        seen = set()
+        for lat, lon, formatted in candidates:
+            label = (formatted or value or "").strip() or value
+            key = label.lower()
+            if key in seen:
+                label = f"{label} ({lat:.5f}, {lon:.5f})"
+            seen.add(key)
+            labels.append(label)
+
+        self._tool_trace(
+            f"Ambiguous geocode for {value!r}: offering {len(labels)} choices."
+        )
+        dlg = wx.SingleChoiceDialog(
+            self,
+            f"More than one match was found for '{value}'. Choose one:",
+            f"Select {purpose}",
+            labels,
+        )
+        dlg.SetSelection(0)
+        try:
+            if dlg.ShowModal() != wx.ID_OK:
+                return None
+            sel = dlg.GetSelection()
+            if sel == wx.NOT_FOUND or sel >= len(candidates):
+                return None
+            return candidates[sel]
+        finally:
+            dlg.Destroy()
+
     def _tool_detour_calculator(self):
         """Detour Calculator — compare a trip with stop-offs vs going direct."""
         rt = self._get_route_tools()
@@ -152,11 +241,12 @@ class ToolsMixin:
                 "it will use open geocoding and OSRM routing instead of Google Maps, "
                 "so coverage and turn-by-turn detail may be a little different.",
             )
+        self._thinking()
 
         country_code = self._ask_country_code()
         if not country_code:
             self._status_update("Detour calculator cancelled.", force=True)
-            self._resume_location_sound()
+            self._finish_thinking()
             return
 
         def _geocode(prompt_text):
@@ -169,7 +259,10 @@ class ToolsMixin:
             dlg.Destroy()
             self._status_update(f"Looking up {value}...")
             try:
-                lat, lon, formatted = rt.geocode(value, country_code)
+                resolved = self._resolve_geocode(rt, value, country_code, "location")
+                if resolved is None:
+                    return None
+                lat, lon, formatted = resolved
                 self._status_update(f"Found: {formatted}", force=True)
                 return (lat, lon, formatted)
             except Exception as e:
@@ -181,7 +274,7 @@ class ToolsMixin:
             result = _geocode("Where are you starting from?")
             if result is None:
                 self._status_update("Detour calculator cancelled.", force=True)
-                self._resume_location_sound()
+                self._finish_thinking()
                 return
             if result != "retry":
                 start = result
@@ -192,7 +285,7 @@ class ToolsMixin:
             result = _geocode("Where do you need to stop?")
             if result is None:
                 self._status_update("Detour calculator cancelled.", force=True)
-                self._resume_location_sound()
+                self._finish_thinking()
                 return
             if result != "retry":
                 first_stop = result
@@ -203,7 +296,7 @@ class ToolsMixin:
             result = _geocode("What is your final destination?")
             if result is None:
                 self._status_update("Detour calculator cancelled.", force=True)
-                self._resume_location_sound()
+                self._finish_thinking()
                 return
             if result != "retry":
                 destination = result
@@ -225,8 +318,6 @@ class ToolsMixin:
         stops.append(destination)
 
         # Run comparison in background
-        self._status_update("Calculating detour vs direct route...")
-
         def _calc():
             try:
                 result = rt.compare_routes(stops)
@@ -234,73 +325,77 @@ class ToolsMixin:
                              "Detour Calculator", result["summary_text"])
             except Exception as e:
                 wx.CallAfter(self._status_update, f"Detour calculation failed: {e}", True)
-                wx.CallAfter(self._resume_location_sound)
+                wx.CallAfter(self._finish_thinking)
 
         threading.Thread(target=_calc, daemon=True).start()
 
     def _tool_route_explorer(self):
-        """Route Explorer — compare alternative routes with suburbs and tolls."""
+        """Suburb Lister — compare alternative routes with suburbs and tolls."""
         rt = self._get_route_tools()
         if not rt:
             self._resume_location_sound()
             return
-        if not rt.is_configured:
-            self._warn_optional_key(
-                "Route Explorer",
-                "Google",
-                "it will use open geocoding and OSRM routing instead of Google Maps, "
-                "so route coverage and suburb matching may be less complete.",
-            )
 
         country_code = self._ask_country_code()
         if not country_code:
-            self._status_update("Route explorer cancelled.", force=True)
-            self._resume_location_sound()
+            self._status_update("Suburb lister cancelled.", force=True)
+            self._finish_thinking()
             return
 
         # Get origin
         dlg = self._dlgs[1](
-            self, "Where are you starting from? (full address, suburb or city):")
+            self, "What is your starting point? (full address, suburb or city):",
+            title="Start")
         if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
             dlg.Destroy()
-            self._status_update("Route explorer cancelled.", force=True)
-            self._resume_location_sound()
+            self._status_update("Suburb lister cancelled.", force=True)
+            self._finish_thinking()
             return
         origin_text = dlg.GetValue()
         dlg.Destroy()
 
-        self._status_update(f"Looking up {origin_text}...")
+        self._tool_trace(f"Suburb Lister: geocoding origin {origin_text!r}.")
         try:
-            o_lat, o_lon, o_name = rt.geocode(origin_text, country_code)
-            self._status_update(f"Origin: {o_name}", force=True)
+            resolved = self._resolve_geocode(rt, origin_text, country_code, "starting point")
+            if resolved is None:
+                self._status_update("Suburb lister cancelled.", force=True)
+                self._finish_thinking()
+                return
+            o_lat, o_lon, o_name = resolved
         except Exception as e:
             self._status_update(f"Could not find '{origin_text}': {e}", force=True)
-            self._resume_location_sound()
+            self._finish_thinking()
             return
 
         # Get destination
         dlg = self._dlgs[1](
-            self, "Where are you going? (full address, suburb or city):")
+            self, "What is your destination? (full address, suburb or city):",
+            title="Destination")
         if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
             dlg.Destroy()
-            self._status_update("Route explorer cancelled.", force=True)
-            self._resume_location_sound()
+            self._status_update("Suburb lister cancelled.", force=True)
+            self._finish_thinking()
             return
         dest_text = dlg.GetValue()
         dlg.Destroy()
 
-        self._status_update(f"Looking up {dest_text}...")
+        self._tool_trace(f"Suburb Lister: geocoding destination {dest_text!r}.")
         try:
-            d_lat, d_lon, d_name = rt.geocode(dest_text, country_code)
-            self._status_update(f"Destination: {d_name}", force=True)
+            resolved = self._resolve_geocode(rt, dest_text, country_code, "destination")
+            if resolved is None:
+                self._status_update("Suburb lister cancelled.", force=True)
+                self._finish_thinking()
+                return
+            d_lat, d_lon, d_name = resolved
         except Exception as e:
             self._status_update(f"Could not find '{dest_text}': {e}", force=True)
-            self._resume_location_sound()
+            self._finish_thinking()
             return
 
-        # Run exploration in background
-        self._status_update("Finding routes and identifying suburbs...")
+        self._thinking()
+        self._tool_trace("Suburb Lister: route analysis started.")
 
+        # Run exploration in background
         def _status(msg):
             wx.CallAfter(self._status_update, msg)
 
@@ -311,11 +406,458 @@ class ToolsMixin:
                     (d_lat, d_lon, d_name),
                     status_cb=_status,
                 )
+                self._tool_trace("Suburb Lister: route analysis complete.")
+                self._thinking_beep_active = False
                 wx.CallAfter(self._show_route_results,
-                             "Route Explorer", result["summary_text"])
+                             "Suburb Lister", result["summary_text"])
             except Exception as e:
-                wx.CallAfter(self._status_update, f"Route exploration failed: {e}", True)
-                wx.CallAfter(self._resume_location_sound)
+                self._tool_trace(f"Suburb Lister failed: {e}")
+                wx.CallAfter(self._status_update, f"Suburb lister failed: {e}", True)
+                wx.CallAfter(self._finish_thinking)
+
+        threading.Thread(target=_calc, daemon=True).start()
+
+    def _tool_rendezvous_point(self):
+        """Rendezvous Point — suggest a dropoff point along the route to Destination A."""
+        rt = self._get_route_tools()
+        if not rt:
+            self._resume_location_sound()
+            return
+        if self._dlgs is None:
+            self._resume_location_sound()
+            return
+
+        dlg = self._dlgs[8](self)
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy()
+            self._status_update("Rendezvous point cancelled.", force=True)
+            self._finish_thinking()
+            return
+
+        origin_text, dest_a_text, dest_b_text, mode = dlg.GetValues()
+        dlg.Destroy()
+
+        if not origin_text or not dest_a_text:
+            self._status_update("Rendezvous point cancelled.", force=True)
+            self._finish_thinking()
+            return
+
+        country_code = self._ask_country_code()
+        if not country_code:
+            self._status_update("Rendezvous point cancelled.", force=True)
+            self._finish_thinking()
+            return
+
+        self._tool_trace("Rendezvous Point: route analysis started.")
+
+        self._tool_trace(f"Rendezvous Point: geocoding origin {origin_text!r}.")
+        try:
+            resolved = self._resolve_geocode(rt, origin_text, country_code, "starting point")
+            if resolved is None:
+                self._status_update("Rendezvous point cancelled.", force=True)
+                self._finish_thinking()
+                return
+            o_lat, o_lon, o_name = resolved
+        except Exception as e:
+            self._status_update(f"Could not find '{origin_text}': {e}", force=True)
+            self._finish_thinking()
+            return
+
+        self._tool_trace(f"Rendezvous Point: geocoding destination A {dest_a_text!r}.")
+        try:
+            resolved = self._resolve_geocode(rt, dest_a_text, country_code, "destination")
+            if resolved is None:
+                self._status_update("Rendezvous point cancelled.", force=True)
+                self._finish_thinking()
+                return
+            a_lat, a_lon, a_name = resolved
+        except Exception as e:
+            self._status_update(f"Could not find '{dest_a_text}': {e}", force=True)
+            self._finish_thinking()
+            return
+
+        b_info = None
+        if dest_b_text:
+            self._tool_trace(f"Rendezvous Point: geocoding destination B {dest_b_text!r}.")
+            try:
+                purpose = "shared destination" if mode == "pickup" else "friend's destination" if mode == "dropoff" else "meeting spot"
+                resolved = self._resolve_geocode(rt, dest_b_text, country_code, purpose)
+                if resolved is None:
+                    self._status_update("Rendezvous point cancelled.", force=True)
+                    self._finish_thinking()
+                    return
+                b_lat, b_lon, b_name = resolved
+                b_info = (b_lat, b_lon, b_name)
+            except Exception as e:
+                self._status_update(f"Could not find '{dest_b_text}': {e}", force=True)
+                self._finish_thinking()
+                return
+
+        if mode in ("pickup", "dropoff") and not b_info:
+            msg = "Please enter the shared destination." if mode == "pickup" else "Please enter your friend's destination."
+            self._status_update(msg, force=True)
+            self._finish_thinking()
+            return
+
+        self._thinking()
+
+        def _route_candidates(points):
+            if len(points) < 2:
+                return []
+            total_m = 0.0
+            seg_lengths = []
+            for i in range(len(points) - 1):
+                seg_m = _haversine_m(
+                    points[i][0], points[i][1],
+                    points[i + 1][0], points[i + 1][1],
+                )
+                seg_lengths.append(seg_m)
+                total_m += seg_m
+
+            if total_m <= 0:
+                return [(0.0, points[0][0], points[0][1])]
+
+            if total_m < 10_000:
+                interval_m = 250.0
+            elif total_m < 50_000:
+                interval_m = 500.0
+            elif total_m < 150_000:
+                interval_m = 1000.0
+            else:
+                interval_m = 1500.0
+
+            candidates = [(0.0, points[0][0], points[0][1])]
+            cum_dist = 0.0
+            next_sample = interval_m
+            for i, seg_m in enumerate(seg_lengths):
+                seg_start = cum_dist
+                cum_dist += seg_m
+                while next_sample <= cum_dist:
+                    frac = (next_sample - seg_start) / seg_m if seg_m > 0 else 0.0
+                    lat = points[i][0] + frac * (points[i + 1][0] - points[i][0])
+                    lon = points[i][1] + frac * (points[i + 1][1] - points[i][1])
+                    candidates.append((next_sample, lat, lon))
+                    next_sample += interval_m
+
+            if candidates[-1][0] != total_m:
+                candidates.append((total_m, points[-1][0], points[-1][1]))
+            return candidates
+
+        def _nearest_sample_distance(lat, lon, samples):
+            if not samples:
+                return float("inf")
+            return min(
+                _haversine_m(lat, lon, sample["lat"], sample["lon"])
+                for sample in samples
+            )
+
+        def _label_point(lat, lon):
+            suburb = ""
+            try:
+                suburb = rt._reverse_geocode_suburb(lat, lon) or ""
+            except Exception:
+                suburb = ""
+            if suburb:
+                return suburb
+            return f"{lat:.5f}, {lon:.5f}"
+
+        def _calc():
+            try:
+                if mode == "pickup":
+                    # Walk the friend's route; score by (friend's drive to pickup) +
+                    # (straight-line from user's location to pickup).  No user route needed.
+                    friend_route = rt._compute_route(
+                        (a_lat, a_lon),
+                        (b_info[0], b_info[1]),
+                        request_polyline=True,
+                    )
+                    friend_polyline = friend_route.get("polyline", "")
+                    if not friend_polyline:
+                        raise RuntimeError("No route polyline available.")
+                    friend_points = _decode_polyline(friend_polyline)
+                    friend_samples = [
+                        {"source": "friend", "progress_m": p, "lat": lat, "lon": lon}
+                        for p, lat, lon in _route_candidates(friend_points)
+                    ]
+                    if not friend_samples:
+                        raise RuntimeError("No candidate points found on the route.")
+                    user_samples = []
+                    user_total_m = 0.0
+                    route = friend_route
+                    candidate_sets = friend_samples
+                    total_m = max(friend_route.get("distance_m", 0.0), friend_samples[-1]["progress_m"])
+                elif mode == "dropoff":
+                    # shared starting point → your destination / friend's destination
+                    user_route = rt._compute_route(
+                        (o_lat, o_lon),
+                        (a_lat, a_lon),
+                        request_polyline=True,
+                    )
+                    friend_route = rt._compute_route(
+                        (o_lat, o_lon),
+                        (b_info[0], b_info[1]),
+                        request_polyline=True,
+                    )
+                    user_polyline = user_route.get("polyline", "")
+                    friend_polyline = friend_route.get("polyline", "")
+                    if not user_polyline or not friend_polyline:
+                        raise RuntimeError("No route polyline available.")
+                    user_points = _decode_polyline(user_polyline)
+                    friend_points = _decode_polyline(friend_polyline)
+                    user_samples = [
+                        {"source": "you", "progress_m": p, "lat": lat, "lon": lon}
+                        for p, lat, lon in _route_candidates(user_points)
+                    ]
+                    friend_samples = [
+                        {"source": "friend", "progress_m": p, "lat": lat, "lon": lon}
+                        for p, lat, lon in _route_candidates(friend_points)
+                    ]
+                    if not user_samples or not friend_samples:
+                        raise RuntimeError("No candidate points found on the routes.")
+                    user_total_m = max(user_route.get("distance_m", 0.0), user_samples[-1]["progress_m"])
+                    route = friend_route
+                    candidate_sets = friend_samples + user_samples
+                    total_m = max(friend_route.get("distance_m", 0.0), friend_samples[-1]["progress_m"])
+                elif mode == "meeting":
+                    # Route directly between the two people; midpoint by road = fairest meeting place
+                    route = rt._compute_route(
+                        (o_lat, o_lon),
+                        (a_lat, a_lon),
+                        request_polyline=True,
+                    )
+                    polyline = route.get("polyline", "")
+                    if not polyline:
+                        raise RuntimeError("No route polyline available.")
+                    points = _decode_polyline(polyline)
+                    candidate_sets = []
+                    for progress_m, lat, lon in _route_candidates(points):
+                        candidate_sets.append({
+                            "source": "shared",
+                            "progress_m": progress_m,
+                            "lat": lat,
+                            "lon": lon,
+                        })
+                    if not candidate_sets:
+                        raise RuntimeError("No candidate points found on the route.")
+                    total_m = candidate_sets[-1]["progress_m"]
+                    midpoint = total_m / 2.0
+
+                def _score(candidate):
+                    progress_m = candidate["progress_m"]
+                    lat = candidate["lat"]
+                    lon = candidate["lon"]
+                    if mode == "pickup":
+                        # minimise: friend's drive to pickup + user's straight-line travel to pickup.
+                        # early points near the user score best; late points far from the user score worst.
+                        user_to_pickup_m = _haversine_m(lat, lon, o_lat, o_lon)
+                        return (progress_m + user_to_pickup_m, progress_m, user_to_pickup_m)
+                    if mode == "dropoff":
+                        # minimise: user's remaining journey + heavily weighted friend detour.
+                        # friend detour is weighted 4x — a 5 km detour for the friend costs as
+                        # much as 20 km of remaining journey for the user.
+                        nearest_user = min(
+                            user_samples,
+                            key=lambda s: _haversine_m(lat, lon, s["lat"], s["lon"]),
+                        )
+                        remaining_user_m = max(user_total_m - nearest_user["progress_m"], 0.0)
+                        friend_detour_m = _nearest_sample_distance(lat, lon, friend_samples)
+                        return (remaining_user_m + 4 * friend_detour_m, remaining_user_m, friend_detour_m, progress_m)
+                    # meeting: score by road distance from the true halfway point
+                    return (abs(progress_m - midpoint), progress_m)
+
+                ranked = sorted(candidate_sets, key=_score)
+                selected = []
+                min_spacing_m = max(250.0, total_m * 0.03)
+                for candidate in ranked:
+                    progress_m = candidate["progress_m"]
+                    lat = candidate["lat"]
+                    lon = candidate["lon"]
+                    # skip candidates within 5 km of the shared destination
+                    if mode == "pickup" and _haversine_m(lat, lon, b_info[0], b_info[1]) < 5000:
+                        continue
+                    # skip dropoff candidates where the user is essentially already at their destination
+                    if mode == "dropoff":
+                        nu = min(user_samples, key=lambda s: _haversine_m(lat, lon, s["lat"], s["lon"]))
+                        if max(user_total_m - nu["progress_m"], 0.0) < 2000:
+                            continue
+                    # dropoff pools two routes so deduplicate spatially; others use progress spacing
+                    if mode == "dropoff":
+                        if any(_haversine_m(lat, lon, item["lat"], item["lon"]) < min_spacing_m for item in selected):
+                            continue
+                    elif any(abs(progress_m - item["progress_m"]) < min_spacing_m for item in selected):
+                        continue
+                    selected.append({
+                        "progress_m": progress_m,
+                        "lat": lat,
+                        "lon": lon,
+                        "source": candidate.get("source", "shared"),
+                    })
+                    if len(selected) >= 6:
+                        break
+                if not selected:
+                    for candidate in ranked[:5]:
+                        selected.append({
+                            "progress_m": candidate["progress_m"],
+                            "lat": candidate["lat"],
+                            "lon": candidate["lon"],
+                            "source": candidate.get("source", "shared"),
+                        })
+
+                result_rows = []
+                for idx, item in enumerate(selected, start=1):
+                    progress_m = item["progress_m"]
+                    lat = item["lat"]
+                    lon = item["lon"]
+                    label = _label_point(lat, lon)
+                    if label == f"{lat:.5f}, {lon:.5f}":
+                        label = f"{label} on the route"
+                    source_name = item.get("source", "shared")
+                    rank_score = _score(item)
+                    summary = f"{idx}. {label}"
+                    if mode == "meeting":
+                        from_friend_m = progress_m
+                        from_you_m = max(total_m - progress_m, 0.0)
+                        offset_m = abs(progress_m - midpoint)
+                        detail = "\n".join([
+                            f"{_fmt_distance(int(round(from_friend_m)))} from your friend.",
+                            f"{_fmt_distance(int(round(from_you_m)))} from you.",
+                            f"{_fmt_distance(int(round(offset_m)))} from the exact midpoint.",
+                        ])
+                    elif mode == "pickup":
+                        user_to_pickup_m = _haversine_m(lat, lon, o_lat, o_lon)
+                        remaining_m = max(total_m - progress_m, 0.0)
+                        detail = "\n".join([
+                            f"~{_fmt_distance(int(round(user_to_pickup_m)))} from your location.",
+                            f"{_fmt_distance(int(round(progress_m)))} from your friend's location.",
+                            f"{_fmt_distance(int(round(remaining_m)))} shared journey to destination.",
+                        ])
+                    elif mode == "dropoff":
+                        nearest_user = min(
+                            user_samples,
+                            key=lambda s: _haversine_m(lat, lon, s["lat"], s["lon"]),
+                        )
+                        remaining_user_m = max(user_total_m - nearest_user["progress_m"], 0.0)
+                        carried_m = user_total_m - remaining_user_m
+                        friend_detour_m = _nearest_sample_distance(lat, lon, friend_samples)
+                        nearest_friend = min(
+                            friend_samples,
+                            key=lambda s: _haversine_m(lat, lon, s["lat"], s["lon"]),
+                        )
+                        friend_progress_m = nearest_friend["progress_m"]
+                        on_friend_route = friend_detour_m < 500
+                        detour_line = "This is still on your friend's route." if on_friend_route else f"~{_fmt_distance(int(round(friend_detour_m)))} out of your friend's way."
+                        detail = "\n".join([
+                            f"Friend carries you ~{_fmt_distance(int(round(carried_m)))} of your journey.",
+                            f"~{_fmt_distance(int(round(remaining_user_m)))} still to your destination.",
+                            f"{_fmt_distance(int(round(friend_progress_m)))} along your friend's route.",
+                            detour_line,
+                        ])
+                    else:
+                        offset_m = abs(progress_m - midpoint)
+                        detail = f"{_fmt_distance(int(round(offset_m)))} from the midpoint."
+                    result_rows.append({
+                        "summary": summary,
+                        "detail_text": detail,
+                        "_label_key": label.lower().strip(),
+                    })
+
+                if selected:
+                    best = selected[0]
+                    if mode == "meeting":
+                        best_from_friend = best["progress_m"]
+                        best_from_you = max(total_m - best["progress_m"], 0.0)
+                        trace_bits = [
+                            f"{_fmt_distance(int(round(best_from_friend)))} from friend by road",
+                            f"{_fmt_distance(int(round(best_from_you)))} from you by road",
+                        ]
+                    elif mode == "pickup":
+                        best_user_to_pickup = _haversine_m(best["lat"], best["lon"], o_lat, o_lon)
+                        best_remaining = max(total_m - best["progress_m"], 0.0)
+                        trace_bits = [
+                            f"~{_fmt_distance(int(round(best_user_to_pickup)))} from your location",
+                            f"{_fmt_distance(int(round(best['progress_m'])))} from your friend's location",
+                            f"{_fmt_distance(int(round(best_remaining)))} shared to destination",
+                        ]
+                    elif mode == "dropoff":
+                        best_nearest_user = min(
+                            user_samples,
+                            key=lambda s: _haversine_m(best["lat"], best["lon"], s["lat"], s["lon"]),
+                        )
+                        best_remaining_user = max(user_total_m - best_nearest_user["progress_m"], 0.0)
+                        best_friend_detour = _nearest_sample_distance(best["lat"], best["lon"], friend_samples)
+                        best_carried = user_total_m - best_remaining_user
+                        trace_bits = [
+                            f"carries you ~{_fmt_distance(int(round(best_carried)))}",
+                            f"~{_fmt_distance(int(round(best_remaining_user)))} still to your destination",
+                            ("on friend's route" if best_friend_detour < 500
+                             else f"~{_fmt_distance(int(round(best_friend_detour)))} friend detour"),
+                        ]
+                    else:
+                        best_remaining = max(total_m - best["progress_m"], 0.0)
+                        trace_bits = [f"{_fmt_distance(int(round(best_remaining)))} from the midpoint"]
+                    self._tool_trace(
+                        "Rendezvous Point: top candidate "
+                        f"{best['lat']:.5f},{best['lon']:.5f} (" + ", ".join(trace_bits) + ")."
+                    )
+
+                deduped_rows = []
+                seen_labels = set()
+                for row in result_rows:
+                    key = row.get("_label_key", "")
+                    if key in seen_labels:
+                        continue
+                    seen_labels.add(key)
+                    row.pop("_label_key", None)
+                    deduped_rows.append(row)
+                result_rows = deduped_rows
+
+                for idx, row in enumerate(result_rows, start=1):
+                    row["summary"] = re.sub(r"^\d+\.\s+", f"{idx}. ", row["summary"])
+                    row["detail_text"] = re.sub(
+                        r"^Option\s+\d+\s+of\s+\d+",
+                        f"Option {idx} of {len(result_rows)}",
+                        row["detail_text"],
+                        count=1,
+                    )
+
+                if mode == "meeting":
+                    intro = (
+                        "The best meeting places are first. Browse down for less favorable choices."
+                    )
+                elif mode == "pickup":
+                    intro = (
+                        "The best pick-up points are first. Browse down for less favorable choices."
+                    )
+                elif mode == "dropoff":
+                    intro = (
+                        "The best dropoff points are first. Browse down for less favorable choices."
+                    )
+                else:
+                    intro = (
+                        "The best midpoint options are first. Browse down for less favorable choices."
+                    )
+
+                wx.CallAfter(
+                    self._show_rendezvous_results,
+                    o_name,
+                    a_name,
+                    b_info[2] if b_info else "",
+                    route['duration_text'],
+                    route['distance_text'],
+                    mode,
+                    result_rows,
+                    intro,
+                )
+                self._tool_trace(
+                    f"Rendezvous Point: route shortlist ready with {len(result_rows)} candidates."
+                )
+                self._thinking_beep_active = False
+            except Exception as e:
+                self._tool_trace(f"Rendezvous Point failed: {e}")
+                wx.CallAfter(self._status_update, f"Rendezvous point failed: {e}", True)
+                wx.CallAfter(self._finish_thinking)
+
+        from route_tools import _decode_polyline, _fmt_distance, _haversine_m
 
         threading.Thread(target=_calc, daemon=True).start()
 
@@ -332,11 +874,12 @@ class ToolsMixin:
                 "it will use open geocoding and OSRM routing instead of Google Maps, "
                 "so toll pricing may be unavailable and the comparison will be simpler.",
             )
+        self._thinking()
 
         country_code = self._ask_country_code()
         if not country_code:
             self._status_update("Toll compare cancelled.", force=True)
-            self._resume_location_sound()
+            self._finish_thinking()
             return
 
         # Get origin
@@ -345,18 +888,23 @@ class ToolsMixin:
         if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
             dlg.Destroy()
             self._status_update("Toll compare cancelled.", force=True)
-            self._resume_location_sound()
+            self._finish_thinking()
             return
         origin_text = dlg.GetValue()
         dlg.Destroy()
 
         self._status_update(f"Looking up {origin_text}...")
         try:
-            o_lat, o_lon, o_name = rt.geocode(origin_text, country_code)
+            resolved = self._resolve_geocode(rt, origin_text, country_code, "starting point")
+            if resolved is None:
+                self._status_update("Toll compare cancelled.", force=True)
+                self._finish_thinking()
+                return
+            o_lat, o_lon, o_name = resolved
             self._status_update(f"Origin: {o_name}", force=True)
         except Exception as e:
             self._status_update(f"Could not find '{origin_text}': {e}", force=True)
-            self._resume_location_sound()
+            self._finish_thinking()
             return
 
         # Get destination
@@ -365,21 +913,24 @@ class ToolsMixin:
         if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
             dlg.Destroy()
             self._status_update("Toll compare cancelled.", force=True)
-            self._resume_location_sound()
+            self._finish_thinking()
             return
         dest_text = dlg.GetValue()
         dlg.Destroy()
 
         self._status_update(f"Looking up {dest_text}...")
         try:
-            d_lat, d_lon, d_name = rt.geocode(dest_text, country_code)
-            self._status_update(f"Destination: {d_name}", force=True)
+            resolved = self._resolve_geocode(rt, dest_text, country_code, "destination")
+            if resolved is None:
+                self._status_update("Toll compare cancelled.", force=True)
+                self._finish_thinking()
+                return
+            d_lat, d_lon, d_name = resolved
+            self._status_update("Destination found.", force=True)
         except Exception as e:
             self._status_update(f"Could not find '{dest_text}': {e}", force=True)
-            self._resume_location_sound()
+            self._finish_thinking()
             return
-
-        self._status_update("Comparing toll vs toll-free routes...")
 
         def _calc():
             try:
@@ -391,7 +942,7 @@ class ToolsMixin:
                              "Toll Comparison", result["summary_text"])
             except Exception as e:
                 wx.CallAfter(self._status_update, f"Toll comparison failed: {e}", True)
-                wx.CallAfter(self._resume_location_sound)
+                wx.CallAfter(self._finish_thinking)
 
         threading.Thread(target=_calc, daemon=True).start()
 
@@ -414,10 +965,12 @@ class ToolsMixin:
             self._resume_location_sound()
             return
 
+        self._thinking()
+
         country_code = self._ask_country_code()
         if not country_code:
             self._status_update("Journey planner cancelled.", force=True)
-            self._resume_location_sound()
+            self._finish_thinking()
             return
 
         # Origin
@@ -426,7 +979,7 @@ class ToolsMixin:
         if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
             dlg.Destroy()
             self._status_update("Journey planner cancelled.", force=True)
-            self._resume_location_sound()
+            self._finish_thinking()
             return
         origin_text = dlg.GetValue()
         dlg.Destroy()
@@ -437,7 +990,7 @@ class ToolsMixin:
         if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
             dlg.Destroy()
             self._status_update("Journey planner cancelled.", force=True)
-            self._resume_location_sound()
+            self._finish_thinking()
             return
         dest_text = dlg.GetValue()
         dlg.Destroy()
@@ -451,7 +1004,7 @@ class ToolsMixin:
         if dlg.ShowModal() != wx.ID_OK:
             dlg.Destroy()
             self._status_update("Journey planner cancelled.", force=True)
-            self._resume_location_sound()
+            self._finish_thinking()
             return
         timing_sel = dlg.GetSelection()
         dlg.Destroy()
@@ -465,13 +1018,13 @@ class ToolsMixin:
             if dt_dlg.ShowModal() != wx.ID_OK:
                 dt_dlg.Destroy()
                 self._status_update("Journey planner cancelled.", force=True)
-                self._resume_location_sound()
+                self._finish_thinking()
                 return
             chosen_dt = dt_dlg.get_datetime()
             dt_dlg.Destroy()
             if not chosen_dt:
                 self._status_update("Invalid date/time. Journey planner cancelled.", force=True)
-                self._resume_location_sound()
+                self._finish_thinking()
                 return
             timestamp = int(chosen_dt.timestamp())
 
@@ -484,14 +1037,38 @@ class ToolsMixin:
         if dlg.ShowModal() != wx.ID_OK:
             dlg.Destroy()
             self._status_update("Journey planner cancelled.", force=True)
-            self._resume_location_sound()
+            self._finish_thinking()
             return
         filter_sel = dlg.GetSelection()
         dlg.Destroy()
 
         transit_filter = ["all", "bus", "train", "ferry"][filter_sel]
 
-        self._status_update("Searching for transit options...")
+        self._status_update(f"Looking up {origin_text}...")
+        try:
+            resolved_origin = self._resolve_geocode(rt, origin_text, country_code, "starting point")
+            if resolved_origin is None:
+                self._status_update("Journey planner cancelled.", force=True)
+                self._finish_thinking()
+                return
+            o_lat, o_lon, o_name = resolved_origin
+        except Exception as e:
+            self._status_update(f"Could not find '{origin_text}': {e}", force=True)
+            self._finish_thinking()
+            return
+
+        self._status_update(f"Looking up {dest_text}...")
+        try:
+            resolved_dest = self._resolve_geocode(rt, dest_text, country_code, "destination")
+            if resolved_dest is None:
+                self._status_update("Journey planner cancelled.", force=True)
+                self._finish_thinking()
+                return
+            d_lat, d_lon, d_name = resolved_dest
+        except Exception as e:
+            self._status_update(f"Could not find '{dest_text}': {e}", force=True)
+            self._finish_thinking()
+            return
 
         def _status(msg):
             wx.CallAfter(self._status_update, msg)
@@ -499,7 +1076,7 @@ class ToolsMixin:
         def _calc():
             try:
                 routes = rt.journey_plan(
-                    origin_text, dest_text, country_code,
+                    o_name, d_name, country_code,
                     timing_mode=timing_mode,
                     timestamp=timestamp,
                     transit_filter=transit_filter,
@@ -508,7 +1085,7 @@ class ToolsMixin:
                 wx.CallAfter(self._show_journey_results, routes)
             except Exception as e:
                 wx.CallAfter(self._status_update, f"Journey planner failed: {e}", True)
-                wx.CallAfter(self._resume_location_sound)
+                wx.CallAfter(self._finish_thinking)
 
         threading.Thread(target=_calc, daemon=True).start()
 
@@ -516,13 +1093,13 @@ class ToolsMixin:
         """Display journey results in the two-level dialog."""
         if not routes:
             self._status_update("No transit options found.", force=True)
-            self._resume_location_sound()
+            self._finish_thinking()
             return
         self._status_update(f"Found {len(routes)} option{'s' if len(routes) != 1 else ''}.", force=True)
         dlg = self._dlgs[3](self, routes)
         dlg.ShowModal()
         dlg.Destroy()
-        self._resume_location_sound()
+        self._finish_thinking()
         self.listbox.SetFocus()
 
     def _tool_departure_board(self):
@@ -545,10 +1122,12 @@ class ToolsMixin:
             # No warning needed: GTFS-only mode is already the default fallback.
             pass
 
+        self._thinking()
+
         country_code = self._ask_country_code()
         if not country_code:
             self._status_update("Departure board cancelled.", force=True)
-            self._resume_location_sound()
+            self._finish_thinking()
             return
 
         # Ask for location
@@ -557,7 +1136,7 @@ class ToolsMixin:
         if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
             dlg.Destroy()
             self._status_update("Departure board cancelled.", force=True)
-            self._resume_location_sound()
+            self._finish_thinking()
             return
         location_text = dlg.GetValue()
         dlg.Destroy()
@@ -565,11 +1144,16 @@ class ToolsMixin:
         # Geocode to get lat/lon
         self._status_update(f"Looking up {location_text}...")
         try:
-            lat, lon, formatted = rt.geocode(location_text, country_code)
+            resolved = self._resolve_geocode(rt, location_text, country_code, "location")
+            if resolved is None:
+                self._status_update("Departure board cancelled.", force=True)
+                self._finish_thinking()
+                return
+            lat, lon, formatted = resolved
             self._status_update(f"Searching for stops near {formatted}...")
         except Exception as e:
             self._status_update(f"Could not find '{location_text}': {e}", force=True)
-            self._resume_location_sound()
+            self._finish_thinking()
             return
 
         # Fetch stations in background
@@ -598,12 +1182,12 @@ class ToolsMixin:
                     wx.CallAfter(self._status_update,
                                  f"No transit stops found near {formatted}.",
                                  True)
-                    wx.CallAfter(self._resume_location_sound)
+                    wx.CallAfter(self._finish_thinking)
                     return
                 wx.CallAfter(self._show_departure_board, stations, here_key, rt, source)
             except Exception as e:
                 wx.CallAfter(self._status_update, f"Departure board failed: {e}", True)
-                wx.CallAfter(self._resume_location_sound)
+                wx.CallAfter(self._finish_thinking)
 
         threading.Thread(target=_fetch, daemon=True).start()
 
@@ -764,7 +1348,7 @@ class ToolsMixin:
         dlg = self._dlgs[4](self, stations, _fetch_departures, _fetch_stops)
         dlg.ShowModal()
         dlg.Destroy()
-        self._resume_location_sound()
+        self._finish_thinking()
         self.listbox.SetFocus()
 
     def _gtfs_stops_for_departure(self, departure):
@@ -1157,7 +1741,11 @@ class ToolsMixin:
                 rt_obj = None
             if rt_obj and rt_obj.is_configured:
                 try:
-                    d_lat, d_lon, d_fmt = rt_obj.geocode(_dest_query)
+                    resolved = self._resolve_geocode(rt_obj, _dest_query, "", "destination")
+                    if resolved is None:
+                        print(f"[GTFS] Destination selection cancelled for '{_dest_query}'.")
+                        return [f"No timetable data found for this service."]
+                    d_lat, d_lon, d_fmt = resolved
                     d_km = ((lat - d_lat)**2 * 111**2
                             + (lon - d_lon)**2 * (111 * math.cos(
                                 math.radians(lat)))**2) ** 0.5
@@ -1228,21 +1816,75 @@ class ToolsMixin:
 
     def _resume_location_sound(self):
         """Re-start the country/region ambient sound and refresh the UI label."""
+        if getattr(self, "_thinking_active", False) or getattr(self, "_suppress_location_restore", False):
+            self._tool_trace("_resume_location_sound suppressed while thinking.")
+            return
         country = getattr(self, 'last_country_found', '')
         continent = getattr(self, 'current_continent', '')
         if country and country != "Open Water":
             self.sound.play_location_sound(country, continent)
         # Restore the location label in the listbox
         label = getattr(self, 'last_location_str', '')
-        if label:
+        if label and not getattr(self, "_suppress_location_restore", False):
+            self._tool_trace(f"_resume_location_sound restoring label: {label!r}")
             self.update_ui(label)
+        elif label:
+            self._tool_trace(f"_resume_location_sound skipped label restore: {label!r}")
 
     def _show_route_results(self, title: str, text: str):
         """Display route results in a read-only dialog."""
+        self._tool_trace(f"{title}: results dialog shown.")
         dlg = self._dlgs[5](self, title, text)
         dlg.ShowModal()
         dlg.Destroy()
-        self._resume_location_sound()
+        self._finish_thinking()
+        self.listbox.SetFocus()
+
+    def _show_rendezvous_results(
+        self,
+        origin_name: str,
+        dest_a_name: str,
+        dest_b_name: str,
+        route_duration_text: str,
+        route_distance_text: str,
+        mode: str,
+        candidates: list[dict],
+        intro: str,
+    ):
+        """Display ranked rendezvous candidates in an accessible list dialog."""
+        if not candidates:
+            self._status_update("No rendezvous candidates found.", force=True)
+            self._finish_thinking()
+            return
+
+        if mode == "meeting":
+            header = f"Friend's location: {origin_name}."
+            header += f" Your location: {dest_a_name}."
+            header += f" Route between the two locations: {route_duration_text}, {route_distance_text}."
+            header += " Mode: meet in the middle."
+        elif mode == "pickup":
+            header = f"Your location: {origin_name}."
+            header += f" Friend's location: {dest_a_name}."
+            header += f" Shared destination: {dest_b_name}."
+            header += f" Friend's route: {route_duration_text}, {route_distance_text}."
+            header += " Mode: find a pick-up point."
+        elif mode == "dropoff":
+            header = f"Shared starting point: {origin_name}."
+            header += f" Your destination: {dest_a_name}."
+            header += f" Friend's destination: {dest_b_name}."
+            header += f" Your route: {route_duration_text}, {route_distance_text}."
+            header += " Mode: get dropped off on the way."
+        else:
+            header = f"Friend's location: {origin_name}."
+            header += f" Your location: {dest_a_name}."
+            header += f" Route: {route_duration_text}, {route_distance_text}."
+
+        self._accessible_status("Rendezvous results ready. Use the list to browse options.")
+        self._tool_trace(f"Rendezvous Point: results dialog shown with {len(candidates)} candidates.")
+        dlg = self._dlgs[6](self, "Rendezvous Point", f"{header} {intro}", candidates)
+        dlg.ShowModal()
+        dlg.Destroy()
+        self._finish_thinking()
         self.listbox.SetFocus()
 
 
@@ -1481,7 +2123,7 @@ class ToolsMixin:
         dest   = dlg.dest_iata
         dlg.Destroy()
 
-        self._status_update(f"Searching flights {origin} → {dest}...")
+        self._thinking()
 
         def _fetch():
             try:
@@ -1499,7 +2141,7 @@ class ToolsMixin:
                     wx.CallAfter(self._status_update,
                                  f"No flights found from {origin} to {dest}.",
                                  True)
-                    wx.CallAfter(self._resume_location_sound)
+                    wx.CallAfter(self._finish_thinking)
                     return
 
                 from timetable import fmt_itinerary
@@ -1518,7 +2160,7 @@ class ToolsMixin:
                 import traceback
                 traceback.print_exc()
                 wx.CallAfter(self._status_update, f"Flight search failed: {exc}", True)
-                wx.CallAfter(self._resume_location_sound)
+                wx.CallAfter(self._finish_thinking)
 
         threading.Thread(target=_fetch, daemon=True).start()
 
@@ -1534,7 +2176,7 @@ class ToolsMixin:
 
         def _close(evt=None):
             dlg.Destroy()
-            self._resume_location_sound()
+            self._finish_thinking()
 
         btn.Bind(wx.EVT_BUTTON, _close)
         dlg.Bind(wx.EVT_CHAR_HOOK,
@@ -1633,7 +2275,7 @@ class ToolsMixin:
         choices = self._priceline.get_location_id(location)
         if not choices:
             self._status_update("No locations found.", force=True)
-            wx.CallAfter(lambda: wx.CallLater(2000, self._resume_location_sound))
+            wx.CallAfter(lambda: wx.CallLater(2000, self._finish_thinking))
             return
 
         labels = [c["label"] for c in choices]
@@ -1667,7 +2309,7 @@ class ToolsMixin:
             self._resume_location_sound()
             return
 
-        self._status_update(f"Searching hotels in {location_label}...")
+        self._thinking()
 
         def _fetch():
             try:
@@ -1680,7 +2322,7 @@ class ToolsMixin:
                 )
                 if not results:
                     wx.CallAfter(self._status_update, f"No hotels found in {location_label}.", True)
-                    wx.CallAfter(lambda: wx.CallLater(2000, self._resume_location_sound))
+                    wx.CallAfter(lambda: wx.CallLater(2000, self._finish_thinking))
                     return
 
                 def _show():
@@ -1718,7 +2360,7 @@ class ToolsMixin:
                             webbrowser.open(f"https://www.google.com/search?q={q}&btnI=1")
 
                     dlg.Destroy()
-                    self._resume_location_sound()
+                    self._finish_thinking()
 
                 wx.CallAfter(_show)
 
@@ -1726,7 +2368,7 @@ class ToolsMixin:
                 import traceback
                 traceback.print_exc()
                 wx.CallAfter(self._status_update, f"Hotel search failed: {exc}", True)
-                wx.CallAfter(self._resume_location_sound)
+                wx.CallAfter(self._finish_thinking)
  
 
         threading.Thread(target=_fetch, daemon=True).start()
@@ -1839,7 +2481,7 @@ class ToolsMixin:
         else:
             origin_lat, origin_lon = origin_coords
         self._find_food_populating = True
-        self._status_update(f"Finding route to {dest_text}…")
+        self._thinking()
 
         def _search():
             nonlocal dest_lat, dest_lon, dest_fmt
@@ -1858,7 +2500,12 @@ class ToolsMixin:
                         country_code = country.upper()
 
                 if dest_coords is None:
-                    dest_lat, dest_lon, dest_fmt = rt.geocode(dest_text, country_code)
+                    resolved = self._resolve_geocode(rt, dest_text, country_code, "destination")
+                    if resolved is None:
+                        wx.CallAfter(self._status_update, "Find Food cancelled.", True)
+                        wx.CallAfter(self._finish_thinking)
+                        return
+                    dest_lat, dest_lon, dest_fmt = resolved
 
                 wx.CallAfter(self._status_update,
                              f"Route to {dest_fmt} — fetching…",
@@ -1875,14 +2522,14 @@ class ToolsMixin:
                 )
                 if not raw_routes:
                     wx.CallAfter(self._status_update, "No route found.", True)
-                    wx.CallAfter(self._resume_location_sound)
+                    wx.CallAfter(self._finish_thinking)
                     return
 
                 parsed = rt._parse_route(raw_routes[0])
                 encoded = parsed.get("polyline", "")
                 if not encoded:
                     wx.CallAfter(self._status_update, "Route has no polyline.", True)
-                    wx.CallAfter(self._resume_location_sound)
+                    wx.CallAfter(self._finish_thinking)
                     return
 
                 points = _decode_polyline(encoded)  # list of (lat, lon)
@@ -1923,7 +2570,7 @@ class ToolsMixin:
                     wx.CallAfter(self._status_update,
                                  "No food places found along that route.",
                                  True)
-                    wx.CallAfter(self._resume_location_sound)
+                    wx.CallAfter(self._finish_thinking)
                     return
 
                 # -- corridor filter + along-route distance ----------------
@@ -2037,7 +2684,7 @@ class ToolsMixin:
                     wx.CallAfter(self._status_update,
                                  "No food places within corridor of that route.",
                                  True)
-                    wx.CallAfter(self._resume_location_sound)
+                    wx.CallAfter(self._finish_thinking)
                     return
 
                 places.sort(key=lambda p: p["along_m"])
@@ -2050,7 +2697,7 @@ class ToolsMixin:
 
             except Exception as exc:
                 wx.CallAfter(self._status_update, f"Find Food failed: {exc}", True)
-                wx.CallAfter(self._resume_location_sound)
+                wx.CallAfter(self._finish_thinking)
             finally:
                 wx.CallAfter(setattr, self, "_find_food_populating", False)
 
@@ -2539,5 +3186,5 @@ class ToolsMixin:
         dlg = FindFoodDialog(self, places, _detail_cb, title=title)
         dlg.ShowModal()
         dlg.Destroy()
-        self._resume_location_sound()
+        self._finish_thinking()
         self.listbox.SetFocus()

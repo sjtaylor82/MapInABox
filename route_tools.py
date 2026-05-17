@@ -14,7 +14,7 @@ Classes
 RouteTools
     geocode(address, country_code) → (lat, lon, formatted_address)
     compare_routes(stops) → dict          # Detour Calculator
-    explore_routes(origin, destination, status_cb) → dict  # Route Explorer
+    explore_routes(origin, destination, status_cb) → dict  # Suburb Lister
 """
 
 from __future__ import annotations
@@ -180,6 +180,16 @@ class RouteTools:
     def _google_geocode(
         self, address: str, country_code: str = ""
     ) -> tuple[float, float, str]:
+        candidates = self._google_geocode_candidates(address, country_code)
+        if not candidates:
+            raise RuntimeError(f"Could not find '{address}': no results")
+        result = candidates[0]
+        loc = result["geometry"]["location"]
+        return float(loc["lat"]), float(loc["lng"]), result.get("formatted_address", address)
+
+    def _google_geocode_candidates(
+        self, address: str, country_code: str = "", limit: int = 5
+    ) -> list[dict]:
         if not self._key:
             raise RuntimeError("No Google API key configured.")
 
@@ -190,21 +200,25 @@ class RouteTools:
         url = f"{self._GEOCODE_URL}?{urllib.parse.urlencode(params)}"
         data = self._request_json(url, timeout=10)
         if data.get("status") != "OK" or not data.get("results"):
-            raise RuntimeError(
-                f"Could not find '{address}': {data.get('status', 'no results')}"
-            )
-
-        result = data["results"][0]
-        loc = result["geometry"]["location"]
-        return float(loc["lat"]), float(loc["lng"]), result.get("formatted_address", address)
+            return []
+        return data.get("results", [])[:limit]
 
     def _nominatim_geocode(
         self, address: str, country_code: str = ""
     ) -> tuple[float, float, str]:
+        candidates = self._nominatim_geocode_candidates(address, country_code)
+        if not candidates:
+            raise RuntimeError(f"Could not find '{address}' with open geocoder.")
+        item = candidates[0]
+        return float(item["lat"]), float(item["lon"]), item.get("display_name", address)
+
+    def _nominatim_geocode_candidates(
+        self, address: str, country_code: str = "", limit: int = 5
+    ) -> list[dict]:
         params: dict = {
             "q": address,
             "format": "jsonv2",
-            "limit": 1,
+            "limit": limit,
             "addressdetails": 1,
         }
         cc = self._nominatim_country_code(country_code)
@@ -219,17 +233,33 @@ class RouteTools:
                 "Accept-Language": "en",
             },
         )
-        if not isinstance(data, list) or not data:
-            raise RuntimeError(f"Could not find '{address}' with open geocoder.")
-        item = data[0]
-        return float(item["lat"]), float(item["lon"]), item.get("display_name", address)
+        if not isinstance(data, list):
+            return []
+        return data[:limit]
 
     def _photon_geocode(
         self, address: str, country_code: str = ""
     ) -> tuple[float, float, str]:
+        candidates = self._photon_geocode_candidates(address, country_code)
+        if not candidates:
+            raise RuntimeError(f"Could not find '{address}' with open geocoder.")
+        feat = candidates[0]
+        props = feat.get("properties", {})
+        geom = feat.get("geometry", {})
+        coords = geom.get("coordinates", [None, None])
+        if coords[0] is None or coords[1] is None:
+            raise RuntimeError(f"Could not find '{address}' with open geocoder.")
+        label = props.get("name") or props.get("street") or address
+        if props.get("city") and props.get("city") not in label:
+            label = f"{label}, {props.get('city')}"
+        return float(coords[1]), float(coords[0]), label
+
+    def _photon_geocode_candidates(
+        self, address: str, country_code: str = "", limit: int = 5
+    ) -> list[dict]:
         params: dict = {
             "q": address,
-            "limit": 1,
+            "limit": limit,
             "lang": "en",
         }
         if country_code:
@@ -240,19 +270,7 @@ class RouteTools:
             timeout=10,
             headers={"User-Agent": "MapInABox/1.0"},
         )
-        features = data.get("features", [])
-        if not features:
-            raise RuntimeError(f"Could not find '{address}' with open geocoder.")
-        feat = features[0]
-        props = feat.get("properties", {})
-        geom = feat.get("geometry", {})
-        coords = geom.get("coordinates", [None, None])
-        if coords[0] is None or coords[1] is None:
-            raise RuntimeError(f"Could not find '{address}' with open geocoder.")
-        label = props.get("name") or props.get("street") or address
-        if props.get("city") and props.get("city") not in label:
-            label = f"{label}, {props.get('city')}"
-        return float(coords[1]), float(coords[0]), label
+        return data.get("features", [])[:limit] if isinstance(data, dict) else []
 
     def _open_geocode(
         self, address: str, country_code: str = ""
@@ -267,6 +285,56 @@ class RouteTools:
             f"Could not find '{address}' with open geocoders."
             + (f" ({last_exc})" if last_exc else "")
         )
+
+    def geocode_candidates(
+        self, address: str, country_code: str = "", limit: int = 5
+    ) -> list[tuple[float, float, str]]:
+        """Return up to `limit` candidate geocodes for disambiguation."""
+        candidates: list[tuple[float, float, str]] = []
+        try:
+            if self._key:
+                for item in self._google_geocode_candidates(address, country_code, limit=limit):
+                    loc = item.get("geometry", {}).get("location", {})
+                    formatted = item.get("formatted_address", address)
+                    lat = loc.get("lat")
+                    lng = loc.get("lng")
+                    if lat is None or lng is None:
+                        continue
+                    candidates.append((float(lat), float(lng), formatted))
+        except Exception:
+            candidates = []
+
+        if candidates:
+            return candidates[:limit]
+
+        try:
+            for item in self._nominatim_geocode_candidates(address, country_code, limit=limit):
+                lat = item.get("lat")
+                lon = item.get("lon")
+                if lat is None or lon is None:
+                    continue
+                candidates.append((float(lat), float(lon), item.get("display_name", address)))
+        except Exception:
+            pass
+
+        if candidates:
+            return candidates[:limit]
+
+        try:
+            for feat in self._photon_geocode_candidates(address, country_code, limit=limit):
+                props = feat.get("properties", {})
+                geom = feat.get("geometry", {})
+                coords = geom.get("coordinates", [None, None])
+                if coords[0] is None or coords[1] is None:
+                    continue
+                label = props.get("name") or props.get("street") or address
+                if props.get("city") and props.get("city") not in label:
+                    label = f"{label}, {props.get('city')}"
+                candidates.append((float(coords[1]), float(coords[0]), label))
+        except Exception:
+            pass
+
+        return candidates[:limit]
 
     # ------------------------------------------------------------------
     # Geocoding
@@ -568,6 +636,7 @@ class RouteTools:
         intermediates: Optional[list[tuple[float, float]]] = None,
         avoid_tolls: bool = False,
         request_tolls: bool = False,
+        request_polyline: bool = False,
     ) -> dict:
         """Single-route computation for detour calculator."""
         if not self._key:
@@ -577,6 +646,7 @@ class RouteTools:
                 intermediates=intermediates,
                 avoid_tolls=avoid_tolls,
                 request_tolls=request_tolls,
+                request_polyline=request_polyline,
             )
 
         try:
@@ -608,6 +678,8 @@ class RouteTools:
                 "routes.legs.duration",
                 "routes.legs.distanceMeters",
             ]
+            if request_polyline:
+                fields.append("routes.polyline.encodedPolyline")
             if request_tolls:
                 fields.append("routes.travelAdvisory.tollInfo")
 
@@ -637,6 +709,7 @@ class RouteTools:
                 intermediates=intermediates,
                 avoid_tolls=avoid_tolls,
                 request_tolls=False,
+                request_polyline=request_polyline,
             )
 
     def _osrm_compute_route(
@@ -646,11 +719,12 @@ class RouteTools:
         intermediates: Optional[list[tuple[float, float]]] = None,
         avoid_tolls: bool = False,
         request_tolls: bool = False,
+        request_polyline: bool = False,
     ) -> dict:
         coords = [origin] + list(intermediates or []) + [destination]
         coord_text = ";".join(f"{lon:.6f},{lat:.6f}" for lat, lon in coords)
         params = {
-            "overview": "full",
+            "overview": "full" if request_polyline else "simplified",
             "geometries": "polyline",
             "steps": "true",
         }
@@ -732,7 +806,7 @@ class RouteTools:
         }
 
     # ------------------------------------------------------------------
-    # Route Explorer — alternatives with suburb chain and tolls
+    # Suburb Lister — alternatives with suburb chain and tolls
     # ------------------------------------------------------------------
 
     def explore_routes(
@@ -793,8 +867,9 @@ class RouteTools:
         # Build summary text
         lines = [f"From {origin[2]} to {destination[2]}:", ""]
 
+        total_routes = len(parsed)
         for i, r in enumerate(parsed):
-            label = f"Route {i + 1}"
+            label = f"Route {i + 1} of {total_routes}"
             if r["description"]:
                 label += f" via {r['description']}"
 
@@ -811,6 +886,8 @@ class RouteTools:
             # Suburb chain
             if r["suburbs"]:
                 lines.append(f"  Through: {', '.join(r['suburbs'])}.")
+            else:
+                lines.append("  Through: no suburb chain was identified on this route.")
             lines.append("")
 
         # Summary comparison
