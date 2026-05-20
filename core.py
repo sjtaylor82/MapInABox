@@ -640,6 +640,7 @@ class GeoFeatures:
         """Return the name of ANY nearby feature using broad radii, or ''."""
         best      = None
         best_dist = float("inf")
+        best_feat = None
         for feat in self._nearby_features(lat, lon, max(self._RADII_BROAD.values() or [0.0]), country_code):
             r = self._RADII_BROAD.get(feat["code"], 0.0)
             if r == 0.0:
@@ -652,7 +653,18 @@ class GeoFeatures:
             if dist < r and dist < best_dist:
                 best_dist = dist
                 best      = self._feature_name_with_type(feat["name"], feat.get("code", ""))
-        return best or ""
+                best_feat = feat
+        if not best:
+            return ""
+        from route_tools import _haversine_m
+        from geo import bearing_deg, compass_name
+        dist_km = _haversine_m(lat, lon, best_feat["lat"], best_feat["lon"]) / 1000.0
+        compass = compass_name(bearing_deg(lat, lon, best_feat["lat"], best_feat["lon"]))
+        if dist_km < 1.0:
+            dist_str = f"{round(dist_km * 1000)} m"
+        else:
+            dist_str = f"{round(dist_km)} km"
+        return f"{best} {dist_str} {compass}"
 
     def lookup_precise_label(self, lat: float, lon: float, country_code: str = None) -> str:
         """Return a feature only when the cursor is very close to its point."""
@@ -747,15 +759,19 @@ class GeoFeatures:
             dist = math.sqrt(dlat*dlat + dlon*dlon)
             if dist < r and feat["name"] not in seen:
                 seen.add(feat["name"])
-                candidates.append((dist * 111.0, code, self._feature_name_with_type(feat["name"], code)))
+                candidates.append((dist * 111.0, code,
+                                   self._feature_name_with_type(feat["name"], code),
+                                   feat["lat"], feat["lon"]))
         candidates.sort(key=lambda item: item[0])
+        from geo import bearing_deg, compass_name
         result = []
-        for km, _code, name in candidates[:limit]:
+        for km, _code, name, flat, flon in candidates[:limit]:
             if km < 1:
                 dist_text = f"{round(km * 1000)} metres"
             else:
                 dist_text = f"{round(km)} km"
-            result.append(f"{name} {dist_text}")
+            compass = compass_name(bearing_deg(lat, lon, flat, flon))
+            result.append(f"{name} {dist_text} {compass}")
         return result
 
     def jump_candidates(self, query: str, lat: float = None, lon: float = None, country_code: str = None) -> list[tuple[str, float, float, str, int, int]]:
@@ -855,7 +871,9 @@ class GeoFeatures:
         return matches
 
     def nearby(self, lat: float, lon: float, country_code: str = None) -> list:
-        """Return list of (name, feature_code) using broad radii for X key panel."""
+        """Return list of (name, feature_code, dist_km, compass) using broad radii for X key panel."""
+        from route_tools import _haversine_m
+        from geo import bearing_deg, compass_name
         results = []
         seen    = set()
         for feat in self._nearby_features(lat, lon, max(self._RADII_BROAD.values() or [0.0]), country_code):
@@ -869,7 +887,10 @@ class GeoFeatures:
             dist = math.sqrt(dlat*dlat + dlon*dlon)
             if dist < r and feat["name"] not in seen:
                 seen.add(feat["name"])
-                results.append((self._feature_name_with_type(feat["name"], feat["code"]), feat["code"]))
+                dist_km = _haversine_m(lat, lon, feat["lat"], feat["lon"]) / 1000.0
+                compass = compass_name(bearing_deg(lat, lon, feat["lat"], feat["lon"]))
+                results.append((self._feature_name_with_type(feat["name"], feat["code"]),
+                                feat["code"], dist_km, compass))
         return results
 AIRPORTS_STALE_DAYS = 90
 
@@ -1040,7 +1061,8 @@ DEFAULT_SETTINGS = {
     "announce_climate_zones": True,
     "spatial_tones_mode":     "world",  # "world", "country", or "region"
     "challenge_direction_mode": "map",  # "map" or "globe"
-    "poi_name_search_radius_km": 10,
+    "poi_browse_radius_km":    1,
+    "suppress_warn_google":    False,
     "gemini_api_key":         "",
     "google_cse_id":          "",
     "nav_provider":           "osm",   # "osm" or "google" or "here"
@@ -1613,6 +1635,9 @@ class WorldMapPanel(wx.Panel):
     _LABEL_SIZE     = 11
     _FLASH_SIZE     = 28
 
+    def AcceptsFocusFromKeyboard(self):
+        return False
+
     def __init__(self, parent):
         super().__init__(parent, style=wx.NO_BORDER)
         self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
@@ -2126,6 +2151,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._poi_fetch_lat         = None   # location where POIs were last fetched
         self._poi_fetch_lon         = None
         self._poi_fetch_in_progress = False  # guard against duplicate background fetches
+        self._fetch_reminder_spoken = False  # True after first arrow-key reminder during a fetch
         self._last_spoken           = ""     # last AO2 utterance for focus-return
         self.street_mode        = False
         self.street_label       = ""
@@ -2215,7 +2241,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self.Bind(wx.EVT_ACTIVATE, self._on_activate)
         self.Bind(wx.EVT_CLOSE, self.on_close)
         self._refresh_info_panel()
-        # Loading ticker — 1s pulse while streets or POIs are fetching
+        # Loading ticker — used for street progress tones.
         self._loading_timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self._on_loading_tick, self._loading_timer)
         self._loading_timer.Start(1000)
@@ -2423,6 +2449,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
     def _build_info_panel(self, parent):
         """Create the sighted-user information panel. It never takes focus."""
         panel = wx.Panel(parent)
+        panel.SetWindowStyleFlag(panel.GetWindowStyleFlag() & ~wx.TAB_TRAVERSAL)
         panel.SetBackgroundColour(wx.Colour(15, 25, 45))
         panel.SetForegroundColour(wx.Colour(235, 235, 235))
 
@@ -2995,6 +3022,25 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 self._jump_street_pin_lon = None
         
         if primary == "No street data nearby":
+            snap = self._nearest_street_point(self.lat, self.lon)
+            if not getattr(self, "_street_auto_land_done", False):
+                if snap and snap[0] <= 3000.0:
+                    snap_dist, snap_lat, snap_lon, snap_label = snap
+                    miab_log("snap",
+                             f"street display auto-landed to '{snap_label}' at ({snap_lat:.5f},{snap_lon:.5f}) "
+                             f"({snap_dist:.1f}m away)",
+                             self.settings)
+                    self._land_on_street(snap_lat, snap_lon, snap_label)
+                    return
+            elif snap and snap[0] <= 300.0:
+                # Cursor is inside a large feature polygon (e.g. sporting club
+                # grounds) whose OSM centroid is >150m from any road. Report
+                # the nearest road so the user gets a useful street reference
+                # rather than a park/open-area label.
+                _, _, _, snap_label = snap
+                wx.CallAfter(self._update_location_focus, f"near {snap_label}.")
+                return
+
             location_info = None
             feature_name = None
 
@@ -3027,16 +3073,26 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         streets_to_annotate = [primary]
         if cross:
             streets_to_annotate.append(cross)
-        
+
+        pinned_num    = getattr(self, '_jump_address_number', None)
+        pinned_street = getattr(self, '_jump_address_street', None)
+        pin_lat       = getattr(self, '_jump_street_pin_lat', None)
+        pin_lon       = getattr(self, '_jump_street_pin_lon', None)
+        pin_active    = (pinned_num and pinned_street and pin_lat is not None
+                         and dist_metres(self.lat, self.lon, pin_lat, pin_lon) <= 150.0)
+
         for i, st in enumerate(streets_to_annotate):
-            num = self._nearest_address_number(self.lat, self.lon, st, radius=200)
+            if i == 0 and pin_active and pinned_street.lower() == st.lower():
+                num = pinned_num
+            else:
+                num = self._nearest_address_number(self.lat, self.lon, st, radius=200)
             if i == 0:
                 parts.append(f"{num + ' ' + st if num else st}")
             else:
                 parts.append(f"near {st}")
-        
+
         label = ".  ".join(parts)
-        
+
         wx.CallAfter(self._update_location_focus, label)
 
     def _prefetch_streets(self):
@@ -3135,12 +3191,16 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self._prefetch_in_progress = False
 
     def toggle_street_mode(self):
+        if getattr(self, "_loading", False) and not self.street_mode:
+            return
         self._loading = False          # silence loading beep immediately on F11
         if self.street_mode:
             self._exit_street_mode()
         else:
             self._loading = True
             self._street_loading_announced = True
+            self._street_auto_land_done = False
+            self._gnaf_recentre_done = False
             if getattr(self, "_suppress_next_street_loading_status", False):
                 self._suppress_next_street_loading_status = False
             else:
@@ -3149,6 +3209,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _try_enter_street_mode(self):
         import urllib.request, urllib.parse, json, math
+        from street_data import geocode_location
 
         fetch_seed_lat = self.lat
         fetch_seed_lon = self.lon
@@ -3158,39 +3219,87 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         # around bays, ports, and reclaimed land, so hidden cursor snaps make the
         # global latitude/longitude untrustworthy.
         if not _IS_LAND(self.lat, self.lon):
-            dist, idx = _nearest_city(self._city_lats, self._city_lons, self.lat, self.lon)
-            if dist > 0.01:   # more than ~1km from any city point — genuinely at sea
-                row = self.df.iloc[idx]
-                fetch_seed_lat = float(row['lat'])
-                fetch_seed_lon = float(row['lng'])
-                city = str(row['city'])
-                print(f"[Street] Position appears in water ({self.lat:.4f},{self.lon:.4f}) — loading streets near {city} ({fetch_seed_lat:.4f},{fetch_seed_lon:.4f}) without moving cursor")
-                wx.CallAfter(self.update_ui,
-                    f"Position appears to be in open water. Loading streets near {city} without moving.")
+            geo_probe = geocode_location(self.lat, self.lon)
+            suburb_probe = (geo_probe.get("suburb", "") if geo_probe else "").strip()
+            country_probe = (geo_probe.get("country_code", "") if geo_probe else "").strip()
+            water_key = (
+                round(self.lat, 4),
+                round(self.lon, 4),
+                suburb_probe.lower(),
+                country_probe.lower(),
+            )
+            if getattr(self, "_water_street_probe_key", None) == water_key:
+                print(f"[Street] Water probe already done for {water_key}; not retrying.")
+                wx.CallAfter(
+                    self._status_update,
+                    "Water area already probed. Move to land or press Space to try again.",
+                    True,
+                )
+                return
+            self._water_street_probe_key = water_key
+            if suburb_probe:
+                print(
+                    f"[Street] Position appears in water ({self.lat:.4f},{self.lon:.4f}) — "
+                    f"loading streets for {suburb_probe} from the current point"
+                )
+                wx.CallAfter(
+                    self.update_ui,
+                    "Position appears to be in open water. Loading nearest streets."
+                )
+            else:
+                print(
+                    f"[Street] Position appears in water ({self.lat:.4f},{self.lon:.4f}) — "
+                    "loading nearby streets from the current point"
+                )
+                wx.CallAfter(
+                    self.update_ui,
+                    "Position appears to be in open water. Loading nearest streets."
+                )
+        else:
+            self._water_street_probe_key = None
 
-        # Clear stale fetch coords before re-geocoding so a previous city's
-        # bbox centre never leaks into the new fetch.
+        # Prefer last_city_found (worldcities CSV, suburb-level) over Nominatim.
+        # Read force_geocode flag early — it affects both the geocode seed and
+        # the suburb-name preference below.
+        force_geocode_suburb = getattr(self, "_force_geocode_suburb_once", False)
+        self._force_geocode_suburb_once = False
+        map_city = "" if force_geocode_suburb else (getattr(self, 'last_city_found', '') or '')
+
+        # When a named suburb is selected, geocode from its worldcities coordinate
+        # rather than the cursor so we get the correct bbox even when the cursor
+        # sits across a suburb boundary (e.g. cursor in Ormiston, city = Wellington Point).
+        city_seed_lat = getattr(self, '_last_city_found_lat', None)
+        city_seed_lon = getattr(self, '_last_city_found_lon', None)
+        if map_city and city_seed_lat and city_seed_lon:
+            geo_seed_lat, geo_seed_lon = city_seed_lat, city_seed_lon
+        else:
+            geo_seed_lat, geo_seed_lon = fetch_seed_lat, fetch_seed_lon
+
+        # Clear stale fetch coords before re-geocoding.
         self._street_fetch_lat = None
         self._street_fetch_lon = None
-        if fetch_seed_lat != self.lat or fetch_seed_lon != self.lon:
-            self._street_fetch_lat = fetch_seed_lat
-            self._street_fetch_lon = fetch_seed_lon
 
         # Use cached geocoding (checks disk cache -> samtaylor9 -> Nominatim)
         from street_data import geocode_location
-        geo = geocode_location(fetch_seed_lat, fetch_seed_lon)
+        geo = geocode_location(geo_seed_lat, geo_seed_lon)
 
         if geo:
             radius = geo.get("radius", 3000)
             self._street_radius  = radius
             self._street_barrier = int(radius * 0.9)
-            self._street_bbox = geo.get("bbox")
-            # Prefer last_city_found (worldcities CSV, now suburb-level) over
-            # Nominatim reverse-geocode — it reflects what the user sees on the
-            # map and is more reliable at suburb boundaries.
-            force_geocode_suburb = getattr(self, "_force_geocode_suburb_once", False)
-            self._force_geocode_suburb_once = False
-            map_city = "" if force_geocode_suburb else (getattr(self, 'last_city_found', '') or '')
+            bbox = geo.get("bbox")
+            self._street_bbox = bbox
+
+            # Centre the Overpass fetch on the suburb bbox midpoint so the
+            # downloaded area is properly centred on the suburb, not the cursor.
+            if bbox:
+                minlat, maxlat, minlon, maxlon = bbox
+                self._street_fetch_lat = (minlat + maxlat) / 2
+                self._street_fetch_lon = (minlon + maxlon) / 2
+            elif fetch_seed_lat != self.lat or fetch_seed_lon != self.lon:
+                self._street_fetch_lat = fetch_seed_lat
+                self._street_fetch_lon = fetch_seed_lon
+
             nominatim_suburb = geo.get("suburb", "") or ""
             if map_city and map_city.lower() not in ("nan", ""):
                 if map_city.lower() != nominatim_suburb.lower():
@@ -3282,6 +3391,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
     def _exit_street_mode(self):
         self.street_mode  = False
         self.street_label = ""
+        self._street_auto_land_done = False
         self._jump_street_label = None
         self._jump_street_pin_lat = None
         self._jump_street_pin_lon = None
@@ -3332,6 +3442,16 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         else:
             self._status_update("Download cancelled. Staying in current area.", force=True)
     
+    def _auto_download_poi_suburb(self, lat, lon, poi_name, known_street, suburb_name):
+        """Silently download streets after a POI jump within the same suburb — no dialog."""
+        self._status_update(f"Downloading streets for {suburb_name}...")
+        self._road_fetched = False
+        self._road_segments = []
+        self._loading = True
+        self._fetch_road_data()
+        threading.Thread(target=self._fetch_poi_intersection,
+                         args=(lat, lon, poi_name, known_street), daemon=True).start()
+
     def _confirm_poi_suburb_download(self, lat, lon, poi_name, known_street, suburb_name):
         """Show Yes/No dialog to confirm downloading suburb after POI jump."""
         dlg = wx.MessageDialog(
@@ -3399,7 +3519,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self._street_bbox = geo.get("bbox")
             self._current_suburb = geo.get("suburb", "this area")
             self._current_country_code = geo.get("country_code", "")
-            self._prefetch_geo_features_for_point(lat, lon)
+            self._prefetch_geo_features_for_point(self.lat, self.lon)
         else:
             # Geocoding failed - use fallback
             print("[Street] Geocoding failed, using 3000m radius fallback")
@@ -3556,42 +3676,46 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                      f"fetch done: {len(segs)} segs, cursor=({self.lat:.4f},{self.lon:.4f}), "
                      f"snap_pt=({snap_lat},{snap_lon}), jump_label='{_jlabel}'",
                      self.settings)
-            if snap_lat and snap_lon and not getattr(self, "_jump_street_label", None):
-                miab_log("snap",
-                         f"fetch snap point ({snap_lat:.4f},{snap_lon:.4f}) ignored; keeping cursor at ({self.lat:.4f},{self.lon:.4f})",
-                         self.settings)
-
-            # If player is still not on a street (e.g. on a peninsula/water),
-            # snap to centroid of loaded segments. When boundary query was used
-            # all segments are already within the correct suburb, so the centroid
-            # is guaranteed to be in the right place.
-            # SKIP if download was triggered by arrow movement (user chose that location)
-            if not getattr(self, "_jump_street_label", None) and not getattr(self, "_arrow_download", False):
+            # If player is still not on a street, snap to the nearest loaded
+            # street. Applies whether data came from cache or a live fetch.
+            # Only happens once per street-mode entry (_street_auto_land_done
+            # guards re-entry). Use a generous 3000m cap so water/coastal
+            # positions that are well outside the street grid still land.
+            if (not getattr(self, "_jump_street_label", None)
+                    and not getattr(self, "_arrow_download", False)
+                    and not getattr(self, "_street_auto_land_done", False)):
                 _primary, _ = self._nearest_road(self.lat, self.lon)
                 miab_log("snap",
                          f"fetch post-load nearest_road='{_primary}' at ({self.lat:.4f},{self.lon:.4f})",
                          self.settings)
                 if _primary in ("No street data", "No street data nearby"):
-                    _named = [
-                        (clat, clon)
-                        for seg in segs
-                        if seg.get("raw_name", "").strip()
-                        for clat, clon in seg.get("coords", [])
-                    ]
-                    if _named:
-                        _clat = sum(c[0] for c in _named) / len(_named)
-                        _clon = sum(c[1] for c in _named) / len(_named)
-                        _d = dist_metres(self.lat, self.lon, _clat, _clon)
+                    # Use the fetch centre (suburb bbox midpoint) as the snap
+                    # origin when available — this lands the cursor in the
+                    # selected suburb rather than at the nearest road to a
+                    # water/off-road cursor position.
+                    _land_lat = snap_lat or self.lat
+                    _land_lon = snap_lon or self.lon
+                    if _land_lat != self.lat or _land_lon != self.lon:
                         miab_log("snap",
-                                 f"not on street; centroid {_d:.0f}m away at ({_clat:.4f},{_clon:.4f})",
+                                 f"using fetch centre ({_land_lat:.4f},{_land_lon:.4f}) as snap origin",
                                  self.settings)
-                        if _d > 500:
-                            _loaded = getattr(self, '_current_suburb', 'this area') or 'this area'
-                            self._pending_snap_lat = _clat
-                            self._pending_snap_lon = _clon
-                            wx.CallAfter(_speak,
-                                f"Nearest streets in {_loaded} are {int(_d)} metres away. "
-                                f"Press Space to snap there.")
+                    snap = self._nearest_street_point(_land_lat, _land_lon)
+                    if snap:
+                        _d, _clat, _clon, _label = snap
+                        miab_log("snap",
+                                 f"nearest street '{_label}' is {_d:.0f}m away at ({_clat:.4f},{_clon:.4f})",
+                                 self.settings)
+                        if _d <= 3000:
+                            self._street_auto_land_done = True
+                            self.lat = _clat
+                            self.lon = _clon
+                            self._prev_lat = _clat
+                            self._prev_lon = _clon
+                            self._distance_since_fetch = 0.0
+                            self._pending_snap_lat = None
+                            self._pending_snap_lon = None
+                            # fall through — POI loading, display, and sound
+                            # all run in the normal flow below
             
             # Clear arrow download flag
             if getattr(self, "_arrow_download", False):
@@ -3628,7 +3752,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             def _try_load_poi_cache():
                 try:
                     cached = self._poi_fetcher.load_cached_pois(_glat, _glon)
-                    if cached:
+                    if cached is not None:
                         _suppressed = _load_suppressed()
                         _renamed    = _load_renamed()
                         pois = _apply_renames(
@@ -3643,14 +3767,24 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         except Exception:
                             pass
                         miab_log("verbose", f"Pre-loaded {len(pois)} POIs from cache.", self.settings)
-                        # Cache is only a quick first pass.  Always refresh
-                        # live so removed or newly added OSM POIs are
-                        # reconciled against current data.
-                        threading.Thread(
-                            target=self._fetch_all_pois_background,
-                            args=(self._address_points,),
-                            daemon=True,
-                        ).start()
+                        # Only refresh live if the cache is stale (> 6 h).
+                        # Fresh caches are served as-is to avoid hammering
+                        # Overpass on every street-mode entry.
+                        _age_h = self._poi_fetcher.cached_background_age_hours(_glat, _glon)
+                        if _age_h is None or _age_h > 6:
+                            miab_log("verbose",
+                                     f"Background POI cache age {_age_h:.1f}h — refreshing live." if _age_h else
+                                     "Background POI cache age unknown — refreshing live.",
+                                     self.settings)
+                            threading.Thread(
+                                target=self._fetch_all_pois_background,
+                                args=(self._address_points,),
+                                daemon=True,
+                            ).start()
+                        else:
+                            miab_log("verbose",
+                                     f"Background POI cache age {_age_h:.1f}h — skipping live refresh.",
+                                     self.settings)
                     else:
                         miab_log("verbose", "No disk cache — fetching live.", self.settings)
                         self._fetch_all_pois_background(self._address_points)
@@ -3689,16 +3823,37 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         if not (self._poi_list or
                                 getattr(self, '_walking_mode', False) or
                                 getattr(self, '_free_mode', False)):
+                            size_msg = ""
+                            if self.settings.get("announce_suburb_size") and self._street_bbox:
+                                import math as _m
+                                _sminlat, _smaxlat, _sminlon, _smaxlon = self._street_bbox
+                                _clat = (_sminlat + _smaxlat) / 2
+                                _wkm = (_smaxlon - _sminlon) * 111.0 * _m.cos(_m.radians(_clat))
+                                _hkm = (_smaxlat - _sminlat) * 111.0
+                                size_msg = (f"  {self._current_suburb or 'Suburb'} "
+                                            f"is {_wkm:.1f} km wide by {_hkm:.1f} km tall.")
                             wx.CallAfter(self._status_update,
                                          f"Streets fully loaded.  "
-                                         f"{len(merged)} streets in area.")
+                                         f"{len(merged)} streets in area.{size_msg}")
                     except Exception as exc:
                         print(f"[Street] Stage 2 error: {exc}")
                         self._loading = False
                 threading.Thread(target=_outer_fetch, daemon=True).start()
             else:
-                # Cache hit — no Stage 2 needed, stop beeps immediately
+                # Cache hit or boundary query — no Stage 2 needed, stop beeps immediately
                 self._loading = False
+                if (self.settings.get("announce_suburb_size") and self._street_bbox
+                        and not (self._poi_list or
+                                 getattr(self, '_walking_mode', False) or
+                                 getattr(self, '_free_mode', False))):
+                    import math as _m
+                    _sminlat, _smaxlat, _sminlon, _smaxlon = self._street_bbox
+                    _clat = (_sminlat + _smaxlat) / 2
+                    _wkm = (_smaxlon - _sminlon) * 111.0 * _m.cos(_m.radians(_clat))
+                    _hkm = (_smaxlat - _sminlat) * 111.0
+                    wx.CallAfter(self._status_update,
+                                 f"{self._current_suburb or 'Suburb'} "
+                                 f"is {_wkm:.1f} km wide by {_hkm:.1f} km tall.")
 
         except Exception as e:
             print(f"[Street] fetch error: {e}")
@@ -3712,6 +3867,41 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
     def _nearest_road(self, lat, lon):
         """Thin delegator — see StreetFetcher.nearest_road."""
         return self._street_fetcher.nearest_road(lat, lon, self._road_segments)
+
+    def _nearest_street_point(self, lat, lon):
+        """Return the nearest point on any loaded named street segment."""
+        best = None
+        for seg in getattr(self, "_road_segments", []):
+            label = re.sub(r"\s*\(.*?\)", "", seg.get("name", "")).strip()
+            if not label:
+                continue
+            coords = seg.get("coords", [])
+            if len(coords) < 2:
+                continue
+            for i in range(len(coords) - 1):
+                a_lat, a_lon = coords[i]
+                b_lat, b_lon = coords[i + 1]
+                snap_lat, snap_lon = nearest_point_on_segment(
+                    lat, lon, a_lat, a_lon, b_lat, b_lon
+                )
+                dist = dist_metres(lat, lon, snap_lat, snap_lon)
+                if best is None or dist < best[0]:
+                    best = (dist, snap_lat, snap_lon, label)
+        return best
+
+    def _land_on_street(self, lat, lon, label):
+        """Move the cursor onto a nearby street after street data loads."""
+        self._street_auto_land_done = True
+        self.lat = lat
+        self.lon = lon
+        self.street_label = label
+        self._prev_lat = lat
+        self._prev_lon = lon
+        self._distance_since_fetch = 0.0
+        self._pending_snap_lat = None
+        self._pending_snap_lon = None
+        wx.CallAfter(self.map_panel.set_position, self.lat, self.lon, True, label)
+        wx.CallAfter(self._update_street_display)
 
     def _nearest_roads_with_distances(self, lat, lon):
         """Thin delegator — see StreetFetcher.nearest_roads_with_distances."""
@@ -3849,13 +4039,16 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     added += 1
             if self.settings.get("here_api_key", "").strip():
                 return
-            if added > 50 and self._road_fetched:
+            if (added > 50 and self._road_fetched
+                    and not getattr(self, "_water_street_probe_key", None)
+                    and not getattr(self, "_gnaf_recentre_done", False)):
                 label, _ = self._nearest_road(self.lat, self.lon)
                 if "No street data" in label:
                     lats = [a["lat"] for a in addresses]
                     lons = [a["lon"] for a in addresses]
                     clat = sum(lats) / len(lats)
                     clon = sum(lons) / len(lons)
+                    self._gnaf_recentre_done = True
                     self._recentring = True
                     self._street_fetch_lat = clat
                     self._street_fetch_lon = clon
@@ -4226,7 +4419,6 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     dlon = (self.lon - self._road_fetch_lon) * 111000 * math.cos(
                         math.radians(self.lat))
                     dist = int(math.sqrt(dlat**2 + dlon**2))
-                    
                     if location_info:
                         if feature_name:
                             msg = f"{self.street_label}.  {location_info}: {feature_name}."
@@ -4252,13 +4444,21 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             if cross:
                 streets_to_annotate.append(cross)
 
+            pinned_num    = getattr(self, '_jump_address_number', None)
+            pinned_street = getattr(self, '_jump_address_street', None)
+            pin_lat       = getattr(self, '_jump_street_pin_lat', None)
+            pin_lon       = getattr(self, '_jump_street_pin_lon', None)
+            pin_active    = (pinned_num and pinned_street and pin_lat is not None
+                             and dist_metres(self.lat, self.lon, pin_lat, pin_lon) <= 150.0)
+
             for i, st in enumerate(streets_to_annotate):
-                num = self._nearest_address_number(self.lat, self.lon, st, radius=200)
+                if i == 0 and pin_active and pinned_street.lower() == st.lower():
+                    num = pinned_num
+                else:
+                    num = self._nearest_address_number(self.lat, self.lon, st, radius=200)
                 if i == 0:
-                    # Primary street: "number Street" format
                     parts.append(f"{num + ' ' + st if num else st}")
                 else:
-                    # Cross street: drop number, just "near Street"
                     parts.append(f"near {st}")
 
             label = ".  ".join(parts)
@@ -4284,7 +4484,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         source: "osm" | "here" | "google" | "" (auto — here if key set, else osm)
         """
         import threading
-        self._loading    = True
+        self._loading             = True
+        self._poi_fetch_in_progress = True
         category_key = (category_key or "all").lower()
         name_filter  = (name_filter or "").strip().lower()
         here_key   = self.settings.get("here_api_key",   "").strip()
@@ -4294,26 +4495,17 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             source = poi_source if (poi_source == "here" and here_key) else "osm"
         category_labels = dict(POI_CATEGORY_CHOICES)
         category_label  = category_labels.get(category_key, "All nearby")
-        def _name_search_max_radius():
-            try:
-                km = int(self.settings.get("poi_name_search_radius_km", 10))
-            except (TypeError, ValueError):
-                km = 10
-            return max(1, min(10, km)) * 1000
 
         search_radii = [radius]
         if next_radius and next_radius > radius:
             search_radii.append(next_radius)
         if name_filter:
-            max_radius = _name_search_max_radius()
-            search_radii = sorted({
-                r for r in (radius, 3000, max_radius)
-                if r <= max_radius
-            })
+            # Name searches should use the radius the user chose directly.
+            # Incremental radius probing caused extra Overpass requests and
+            # made the search feel like it was hammering the servers.
+            search_radii = [radius]
         else:
-            # Keep plain category browsing local. Named searches may widen,
-            # but category-only lookups should start from the requested radius
-            # instead of jumping straight to the user's name-search cap.
+            # Keep plain category browsing local.
             search_radii = sorted(set(search_radii))
 
         def _name_match(poi):
@@ -4367,7 +4559,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     sources.add(poi_source)
                 source_matches = not sources or source in sources
                 location_matches = background_distance <= POI_BACKGROUND_RADIUS_METRES
-                if source_matches and location_matches:
+                radius_covered = max(search_radii) <= POI_BACKGROUND_RADIUS_METRES
+                if source_matches and location_matches and radius_covered:
                     cached_pois = filter_pois_by_category(background, category_key)
                     cached_pois = [p for p in cached_pois if _name_match(p)]
                     cached_pois = _prepare_pois(cached_pois, radius_m=max(search_radii))
@@ -4384,8 +4577,10 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                             self.settings,
                         )
                         wx.CallAfter(self._present_poi_list)
-                        if max(search_radii) <= POI_BACKGROUND_RADIUS_METRES:
+                        if not name_filter and max(search_radii) <= POI_BACKGROUND_RADIUS_METRES:
                             self._loading = False
+                            self._poi_fetch_in_progress = False
+                            self._fetch_reminder_spoken = False
                             return
                         miab_log(
                             "verbose",
@@ -4471,7 +4666,21 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         cache.pop(old_key, None)
 
             pois = []
+            collected_name_pois = []
+            collected_seen: set[str] = set()
             attempted_radius = radius
+
+            def _collect(poi_list: list) -> None:
+                for poi in poi_list:
+                    if not _name_match(poi):
+                        continue
+                    dedup_name = (poi.get("label", "").split(",")[0] or "").lower()
+                    dedup = f"{dedup_name}|{poi.get('kind','')}|{round(poi['lat'],5)}|{round(poi['lon'],5)}"
+                    if dedup in collected_seen:
+                        continue
+                    collected_seen.add(dedup)
+                    collected_name_pois.append(poi)
+
             for attempt_radius in search_radii:
                 attempted_radius = attempt_radius
                 if not name_filter:
@@ -4487,49 +4696,90 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     raw = filter_pois_by_category(raw, category_key)
                     pois = [p for p in raw if _name_match(p)]
                     pois.sort(key=lambda x: x.get("dist", float("inf")))
+                    if name_filter:
+                        _collect(pois)
                 elif source == "here" and here_key:
                     self._poi_fetcher.set_here_key(here_key)
-                    raw_pois = _live_cache_get("category", source, category_key, attempt_radius)
-                    if raw_pois is None:
-                        raw_pois, _ = self._poi_fetcher.fetch_pois(
+                    cached_raw_pois = _live_cache_get("category", source, category_key, attempt_radius)
+                    raw_pois = cached_raw_pois
+                    if raw_pois is None or name_filter:
+                        live_raw_pois, _ = self._poi_fetcher.fetch_pois(
                             self.lat, self.lon,
                             category=category_key, radius=attempt_radius,
                             timeout=timeout,
                             address_points=getattr(self, "_address_points", []),
                         )
-                        _live_cache_set("category", source, category_key, attempt_radius, raw_pois)
+                        if live_raw_pois is not None:
+                            raw_pois = live_raw_pois
+                            _live_cache_set("category", source, category_key, attempt_radius, raw_pois)
                     pois = [p for p in raw_pois if _name_match(p)]
+                    if name_filter:
+                        _collect(pois)
                 else:
                     # OSM — temporarily clear HERE key so fetch_pois uses Overpass
                     self._poi_fetcher.set_here_key("")
-                    raw_pois = _live_cache_get("category", source, category_key, attempt_radius)
-                    if raw_pois is None:
-                        raw_pois, _ = self._poi_fetcher.fetch_pois(
-                            self.lat, self.lon,
-                            category=category_key, radius=attempt_radius,
-                            timeout=timeout,
-                            address_points=getattr(self, "_address_points", []),
-                        )
-                        _live_cache_set("category", source, category_key, attempt_radius, raw_pois)
-                    self._poi_fetcher.set_here_key(here_key)
-                    pois = [p for p in raw_pois if _name_match(p)]
-                    if not pois and name_filter:
-                        raw_name_pois = _live_cache_get(
-                            "name", source, category_key, attempt_radius, name_filter)
-                        if raw_name_pois is None:
-                            raw_name_pois = self._poi_fetcher.fetch_osm_name_search(
+                    cached_raw_pois = _live_cache_get("category", source, category_key, attempt_radius)
+                    raw_pois = cached_raw_pois
+                    if raw_pois is None or name_filter:
+                        # Before hitting Overpass at the exact radius, check
+                        # whether the 2000m background disk cache already covers
+                        # this request.  This prevents repeated Overpass calls
+                        # when the user tries different radii ≤ 2000m.
+                        if not name_filter and attempt_radius <= POI_BACKGROUND_RADIUS_METRES:
+                            disk_bg = self._poi_fetcher.load_cached_pois(self.lat, self.lon)
+                            if disk_bg:
+                                self._all_pois      = disk_bg
+                                self._poi_fetch_lat = self.lat
+                                self._poi_fetch_lon = self.lon
+                                raw_pois = filter_pois_by_category(disk_bg, category_key)
+                                _live_cache_set("category", source, category_key, attempt_radius, raw_pois)
+                                miab_log("verbose",
+                                         f"p reused background disk cache for {category_key} radius={attempt_radius}m.",
+                                         self.settings)
+                        if raw_pois is None:
+                            live_raw_pois, _ = self._poi_fetcher.fetch_pois(
                                 self.lat, self.lon,
-                                name_filter=name_filter,
-                                radius=attempt_radius,
+                                category=category_key, radius=attempt_radius,
                                 timeout=timeout,
                                 address_points=getattr(self, "_address_points", []),
                             )
-                            _live_cache_set(
-                                "name", source, category_key, attempt_radius,
-                                raw_name_pois, name_filter)
-                        pois = [p for p in raw_name_pois if _name_match(p)]
-                if pois or not name_filter:
+                            if live_raw_pois is not None:
+                                raw_pois = live_raw_pois
+                                _live_cache_set("category", source, category_key, attempt_radius, raw_pois)
+                    self._poi_fetcher.set_here_key(here_key)
+                    pois = [p for p in raw_pois if _name_match(p)]
+                    if name_filter:
+                        _collect(pois)
+                        # Category-specific searches get a category-aware
+                        # live name query. Generic all-category searches only
+                        # use the live name query when the radius is small.
+                        if category_key != "all" or attempt_radius <= 1000:
+                            raw_name_pois = _live_cache_get(
+                                "name", source, category_key, attempt_radius, name_filter)
+                            if raw_name_pois is None:
+                                raw_name_pois = self._poi_fetcher.fetch_osm_name_search(
+                                    self.lat, self.lon,
+                                    name_filter=name_filter,
+                                    category_key=category_key,
+                                    radius=attempt_radius,
+                                    timeout=timeout,
+                                    address_points=getattr(self, "_address_points", []),
+                                )
+                                if raw_name_pois is not None:
+                                    # Only cache real results; server failures (None)
+                                    # are left uncached so the next P press retries.
+                                    _live_cache_set(
+                                        "name", source, category_key, attempt_radius,
+                                        raw_name_pois, name_filter)
+                                else:
+                                    raw_name_pois = []
+                            pois = [p for p in raw_name_pois if _name_match(p)]
+                            _collect(pois)
+                if not name_filter and pois:
                     break
+
+            if name_filter:
+                pois = collected_name_pois
 
             if getattr(self, "_poi_explore_stack", []):
                 self._loading = False
@@ -4543,11 +4793,15 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     self.settings,
                 )
                 self._loading = False
+                self._poi_fetch_in_progress = False
+                self._fetch_reminder_spoken = False
                 return
             self._poi_list     = pois
             self._poi_index    = 0
             self._poi_category = category_key
             self._loading      = False
+            self._poi_fetch_in_progress = False
+            self._fetch_reminder_spoken = False
 
             if self._poi_list:
                 wx.CallAfter(self._present_poi_list)
@@ -4562,12 +4816,14 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         attempted_radius,
                     )
                 else:
-                    wx.CallAfter(_speak,
-                                 f"No {what} found within {attempted_radius} metres.")
+                    wx.CallAfter(self.update_ui,
+                                 f"No {what} found within {attempted_radius} metres.", True)
 
         except Exception as e:
             miab_log("errors", f"POI fetch error: {e}", self.settings)
             self._loading = False
+            self._poi_fetch_in_progress = False
+            self._fetch_reminder_spoken = False
             self._poi_fetcher.set_here_key(here_key)
             if getattr(self, "_poi_explore_stack", []):
                 return
@@ -5009,12 +5265,14 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         if self.settings.get("google_api_key", "").strip():
             sources.append("google")
         preferred = initial_source or self.settings.get("poi_source", "osm")
+        initial_radius = int(self.settings.get("poi_browse_radius_km", 1) or 1) * 1000
         dlg = POICategoryDialog(
             self,
             available_sources=sources,
             preferred_source=preferred,
             initial_key=initial_key,
             initial_name=initial_name,
+            initial_radius=initial_radius,
             notice=notice,
         )
         try:
@@ -5023,14 +5281,22 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 label  = category_map.get(dlg.selected_key, "All nearby")
                 name   = dlg.selected_name
                 source = dlg.selected_source
-                if name:
-                    self._status_update(f"Searching {label.lower()} for '{name}' via {source.upper()}...")
-                else:
-                    self._status_update(f"Searching {label.lower()} via {source.upper()}...")
+                self.settings["poi_browse_radius_km"] = max(1, int(round(dlg.selected_radius / 1000.0)))
+                msg = (f"Searching {label.lower()} for '{name}' via {source.upper()}..."
+                       if name else
+                       f"Searching {label.lower()} via {source.upper()}...")
+                # Block any queued _update_location_focus from overwriting the
+                # search announcement, then deliver it after those calls drain.
+                self._suppress_location_restore = True
+                def _announce_search(m=msg):
+                    self._suppress_location_restore = False
+                    self.update_ui(m, force=True)
+                wx.CallAfter(_announce_search)
                 threading.Thread(
                     target=self._fetch_pois,
                     args=(dlg.selected_key,),
-                    kwargs={"name_filter": name, "source": source},
+                    kwargs={"name_filter": name, "source": source,
+                            "radius": dlg.selected_radius},
                     daemon=True,
                 ).start()
         finally:
@@ -5344,6 +5610,21 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     self._enter_selected_poi_or_drill()
                 return
 
+            if key == wx.WXK_F2:
+                self._rename_poi()
+                return
+
+            if key == wx.WXK_DELETE:
+                self._report_poi_nonexistent()
+                return
+
+            if _primary_down(event) and not event.ShiftDown() and not event.AltDown() and key in (ord('M'), ord('m')):
+                poi = self._poi_list[self._poi_index]
+                coords = (float(poi.get("lat", self.lat)), float(poi.get("lon", self.lon)))
+                name = poi.get("label", "").split(",")[0].strip() or poi.get("name", "").split(",")[0].strip() or "selected POI"
+                self._prompt_mark_slot(remove=False, coords=coords, name=name)
+                return
+
             if key == wx.WXK_BACK:
                 if getattr(self, "_poi_explore_stack", []):
                     self._explore_back()
@@ -5570,8 +5851,10 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         dlg.Destroy()
 
         if sel == 0:
+            saved_index = self._poi_index
             self._replace_poi_action_item(f"Exploring {name}...")
-            self._transit_drill_or_jump()
+            self._poi_index = saved_index
+            self._jump_to_poi()
             return
 
         if sel == 2:
@@ -5609,6 +5892,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         # Check if POI is in water
         if not _IS_LAND(plat, plon):
             self._status_update(f"Can't jump to {name}. Location is in water.", force=True)
+            self._close_poi_list()
             return
         
         # Check if POI is within already-loaded area by testing if streets exist there
@@ -5681,6 +5965,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         else:
             self._status_update(f"Jumping to {name}.  Loading streets...")
             self._loading = True
+            wx.CallAfter(self.map_panel.set_position, self.lat, self.lon, True, "")
             threading.Thread(
                 target=self._load_streets_after_poi_jump,
                 args=(plat, plon, name, poi.get("street", "")),
@@ -5691,6 +5976,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         """Load streets after POI jump - tries cache first."""
         try:
             from street_data import geocode_location, _load_road_cache
+            prev_suburb = getattr(self, '_current_suburb', None)
             geo = geocode_location(lat, lon)
             if geo:
                 self._current_suburb = geo.get("suburb")
@@ -5711,48 +5997,96 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             )
             
             if cache_entry and cache_entry.get("segments"):
-                # Cache hit - verify it covers this location
+                # Cache hit — check if the landing point is within the data radius.
                 cached_segments = cache_entry.get("segments", [])
                 test_label, cross = self._street_fetcher.nearest_road(lat, lon, cached_segments)
-                
                 if test_label in ("No street data nearby", "Unknown", "", "No street data"):
-                    self._loading = False
-                    suburb_name = self._current_suburb or "this area"
-                    wx.CallAfter(self._status_update, f"Jumped to {poi_name}. No cached streets.")
-                    wx.CallAfter(self._confirm_poi_suburb_download, lat, lon, poi_name, known_street, suburb_name)
-                else:
-                    self._road_segments  = cached_segments
-                    self._address_points = cache_entry.get("addresses", [])
-                    self._road_fetched   = True
-                    self._data_ready     = True
-                    self._cache_center_lat = lat
-                    self._cache_center_lon = lon
-                    self._road_fetch_lat = lat
-                    self._road_fetch_lon = lon
-                    self._loading        = False
-                    try:
-                        self._free_engine.set_segments(cached_segments)
-                    except Exception:
-                        pass
-                    
-                    self.street_label = test_label
-                    wx.CallAfter(self.map_panel.set_position, lat, lon, True, test_label)
-                    wx.CallAfter(self._update_street_display)
-                    
-                    # Fetch POI intersection info
-                    threading.Thread(target=self._fetch_poi_intersection,
-                                   args=(lat, lon, poi_name, known_street), daemon=True).start()
+                    # Distinguish park/open-area (within loaded radius) from a street
+                    # that genuinely lies outside the loaded data area.
+                    # Prefer the cache entry's own stored center over the old fetch
+                    # origin — they can differ when the named cache (e.g. Wellington
+                    # Point) was downloaded from a different location than the
+                    # session's first street fetch (e.g. Ormiston).
+                    prev_lat = cache_entry.get("cache_center_lat") or getattr(self, '_road_fetch_lat', None)
+                    prev_lon = cache_entry.get("cache_center_lon") or getattr(self, '_road_fetch_lon', None)
+                    radius   = getattr(self, '_street_radius', 3000)
+                    if (prev_lat is None or prev_lon is None or
+                            dist_metres(lat, lon, prev_lat, prev_lon) > radius):
+                        # Outside the data — download or prompt depending on suburb.
+                        self._loading = False
+                        suburb_name = self._current_suburb or "this area"
+                        fn = (self._auto_download_poi_suburb
+                              if suburb_name and suburb_name == prev_suburb
+                              else self._confirm_poi_suburb_download)
+                        wx.CallAfter(self._status_update,
+                                     f"Jumped to {poi_name}. No cached streets.")
+                        wx.CallAfter(fn, lat, lon, poi_name, known_street, suburb_name)
+                        return
+                    # Within radius (park/open area) — load segments as-is
+                    test_label = ""
+                self._road_segments  = cached_segments
+                self._address_points = cache_entry.get("addresses", [])
+                self._road_fetched   = True
+                self._data_ready     = True
+                self._cache_center_lat = lat
+                self._cache_center_lon = lon
+                self._road_fetch_lat = lat
+                self._road_fetch_lon = lon
+                self._loading        = False
+                try:
+                    self._free_engine.set_segments(cached_segments)
+                except Exception:
+                    pass
+                self.street_label = test_label
+                wx.CallAfter(self.map_panel.set_position, lat, lon, True, test_label)
+                wx.CallAfter(self._update_street_display)
+                threading.Thread(target=self._fetch_poi_intersection,
+                               args=(lat, lon, poi_name, known_street), daemon=True).start()
             else:
+                # No named cache for this suburb — but check if currently-loaded
+                # segments already cover this location before prompting a download.
+                # (e.g. Ormiston cache loaded, user jumps to a Wellington Point POI
+                # that geocodes as "Wellington Point" → no separate cache entry exists
+                # yet the data is already in memory.)
+                existing_segs = getattr(self, '_road_segments', [])
+                if existing_segs:
+                    test_label, _ = self._street_fetcher.nearest_road(lat, lon, existing_segs)
+                    prev_lat = getattr(self, '_road_fetch_lat', None)
+                    prev_lon = getattr(self, '_road_fetch_lon', None)
+                    within_radius = (
+                        prev_lat is not None and prev_lon is not None and
+                        dist_metres(lat, lon, prev_lat, prev_lon) <= getattr(self, '_street_radius', 3000)
+                    )
+                    if test_label not in ("No street data nearby", "Unknown", "", "No street data") or within_radius:
+                        self._road_fetched = True
+                        self._data_ready   = True
+                        self._loading      = False
+                        try:
+                            self._free_engine.set_segments(existing_segs)
+                        except Exception:
+                            pass
+                        self.street_label = test_label
+                        wx.CallAfter(self.map_panel.set_position, lat, lon, True, test_label)
+                        wx.CallAfter(self._update_street_display)
+                        threading.Thread(target=self._fetch_poi_intersection,
+                                         args=(lat, lon, poi_name, known_street), daemon=True).start()
+                        return
                 self._loading = False
                 suburb_name = self._current_suburb or "this area"
+                fn = (self._auto_download_poi_suburb
+                      if suburb_name and suburb_name == prev_suburb
+                      else self._confirm_poi_suburb_download)
                 wx.CallAfter(self._status_update, f"Jumped to {poi_name}. No cached streets.")
-                wx.CallAfter(self._confirm_poi_suburb_download, lat, lon, poi_name, known_street, suburb_name)
+                wx.CallAfter(fn, lat, lon, poi_name, known_street, suburb_name)
         except Exception as e:
             miab_log("poi_jump", f"Cache load error: {e}", self.settings)
             self._loading = False
             suburb_name = getattr(self, '_current_suburb', None) or "this area"
+            fn = (self._auto_download_poi_suburb
+                  if suburb_name and suburb_name == prev_suburb
+                  else self._confirm_poi_suburb_download)
             wx.CallAfter(self._status_update, f"Jumped to {poi_name}. Error loading cache.")
-            wx.CallAfter(self._confirm_poi_suburb_download, lat, lon, poi_name, known_street, suburb_name)
+            wx.CallAfter(fn, lat, lon, poi_name, known_street, suburb_name)
 
     def _fetch_poi_intersection(self, lat, lon, poi_name, known_street=""):
         """Find the two closest named roads to the POI. Delegates to PoiFetcher."""
@@ -6821,6 +7155,51 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                          args=(poi["lat"], poi["lon"], name,
                                poi.get("street", "")), daemon=True).start()
 
+    def _suppress_poi_entry(self, poi: dict, name: str | None = None) -> None:
+        """Persist a local POI suppression entry for the given POI dict."""
+        name = (name or poi.get("name") or poi.get("label") or "POI").split(",")[0].strip()
+        suppressed = _load_suppressed()
+        suppressed.append({
+            "name":     name.lower(),
+            "lat":      round(float(poi.get("lat", 0)), 4),
+            "lon":      round(float(poi.get("lon", 0)), 4),
+            "kind":     poi.get("kind", ""),
+            "source":   poi.get("source", "osm"),
+            "reported": json.dumps({"t": time.time()}),
+        })
+        _save_suppressed(suppressed)
+
+    def _rename_poi_entry(self, poi: dict, new_name: str, old_name: str | None = None) -> tuple[dict, list]:
+        """Persist a local POI rename and return the updated POI plus rename table."""
+        old_name = (old_name or poi.get("name") or poi.get("label") or "POI").split(",")[0].strip()
+        new_name = (new_name or "").strip()
+        if not new_name:
+            return dict(poi), _load_renamed()
+
+        renamed = _load_renamed()
+        plat = round(float(poi.get("lat", 0)), 4)
+        plon = round(float(poi.get("lon", 0)), 4)
+        renamed = [r for r in renamed
+                   if not (r.get("old_name", "").lower() == old_name.lower()
+                           and abs(r.get("lat", 0) - plat) < 0.0002
+                           and abs(r.get("lon", 0) - plon) < 0.0002)]
+        renamed.append({
+            "old_name": old_name.lower(),
+            "new_name": new_name,
+            "lat":      plat,
+            "lon":      plon,
+            "kind":     poi.get("kind", ""),
+            "source":   poi.get("source", "osm"),
+        })
+        _save_renamed(renamed)
+
+        updated = dict(poi)
+        updated["name"] = new_name
+        old_label = updated.get("label", "")
+        if old_label:
+            updated["label"] = old_label.replace(old_label.split(",")[0], new_name, 1)
+        return updated, renamed
+
     def _report_poi_nonexistent(self):
         """Delete key — confirm, suppress locally, and optionally post OSM note."""
         if not self._poi_list or self._poi_index >= len(self._poi_list):
@@ -6842,17 +7221,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         dlg.Destroy()
 
         # ── Option 1: local suppress ──────────────────────────────────
-        suppressed = _load_suppressed()
-        entry = {
-            "name":     name.lower(),
-            "lat":      round(float(poi.get("lat", 0)), 4),
-            "lon":      round(float(poi.get("lon", 0)), 4),
-            "kind":     poi.get("kind", ""),
-            "source":   poi.get("source", "osm"),
-            "reported": json.dumps({"t": time.time()}),
-        }
-        suppressed.append(entry)
-        _save_suppressed(suppressed)
+        self._suppress_poi_entry(poi, name)
 
         # Remove from current list immediately
         self._poi_list.pop(self._poi_index)
@@ -6931,29 +7300,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             return
 
         # ── Save to renamed_pois.json ─────────────────────────────────
-        renamed = _load_renamed()
-        # Remove any existing entry for this POI first
-        plat = round(float(poi.get("lat", 0)), 4)
-        plon = round(float(poi.get("lon", 0)), 4)
-        renamed = [r for r in renamed
-                   if not (r.get("old_name", "").lower() == old_name.lower()
-                           and abs(r.get("lat", 0) - plat) < 0.0002
-                           and abs(r.get("lon", 0) - plon) < 0.0002)]
-        renamed.append({
-            "old_name": old_name.lower(),
-            "new_name": new_name,
-            "lat":      plat,
-            "lon":      plon,
-            "kind":     poi.get("kind", ""),
-            "source":   poi.get("source", "osm"),
-        })
-        _save_renamed(renamed)
+        poi, renamed = self._rename_poi_entry(poi, new_name, old_name)
 
         # Update in current list immediately
-        poi = dict(poi)
-        poi["name"] = new_name
-        old_label = poi.get("label", "")
-        poi["label"] = old_label.replace(old_label.split(",")[0], new_name, 1)
         self._poi_list[self._poi_index] = poi
         self._show_poi_in_listbox()
         wx.CallAfter(self.listbox.SetFocus)
@@ -7158,7 +7507,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             name = "current position"
         return coords, name
 
-    def _prompt_mark_slot(self, remove=False):
+    def _prompt_mark_slot(self, remove=False, coords=None, name=None):
         """Ask for mark slot 1-3 and apply immediately on number press."""
         title = "Remove Mark" if remove else "Store Mark"
         prompt = "Remove mark 1, 2, or 3." if remove else "Store mark 1, 2, or 3."
@@ -7182,9 +7531,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 else:
                     self._status_update(f"mark {slot} not set", force=True)
             else:
-                coords, name = self._current_map_place()
-                self._map_marks[slot] = {"coords": coords, "name": name}
-                self._status_update(f"mark {slot} set to {name}", force=True)
+                mark_coords = coords
+                mark_name = name
+                if mark_coords is None or mark_name is None:
+                    mark_coords, mark_name = self._current_map_place()
+                self._mark_coords(slot, mark_coords, mark_name)
             dlg.EndModal(wx.ID_OK)
 
         def _hook(event):
@@ -7225,8 +7576,37 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             coords = (float(lat), float(lon))
         else:
             coords, name = self._current_map_place()
-        self._map_destination = {"coords": coords, "name": name}
-        self._status_update(f"Destination set to {name}.", force=True)
+        self._set_map_destination_from_coords(coords, name)
+
+    def _set_map_destination_from_coords(self, coords, name, announce=True):
+        self._map_destination = {"coords": (float(coords[0]), float(coords[1])), "name": name}
+        if announce:
+            self._status_update(f"Destination set to {name}.", force=True)
+
+    def _set_route_destination_from_coords(self, coords, name, announce=True):
+        self._find_food_destination = {"coords": (float(coords[0]), float(coords[1])), "name": name}
+        self._set_map_destination_from_coords(coords, name, announce=announce)
+
+    def _get_mark_destination(self):
+        return getattr(self, "_find_food_destination", None) or getattr(self, "_map_destination", None)
+
+    def _announce_destination(self):
+        dest = self._get_mark_destination()
+        if not dest:
+            self._status_update("Destination not set.", force=True)
+            return
+        name = dest.get("name", "destination")
+        coords = dest.get("coords") or ()
+        if len(coords) == 2:
+            lat, lon = coords
+            self._status_update(f"Destination is {name}, at {lat:.4f}, {lon:.4f}.", force=True)
+        else:
+            self._status_update(f"Destination is {name}.", force=True)
+
+    def _mark_coords(self, slot, coords, name, announce=True):
+        self._map_marks[slot] = {"coords": (float(coords[0]), float(coords[1])), "name": name}
+        if announce:
+            self._status_update(f"mark {slot} set to {name}", force=True)
 
     def _prompt_destination_mark_slot(self):
         marks = getattr(self, "_map_marks", {})
@@ -7268,13 +7648,10 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
     def _report_mark_to_destination(self, slot):
         mark = getattr(self, "_map_marks", {}).get(slot)
         if not mark:
-            self._status_update(
-                f"mark {slot} not set. Press Ctrl M on Windows/Linux or Command M on Mac, then {slot}.",
-                force=True,
-            )
+            self._status_update(f"Mark {slot} not set.", force=True)
             return
 
-        dest = getattr(self, "_map_destination", None)
+        dest = self._get_mark_destination()
 
         if self.street_mode and not dest:
             # Street mode with no destination: report distance from HERE to the mark.
@@ -7306,7 +7683,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             threading.Thread(target=_fetch_walk, daemon=True).start()
             return
         if not dest:
-            self._status_update("Destination not set. Press D at the destination.", force=True)
+            self._status_update("Destination not set.", force=True)
             return
         origin = mark["coords"]
         target = dest["coords"]
@@ -7342,6 +7719,19 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 wx.CallAfter(self._status_update, fallback, True)
 
         threading.Thread(target=_fetch_route, daemon=True).start()
+
+    def _announce_mark(self, slot):
+        mark = getattr(self, "_map_marks", {}).get(slot)
+        if not mark:
+            self._status_update(f"Mark {slot} not set.", force=True)
+            return
+        coords = mark.get("coords") or ()
+        name = mark.get("name", f"mark {slot}")
+        if len(coords) != 2:
+            self._status_update(f"Mark {slot}, {name}.", force=True)
+            return
+        lat, lon = coords
+        self._status_update(f"Mark {slot}, {name}, at {lat:.4f}, {lon:.4f}.", force=True)
 
     def _ors_route_summary(self, origin, target, api_key, profile="driving-car"):
         cache_key = self._ors_route_cache_key(origin, target) + f"_{profile}"
@@ -7801,6 +8191,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             )
             self._loading = False
             self._poi_fetch_in_progress = False
+            self._fetch_reminder_spoken = False
             # Discard if street mode was cancelled while fetching
             if not self.street_mode:
                 miab_log(
@@ -7832,6 +8223,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         except Exception as e:
             self._loading = False
             self._poi_fetch_in_progress = False
+            self._fetch_reminder_spoken = False
             miab_log("errors", f"Background POI fetch error: {e}", self.settings)
 
     def _free_announce_poi_update(self):
@@ -7969,9 +8361,23 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             pass
 
     def _on_loading_tick(self, event):
-        """1s timer — tick while streets or POIs are loading."""
-        if getattr(self, '_loading', False) or getattr(self, '_thinking_beep_active', False):
+        """Timer tick for loading feedback."""
+        if getattr(self, '_thinking_beep_active', False):
             self.sound.play_poi_tone("both")
+            return
+        if not getattr(self, '_loading', False):
+            return
+        if getattr(self, '_poi_fetch_in_progress', False):
+            return
+        if not getattr(self, 'street_mode', False):
+            return
+
+        now = time.time()
+        last = getattr(self, '_last_street_loading_beep_at', 0.0)
+        if now - last < 2.0:
+            return
+        self._last_street_loading_beep_at = now
+        self.sound.play_poi_tone("both")
 
     def _play_pois_ready_sound(self):
         """Notification sound when background POI fetch completes."""
@@ -7979,6 +8385,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _play_roads_ready_sound(self):
         """Notification sound when road data is ready."""
+        now = time.time()
+        last = getattr(self, "_last_roads_ready_sound_at", 0.0)
+        if now - last < 2.5:
+            return
+        self._last_roads_ready_sound_at = now
         self._play_system_sound("default")
 
     def _open_settings(self):
@@ -8567,133 +8978,128 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self.update_ui(".  ".join(parts) + ".")
 
 
-    def on_key(self, event):
-        key   = event.GetKeyCode()
-        shift = event.ShiftDown()
-        primary = _primary_down(event)
-        alt = event.AltDown()
-        if getattr(self, "_thinking_active", False) or getattr(self, "_suppress_location_restore", False):
-            _log_key_event(self, event, "frame", "suppressed while thinking")
-            return
-        # True when no modifier is held — used to prevent bare letter/F-key
-        # handlers from firing on modifier shortcuts.
-        no_mod = not shift and not primary and not alt
-        _log_key_event(self, event, "frame", f"street_mode={self.street_mode} walking={getattr(self, '_walking_mode', False)} nav={getattr(self, '_nav_active', False)}")
-
-
-        dist, _ = _nearest_city(self._city_lats, self._city_lons, self.lat, self.lon)
-        on_land = _IS_LAND(self.lat, self.lon) or dist < 0.3
-
-        # Primary+Alt+F — find food along active transit line.
-        # Must come BEFORE the primary+F favourites check below, which otherwise
-        # matches first because its condition does not exclude alt being held.
-        if primary and alt and not shift and (key == ord('F') or key == ord('f')):
-            self._tool_find_food()
-            return
-
+    def _handle_preface_shortcuts(self, event, key, shift, primary, alt, no_mod):
         # Favourites — works in any mode when a coordinate/POI is available.
         if primary and not alt and key in (ord('F'), ord('f')):
             if shift:
                 self._add_current_favourite()
             else:
                 self._show_favourites()
-            return
+            return True
 
         # Escape exits walking mode.
         if key == wx.WXK_ESCAPE and getattr(self, '_walking_mode', False):
             self._nav_active = False
             self._walk_toggle()
-            return
+            return True
 
+        # Bare F in street mode toggles free mode when there is no POI list.
         if no_mod and (key == ord('F') or key == ord('f')):
             if self.street_mode and not bool(self._poi_list):
                 self._toggle_free_mode()
-            return
-        if getattr(self, '_free_mode', False):
-            if key == wx.WXK_UP:
-                self._free_step(1); return
-            if key == wx.WXK_DOWN:
-                self._free_step(-1); return
-            if primary and key == wx.WXK_LEFT:
-                self._free_snap_cross(); return
-            if primary and key == wx.WXK_RIGHT:
-                self._free_snap_cross(); return
-            if key == wx.WXK_LEFT:
-                text, pois = self._free_engine.describe_left_with_pois()
-                self._free_last_side_pois = pois
-                self._free_last_side      = "left"
-                self.update_ui(text if text else "Nothing on the left."); return
-            if key == wx.WXK_RIGHT:
-                text, pois = self._free_engine.describe_right_with_pois()
-                self._free_last_side_pois = pois
-                self._free_last_side      = "right"
-                self.update_ui(text if text else "Nothing on the right."); return
-            if no_mod and (key == ord('A') or key == ord('a')):
-                self._announce_address(); return
-            if no_mod and (key == ord('H') or key == ord('h')):
-                self._free_heading(); return
-            if no_mod and (key == ord('X') or key == ord('x')):
-                self._free_describe_intersection(); return
-            if no_mod and (key == ord('R') or key == ord('r')):
-                self._free_turnaround(); return
-            if key in (wx.WXK_DELETE, wx.WXK_F2):
-                self._free_poi_action(key); return
-            # Let system key combos (Alt+F4, etc.) fall through
-            if alt or key in (wx.WXK_F1, wx.WXK_F7, wx.WXK_F11,
+            return True
+
+        return False
+
+    def _handle_free_mode_shortcuts(self, key, shift, primary, alt, no_mod):
+        if not getattr(self, '_free_mode', False):
+            return False
+        if key == wx.WXK_UP:
+            self._free_step(1); return True
+        if key == wx.WXK_DOWN:
+            self._free_step(-1); return True
+        if primary and key == wx.WXK_LEFT:
+            self._free_snap_cross(); return True
+        if primary and key == wx.WXK_RIGHT:
+            self._free_snap_cross(); return True
+        if key == wx.WXK_LEFT:
+            text, pois = self._free_engine.describe_left_with_pois()
+            self._free_last_side_pois = pois
+            self._free_last_side      = "left"
+            self.update_ui(text if text else "Nothing on the left."); return True
+        if key == wx.WXK_RIGHT:
+            text, pois = self._free_engine.describe_right_with_pois()
+            self._free_last_side_pois = pois
+            self._free_last_side      = "right"
+            self.update_ui(text if text else "Nothing on the right."); return True
+        if no_mod and (key == ord('A') or key == ord('a')):
+            self._announce_address(); return True
+        if no_mod and (key == ord('H') or key == ord('h')):
+            self._free_heading(); return True
+        if no_mod and (key == ord('X') or key == ord('x')):
+            self._free_describe_intersection(); return True
+        if no_mod and (key == ord('R') or key == ord('r')):
+            self._free_turnaround(); return True
+        if key in (wx.WXK_DELETE, wx.WXK_F2):
+            self._free_poi_action(key); return True
+        # Let system key combos (Alt+F4, etc.) and the shared function keys
+        # fall through to the normal handlers below.
+        if alt or key in (wx.WXK_F1, wx.WXK_F7, wx.WXK_F11,
                                            wx.WXK_F2, wx.WXK_F3, wx.WXK_F4,
-                                           wx.WXK_F5, wx.WXK_F6):                pass  # fall through to normal handlers below
-            else:
-                return
+                                           wx.WXK_F5, wx.WXK_F6):
+            return False
+        return True
 
-        if self.street_mode:
-            if primary:
-                step = 0.0027      # ~300m — jump to next block
-            elif shift:
-                step = 0.00018     # ~20m — fine positioning
+    def _handle_global_function_keys(self, key, shift, primary, alt, no_mod):
+        if primary and shift and not alt and (key == ord('S') or key == ord('s')):
+            miab_log("feature_usage", "Key: Ctrl+Shift+S (satellite view)", self.settings)
+            lat, lon = self._poi_lat_lon_if_focused()
+            self._satellite_view_at_location(lat, lon); return True
+        if primary and shift and alt and (key == ord('S') or key == ord('s')):
+            miab_log("feature_usage", "Key: Ctrl+Shift+Alt+S (street view)", self.settings)
+            lat, lon = self._poi_lat_lon_if_focused()
+            poi_focused = (lat, lon) != (self.lat, self.lon) or (
+                bool(getattr(self, '_poi_list', [])) and
+                getattr(self, 'listbox', None) is not None and
+                self.listbox.HasFocus()
+            )
+            if self.street_mode or getattr(self, '_walking_mode', False) or poi_focused:
+                self._streetview_at_location(lat, lon)
             else:
-                step = 0.00072     # ~80m — normal walking pace
-        elif primary:
-            step = 3.0
-        elif shift:
-            step = 0.009      # ~1km — fine map movement
-        else:
-            step = 0.02       # ~2km — suburb-scale map movement
-
-        if no_mod and key == wx.WXK_F1:    self.show_help();              return
+                self._status_update(
+                    "Street View works in street mode or from a POI list. "
+                    "Showing satellite instead.", force=True)
+                self._satellite_view_at_location(lat, lon)
+            return True
+        if no_mod and key == wx.WXK_F1:    self.show_help();              return True
         if shift and not primary and key == wx.WXK_F2:
-            self._announce_climate_zone(); return
-        if no_mod and key == wx.WXK_F2:    self._announce_current_place_or_street();   return
+            self._announce_climate_zone(); return True
+        if no_mod and key == wx.WXK_F2:    self._announce_current_place_or_street();   return True
         if shift and not primary and key == wx.WXK_F3:
-            self._status_update(self.sound.volume_down(), force=True); return
+            self._status_update(self.sound.volume_down(), force=True); return True
         if shift and not primary and key == wx.WXK_F4:
-            self._status_update(self.sound.volume_up(), force=True); return
+            self._status_update(self.sound.volume_up(), force=True); return True
         if no_mod and key == wx.WXK_F3:
-            self._status_update(f"{abs(self.lat):.4f} {'North' if self.lat >= 0 else 'South'}", force=True); return
+            self._status_update(f"{abs(self.lat):.4f} {'North' if self.lat >= 0 else 'South'}", force=True); return True
         if primary and key == ord(','):
-            self._open_settings();  return
+            self._open_settings();  return True
         if no_mod and key == wx.WXK_F4:
-            self._status_update(f"{abs(self.lon):.4f} {'East' if self.lon >= 0 else 'West'}", force=True); return
+            self._status_update(f"{abs(self.lon):.4f} {'East' if self.lon >= 0 else 'West'}", force=True); return True
         if no_mod and key == wx.WXK_F5:
             miab_log("feature_usage", "Key: F5 (continent)", self.settings)
-            self.announce_continent();    return
+            self.announce_continent();    return True
+        if shift and not primary and key == wx.WXK_F5:
+            miab_log("feature_usage", "Key: Shift+F5 (toggle GeoFeatures)", self.settings)
+            self._toggle_geo_features();  return True
         if no_mod and key == wx.WXK_F6:
             miab_log("feature_usage", "Key: F6 (facts)", self.settings)
-            self.announce_facts();        return
+            self.announce_facts();        return True
         if shift and not primary and key == wx.WXK_F6:
             miab_log("feature_usage", f"Key: Shift+F6 (Wikipedia) at {self.last_country_found}", self.settings)
-            self.announce_wikipedia_summary(); return
-        if no_mod and key == wx.WXK_F7:    self.toggle_sounds();    return
+            self.announce_wikipedia_summary(); return True
+        if no_mod and key == wx.WXK_F7:    self.toggle_sounds();    return True
         if no_mod and key == wx.WXK_F8:
             flashed = self._flash_current_country()
             if flashed:
-                self._accessible_status("F8: current country flashed on the map.")
+                country = getattr(self, 'last_country_found', 'country')
+                self._accessible_status(f"Displaying {country}.")
             else:
-                self._accessible_status("F8: no current country to flash.")
-            return
-        if no_mod and key == wx.WXK_F9:    self._toggle_map_fullscreen(); return
+                self._accessible_status("No current country to display.")
+            return True
+        if no_mod and key == wx.WXK_F9:    self._toggle_map_fullscreen(); return True
         if shift and not primary and key == wx.WXK_F10:
             self._game.repeat_target()
-            return
+            return True
         if primary and key == wx.WXK_F10:
             if self._session and self._session.active:
                 self._session.stop()
@@ -8703,7 +9109,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 wx.CallAfter(self._resume_location_sound)
             else:
                 self._start_challenge_session()
-            return
+            return True
         if no_mod and key == wx.WXK_F10:
             if self._session and self._session.active:
                 self._session.stop()
@@ -8721,7 +9127,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     self._game.start(self.df, self.lat, self.lon)
                 else:
                     self._status_update("No city data available for the challenge.", force=True)
-            return
+            return True
         if key == wx.WXK_F11:
             if shift and not primary:
                 if not self.street_mode:
@@ -8729,7 +9135,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 else:
                     self._status_update("Shift+F11: pre-download works from world map only.", force=True)
             elif no_mod:
-                if getattr(self, '_prefetch_in_progress', False):
+                if not self.street_mode and (getattr(self, '_prefetch_in_progress', False) or getattr(self, '_loading', False)):
                     self._status_update("Street download in progress. Please wait.")
                 else:
                     self.toggle_street_mode()
@@ -8737,34 +9143,89 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     miab_log("navigation",
                              f"Street mode {'entered' if self.street_mode else 'exited'}.",
                              self.settings)
-            return
+            return True
         if no_mod and key == wx.WXK_F12:
-            self._open_tools_menu(); return
+            self._open_tools_menu(); return True
+        return False
 
+    def _handle_global_map_shortcuts(self, key, shift, primary, alt, no_mod):
+        if no_mod and (key == ord('L') or key == ord('l')):
+            miab_log("feature_usage", "Key: L (latitude/longitude)", self.settings)
+            self._announce_lat_lon(); return True
+        if shift and not primary and (key == ord('L') or key == ord('l')):
+            miab_log("feature_usage", "Key: Shift+L (languages)", self.settings)
+            self._announce_languages(); return True
+        if no_mod and key == wx.WXK_SPACE:
+            if self._session and self._session.active:
+                if self._session.on_space(self.df, self.lat, self.lon):
+                    return True
+        if no_mod and (key == ord('J') or key == ord('j')):
+            if self._game.active:
+                self._status_update("Jump is disabled during the challenge. Use your ears!", force=True)
+                return True
+            if self.street_mode:
+                dlg = wx.MessageDialog(self,
+                    "Exit street view and jump to a new location?",
+                    "Exit Street View", wx.YES_NO | wx.NO_DEFAULT)
+                if dlg.ShowModal() != wx.ID_YES:
+                    dlg.Destroy()
+                    self.listbox.SetFocus()
+                    return True
+                dlg.Destroy()
+                self._exit_street_mode()
+            self.show_jump_dialog();  return True
+        if primary and not shift and not alt and key in (ord('1'), ord('2'), ord('3')):
+            self._announce_mark(int(chr(key)))
+            return True
+        if primary and shift and not alt and key in (ord('1'), ord('2'), ord('3')):
+            self._report_mark_to_destination(int(chr(key)))
+            return True
+        if primary and not shift and not alt and (key == ord('M') or key == ord('m')):
+            self._prompt_mark_slot(remove=False)
+            return True
+        if primary and shift and not alt and (key == ord('M') or key == ord('m')):
+            self._prompt_mark_slot(remove=True)
+            return True
+        if primary and not shift and not alt and (key == ord('D') or key == ord('d')):
+            self._set_map_destination()
+            return True
+        if primary and shift and not alt and (key == ord('D') or key == ord('d')):
+            self._announce_destination()
+            return True
+        if primary and alt and not shift and (key == ord('D') or key == ord('d')):
+            self._prompt_destination_mark_slot()
+            return True
+        if primary and alt and not shift:
+            alt_map = {ord('1'): 1, ord('2'): 2, ord('3'): 3,
+                       ord('4'): 4, ord('5'): 5, ord('6'): 6}
+            if key in alt_map:
+                self._poi_detail(alt_map[key]); return True
+        if not self.street_mode:
+            if shift and not primary and not alt and (key == ord('P') or key == ord('p')):
+                self._announce_postcode();  return True
+        return False
+
+    def _handle_map_shortcuts(self, event, key, shift, primary, alt, no_mod):
         if (not self.street_mode and not getattr(self, "_walking_mode", False)
                 and not getattr(self, "_free_mode", False)
                 and not getattr(self, "_game", None).active):
             if no_mod and (key == ord('R') or key == ord('r')):
-                self._announce_current_region(); return
+                self._announce_current_region(); return True
             if no_mod and (key == ord('C') or key == ord('c')):
-                self._announce_current_country(); return
+                self._announce_current_country(); return True
             if shift and not primary and (key == ord('C') or key == ord('c')):
                 miab_log("feature_usage", "Key: Shift+C (nearest city only)", self.settings)
-                self._announce_nearest_city_only(); return
-            if no_mod and (key == ord('G') or key == ord('g')):
-                self._toggle_geo_features(); return
+                self._announce_nearest_city_only(); return True
 
-        # ── GPS navigation intercept — Up/Down step through instructions ──
-        # Fires regardless of walking mode, street mode or world map mode.
         if getattr(self, '_nav_active', False):
             if key == wx.WXK_UP:
-                self._nav_step_forward(); return
+                self._nav_step_forward(); return True
             if key == wx.WXK_DOWN:
-                self._nav_step_back(); return
+                self._nav_step_back(); return True
             if no_mod and (key == ord('I') or key == ord('i')):
-                self._nav_announce_step(); return
+                self._nav_announce_step(); return True
             if no_mod and (key == ord('X') or key == ord('x')):
-                self._nav_announce_cross_street(); return
+                self._nav_announce_cross_street(); return True
 
         page_up = getattr(wx, "WXK_PAGEUP", getattr(wx, "WXK_PRIOR", None))
         page_down = getattr(wx, "WXK_PAGEDOWN", getattr(wx, "WXK_NEXT", None))
@@ -8778,215 +9239,174 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 self._street_survey_go_address(direction)
             else:
                 event.Skip()
-            return
+            return True
         if no_mod and key in (page_up, page_down) and not self.street_mode and not getattr(self, "_walking_mode", False):
             self._cycle_spatial_tones_mode(1 if key == page_down else -1)
-            return
+            return True
 
-        # X key — intersection in street/walk mode.
         if no_mod and (key == ord('X') or key == ord('x')):
             if self.street_mode or getattr(self, '_walking_mode', False):
                 miab_log("feature_usage", "Key: X (nearest intersection)", self.settings)
                 self._announce_nearest_intersection()
-            return
-
-        # N key — nearby features.
+            return True
         if no_mod and (key == ord('N') or key == ord('n')):
             miab_log("feature_usage", "Key: N (nearby features)", self.settings)
-            self._announce_nearby_features(); return
-
+            self._announce_nearby_features(); return True
         if no_mod and (key == ord('P') or key == ord('p')):
             miab_log("feature_usage", "Key: p (nearby menu)", self.settings)
-            self._show_poi_category_dialog(); return
+            self._show_poi_category_dialog(); return True
 
-        # ── Satellite / Street View — available in all modes ─────────
-        if primary and shift and not alt and (key == ord('S') or key == ord('s')):
-            # Ctrl+Shift+S: satellite view everywhere
-            miab_log("feature_usage", "Key: Ctrl+Shift+S (satellite view)", self.settings)
-            lat, lon = self._poi_lat_lon_if_focused()
-            self._satellite_view_at_location(lat, lon); return
-        if primary and shift and alt and (key == ord('S') or key == ord('s')):
-            # Ctrl+Shift+Alt+S: street view in street/walking mode, or from a
-            # focused POI in any mode (POI has real coords worth fetching).
-            # Falls back to satellite only when on the bare world map.
-            miab_log("feature_usage", "Key: Ctrl+Shift+Alt+S (street view)", self.settings)
-            lat, lon = self._poi_lat_lon_if_focused()
-            poi_focused = (lat, lon) != (self.lat, self.lon) or (
-                bool(getattr(self, '_poi_list', [])) and
-                getattr(self, 'listbox', None) is not None and
-                self.listbox.HasFocus()
-            )
-            if self.street_mode or getattr(self, '_walking_mode', False) or poi_focused:
-                self._streetview_at_location(lat, lon)
-            else:
-                self._status_update(
-                    "Street View works in street mode or from a POI list. "
-                    "Showing satellite instead.", force=True)
-                self._satellite_view_at_location(lat, lon)
-            return
-
-        # ── World map only keys ───────────────────────────────────────
-        if not self.street_mode and not getattr(self, '_walking_mode', False):
+        if (not self.street_mode and not getattr(self, '_walking_mode', False)):
             if no_mod and (key == ord('T') or key == ord('t')):
                 miab_log("feature_usage", "Key: T (local time)", self.settings)
-                self.announce_time();  return
+                self.announce_time();  return True
             if shift and not primary and (key == ord('T') or key == ord('t')):
                 miab_log("feature_usage", "Key: Shift+T (timezone)", self.settings)
-                self._announce_timezone(); return
+                self._announce_timezone(); return True
             if no_mod and (key == ord('S') or key == ord('s')):
                 miab_log("feature_usage", "Key: S (sunrise/sunset)", self.settings)
-                self._announce_sunrise_sunset(); return
+                self._announce_sunrise_sunset(); return True
             if shift and (key == ord('4') or key == ord('$')):
                 miab_log("feature_usage", "Key: $ (currency)", self.settings)
-                self._announce_currency(); return
+                self._announce_currency(); return True
             if primary and alt and key == wx.WXK_UP:
-                self._jump_nearest_land("north"); return
+                self._jump_nearest_land("north"); return True
             if primary and alt and key == wx.WXK_DOWN:
-                self._jump_nearest_land("south"); return
+                self._jump_nearest_land("south"); return True
             if primary and alt and key == wx.WXK_LEFT:
-                self._jump_nearest_land("west"); return
+                self._jump_nearest_land("west"); return True
             if primary and alt and key == wx.WXK_RIGHT:
-                self._jump_nearest_land("east"); return
+                self._jump_nearest_land("east"); return True
             if no_mod and (key == ord('A') or key == ord('a')):
                 miab_log("feature_usage", "Key: A (nearest airport)", self.settings)
-                self._announce_nearest_airport(); return
+                self._announce_nearest_airport(); return True
             if shift and not primary and (key == ord('A') or key == ord('a')):
                 miab_log("feature_usage", "Key: Shift+A (overhead flights)", self.settings)
-                self._announce_overhead_flights(); return
+                self._announce_overhead_flights(); return True
             if shift and primary and (key == ord('A') or key == ord('a')):
                 miab_log("feature_usage", "Key: Ctrl+Shift+A (airport flights)", self.settings)
-                self._announce_airport_flights(); return
+                self._announce_airport_flights(); return True
             if shift and not primary and key == wx.WXK_F1:
                 miab_log("feature_usage", "Key: Shift+F1 (capital city)", self.settings)
-                self._announce_capital(); return
+                self._announce_capital(); return True
             if no_mod and (key == ord('W') or key == ord('w')):
                 miab_log("feature_usage", "Key: W (weather)", self.settings)
-                self._announce_weather(); return
+                self._announce_weather(); return True
             if no_mod and (key == ord('Q') or key == ord('q')):
                 miab_log("feature_usage", "Key: Q (air quality)", self.settings)
-                self._announce_air_quality(); return
-        if no_mod and (key == ord('L') or key == ord('l')):
-            miab_log("feature_usage", "Key: L (latitude/longitude)", self.settings)
-            self._announce_lat_lon(); return
-        if shift and not primary and (key == ord('L') or key == ord('l')):
-            miab_log("feature_usage", "Key: Shift+L (languages)", self.settings)
-            self._announce_languages(); return
-        if no_mod and key == wx.WXK_SPACE:
-            if self._session and self._session.active:
-                if self._session.on_space(self.df, self.lat, self.lon):
-                    return
-        if no_mod and (key == ord('J') or key == ord('j')):
-            if self._game.active:
-                self._status_update("Jump is disabled during the challenge. Use your ears!", force=True)
-                return
-            if self.street_mode:
-                dlg = wx.MessageDialog(self,
-                    "Exit street view and jump to a new location?",
-                    "Exit Street View", wx.YES_NO | wx.NO_DEFAULT)
-                if dlg.ShowModal() != wx.ID_YES:
-                    dlg.Destroy()
-                    self.listbox.SetFocus()
-                    return
-                dlg.Destroy()
-                self._exit_street_mode()
-            self.show_jump_dialog();  return
+                self._announce_air_quality(); return True
+        return False
 
-        if alt and not primary and not shift and key in (ord('1'), ord('2'), ord('3')):
-            self._report_mark_to_destination(int(chr(key)))
-            return
-        if primary and not shift and not alt and (key == ord('M') or key == ord('m')):
-            self._prompt_mark_slot(remove=False)
-            return
-        if primary and shift and not alt and (key == ord('M') or key == ord('m')):
-            self._prompt_mark_slot(remove=True)
-            return
-
-        if primary and not shift and not alt and (key == ord('D') or key == ord('d')):
-            self._set_map_destination()
-            return
-
-        if primary and alt and not shift and (key == ord('D') or key == ord('d')):
-            self._prompt_destination_mark_slot()
-            return
-
-        if primary and alt and not shift:
-            alt_map = {ord('1'): 1, ord('2'): 2, ord('3'): 3,
-                       ord('4'): 4, ord('5'): 5, ord('6'): 6}
-            if key in alt_map:
-                self._poi_detail(alt_map[key]); return
-
+    def _handle_street_mode_shortcuts(self, key, shift, primary, alt, no_mod, event):
         if not self.street_mode:
-            if shift and not primary and not alt and (key == ord('P') or key == ord('p')):
-                self._announce_postcode();  return
+            return False
+        if primary and (key == ord('W') or key == ord('w')):
+            self._open_poi_website(); return True
+        if no_mod and (key == ord('W') or key == ord('w')):
+            self._walk_toggle();  return True
+        if no_mod and (key == ord('P') or key == ord('p')):
+            self._announce_poi_count();  return True
+        if no_mod and (key == ord('A') or key == ord('a')):
+            self._announce_address();    return True
+        if no_mod and (key == ord('S') or key == ord('s')):
+            self._street_search()
+            return True
+        if primary and (key == ord('G') or key == ord('g')):
+            self._nav_to_address()
+            return True
+        if no_mod and (key == ord('I') or key == ord('i')):
+            self._announce_position_info()
+            return True
+        if no_mod and (key == ord('H') or key == ord('h')):
+            if getattr(self, '_walking_mode', False):
+                heading = self._walk_compass_name(getattr(self, '_walk_heading', 0))
+                self.update_ui(f"Heading {heading}.")
+            return True
+        if no_mod and (key == ord('R') or key == ord('r')):
+            if getattr(self, '_walking_mode', False):
+                self._walk_turnaround()
+            elif self._game.active:
+                self._game.repeat_target()
+            return True
+        if key == wx.WXK_RETURN or key == wx.WXK_NUMPAD_ENTER:
+            if primary:
+                if self._street_confirm_explore(): return True
+            else:
+                if self._street_confirm_jump(): return True
+        if key == wx.WXK_SPACE:
+            if getattr(self, '_pending_snap_lat', None) is not None:
+                self.lat = self._pending_snap_lat
+                self.lon = self._pending_snap_lon
+                self._pending_snap_lat = None
+                self._pending_snap_lon = None
+                wx.CallAfter(self.map_panel.set_position, self.lat, self.lon, True, "")
+                wx.CallAfter(self._update_street_display)
+                return True
+            if getattr(self, '_pending_street_download', False):
+                self._download_new_area()
+                return True
+            self._announce_poi_crossing();  return True
 
+        if getattr(self, '_walking_mode', False):
+            if key == wx.WXK_UP:
+                if getattr(self, '_walk_browsing', False):
+                    self._walk_browsing = False
+                    if self._walk_commit_turn(announce=False):
+                        self._walk_forward()
+                        return True
+                self._walk_forward();  return True
+            if key == wx.WXK_DOWN:
+                if getattr(self, '_walk_browsing', False):
+                    self._walk_browsing = False
+                    self._walk_turn_options = []
+                    self._walk_option_idx = None
+                self._walk_backward();  return True
+            if key == wx.WXK_LEFT:
+                self._walk_turn_left();  return True
+            if key == wx.WXK_RIGHT:
+                self._walk_turn_right();  return True
+        return False
+
+    def on_key(self, event):
+        key   = event.GetKeyCode()
+        shift = event.ShiftDown()
+        primary = _primary_down(event)
+        alt = event.AltDown()
+        if getattr(self, "_thinking_active", False) or getattr(self, "_suppress_location_restore", False):
+            _log_key_event(self, event, "frame", "suppressed while thinking")
+            return
+        # True when no modifier is held — used to prevent bare letter/F-key
+        # handlers from firing on modifier shortcuts.
+        no_mod = not shift and not primary and not alt
+        _log_key_event(self, event, "frame", f"street_mode={self.street_mode} walking={getattr(self, '_walking_mode', False)} nav={getattr(self, '_nav_active', False)}")
+
+        if self._handle_preface_shortcuts(event, key, shift, primary, alt, no_mod):
+            return
+        if self._handle_free_mode_shortcuts(key, shift, primary, alt, no_mod):
+            return
 
         if self.street_mode:
-            if primary and (key == ord('W') or key == ord('w')):
-                self._open_poi_website(); return
-            if no_mod and (key == ord('W') or key == ord('w')):
-                self._walk_toggle();  return
-            if no_mod and (key == ord('P') or key == ord('p')):
-                self._announce_poi_count();  return
-            if no_mod and (key == ord('A') or key == ord('a')):
-                self._announce_address();    return
-            if no_mod and (key == ord('S') or key == ord('s')):
-                self._street_search()
-                return
-            if primary and (key == ord('G') or key == ord('g')):
-                self._nav_to_address()
-                return
-            if no_mod and (key == ord('I') or key == ord('i')):
-                self._announce_position_info()
-                return
-            if no_mod and (key == ord('H') or key == ord('h')):
-                if getattr(self, '_walking_mode', False):
-                    heading = self._walk_compass_name(getattr(self, '_walk_heading', 0))
-                    self.update_ui(f"Heading {heading}.")
-                return
-            if no_mod and (key == ord('R') or key == ord('r')):
-                if getattr(self, '_walking_mode', False):
-                    self._walk_turnaround()
-                elif self._game.active:
-                    self._game.repeat_target()
-                return
-            if key == wx.WXK_RETURN or key == wx.WXK_NUMPAD_ENTER:
-                if primary:
-                    if self._street_confirm_explore(): return
-                else:
-                    if self._street_confirm_jump(): return
-            if key == wx.WXK_SPACE:
-                if getattr(self, '_pending_snap_lat', None) is not None:
-                    self.lat = self._pending_snap_lat
-                    self.lon = self._pending_snap_lon
-                    self._pending_snap_lat = None
-                    self._pending_snap_lon = None
-                    wx.CallAfter(self.map_panel.set_position, self.lat, self.lon, True, "")
-                    wx.CallAfter(self._update_street_display)
-                    return
-                if getattr(self, '_pending_street_download', False):
-                    self._download_new_area()
-                    return
-                self._announce_poi_crossing();  return
+            if primary:
+                step = 0.0027      # ~300m — jump to next block
+            elif shift:
+                step = 0.00018     # ~20m — fine positioning
+            else:
+                step = 0.00072     # ~80m — normal walking pace
+        elif primary:
+            step = 3.0
+        elif shift:
+            step = 0.009      # ~1km — fine map movement
+        else:
+            step = 0.02       # ~2km — suburb-scale map movement
 
-            # Walking mode intercepts arrow keys
-            if getattr(self, '_walking_mode', False):
-                if key == wx.WXK_UP:
-                    if getattr(self, '_walk_browsing', False):
-                        self._walk_browsing = False
-                        if self._walk_commit_turn(announce=False):
-                            self._walk_forward()
-                            return
-                    self._walk_forward();  return
-                if key == wx.WXK_DOWN:
-                    if getattr(self, '_walk_browsing', False):
-                        self._walk_browsing = False
-                        self._walk_turn_options = []
-                        self._walk_option_idx = None
-                    self._walk_backward();  return
-                if key == wx.WXK_LEFT:
-                    self._walk_turn_left();  return
-                if key == wx.WXK_RIGHT:
-                    self._walk_turn_right();  return
+        if self._handle_global_function_keys(key, shift, primary, alt, no_mod):
+            return
+        if self._handle_global_map_shortcuts(key, shift, primary, alt, no_mod):
+            return
+        if self._handle_map_shortcuts(event, key, shift, primary, alt, no_mod):
+            return
+        if self._handle_street_mode_shortcuts(key, shift, primary, alt, no_mod, event):
+            return
 
         moved = False
         new_lat = self.lat
@@ -9004,6 +9424,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self.listbox.SetSelection(self._poi_index)
             return
 
+        if getattr(self, '_poi_fetch_in_progress', False) and not getattr(self, '_fetch_reminder_spoken', False):
+            if key in (wx.WXK_UP, wx.WXK_DOWN, wx.WXK_LEFT, wx.WXK_RIGHT):
+                _speak("Processing...")
+                self._fetch_reminder_spoken = True
+
         if key == wx.WXK_UP:
             new_lat = min(90, self.lat + step)
         elif key == wx.WXK_DOWN:
@@ -9014,6 +9439,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             new_lon = ((self.lon + step + 180) % 360) - 180
 
         if new_lat != self.lat or new_lon != self.lon:
+            test_label = "No street data nearby"
             # In street mode, check if new location has streets before moving
             if self.street_mode and self._road_segments:
                 # Check if streets exist at new location
@@ -9088,6 +9514,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     threading.Thread(target=self._query_street, daemon=True).start()
                 else:
                     threading.Thread(target=self._lookup, daemon=True).start()
+            if self.street_mode:
+                self._prev_lat = self.lat
+                self._prev_lon = self.lon
         else:
             event.Skip()
 
@@ -9311,6 +9740,15 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 self.last_city_found = (
                     city if close_place and city and city != 'nan' else ""
                 )
+                # Store the worldcities coordinate for the found city so that
+                # _try_enter_street_mode can geocode from the suburb's own
+                # location rather than the cursor position.
+                if self.last_city_found:
+                    self._last_city_found_lat = self._city_lats[idx]
+                    self._last_city_found_lon = self._city_lons[idx]
+                else:
+                    self._last_city_found_lat = None
+                    self._last_city_found_lon = None
                 self.last_state_found = (
                     state if city_matches_country and state and state != 'nan' else ""
                 )
@@ -9321,9 +9759,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         self.lat, self.lon, limit=1, country_code=country_code)
                     feature = self._geo_lookup_precise(
                         self.lat, self.lon, country_code=country_code)
-                    if feature:
-                        label = _with_nearby_town(feature)
-                    elif close_place:
+                    if close_place:
                         parts = []
                         if city and city.lower() != 'nan':
                             parts.append(city)
@@ -9332,6 +9768,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         if country and country.lower() != 'nan' and country != prev_country:
                             parts.append(country)
                         label = ", ".join(parts) if parts else city
+                    elif feature:
+                        label = _with_nearby_town(feature)
                     elif context:
                         label = ". ".join(context)
                     elif not self._geo_features_enabled():
@@ -9618,6 +10056,63 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self._verbose_trace(f"_resume_location_sound restoring label: {label!r}")
             self.update_ui(label)
 
+    def _map_help_lines(self) -> list[str]:
+        """Return the map-mode shortcut lines used by both help and docs."""
+        return [
+            "Arrow keys: move around the map.",
+            "Shift+arrows: fine movement.",
+            "Ctrl+arrows: move in large steps (~333km) for fast long-distance navigation.",
+            "Ctrl+Alt+arrows: jump to the nearest foreign country in that direction.",
+            "F2: repeat location.",
+            "Shift+F2: climate zone.",
+            "F3: latitude.",
+            "F4: longitude.",
+            "Shift+F3: volume down.",
+            "Shift+F4: volume up.",
+            "F5: continent.",
+            "F6: country facts.",
+            "Shift+F6: Wikipedia summary.",
+            "F7: toggle sounds.",
+            "F8: flash country on map.",
+            "F9: toggle full-screen map.",
+            "F10: country discovery challenge.",
+            "Ctrl+F10: scored challenge session.",
+            "Shift+F10: repeat challenge target.",
+            "F11: street mode.",
+            "Shift+F11: pre-download streets.",
+            "Page Up/Page Down: cycle spatial tones between world, country, and region.",
+            "F12: tools menu.",
+            "Ctrl+F: favourites.",
+            "Ctrl+Shift+F: add current place to favourites.",
+            "J: jump to city, country, or coordinates.",
+            "G: toggle GeoFeatures on/off.",
+            "Shift+C: nearest city only.",
+            "Ctrl+M: save current position as mark (then press 1, 2, or 3 to choose a slot).",
+            "Ctrl+Shift+M: clear a mark (then press 1, 2, or 3).",
+            "Ctrl+1, Ctrl+2, Ctrl+3: read mark 1, 2, or 3.",
+            "Ctrl+D: set current position as destination.",
+            "Ctrl+Shift+D: read destination.",
+            "Ctrl+Alt+D: set destination from a saved mark.",
+            "Ctrl+Shift+1, Ctrl+Shift+2, Ctrl+Shift+3: distance and bearing from mark to destination.",
+            "N: nearby geographic features.",
+            "P: POI search.",
+            "POI menu: selected POI address, hours, phone, website, Gemini, menu, and website launch.",
+            "T: local time.",
+            "Shift+T: timezone.",
+            "S: sunrise and sunset.",
+            "Ctrl+Shift+S: satellite view.",
+            "Ctrl+Shift+Alt+S: street view of selected POI (falls back to satellite if no coverage).",
+            "Shift+A: overhead flights.",
+            "Q: air quality.",
+            "L: latitude and longitude.",
+            "Shift+L: languages.",
+            "Shift+F1: capital city.",
+            "$: currency.",
+            "W: weather or sea temperature.",
+            "Ctrl+comma: settings.",
+            "F1: help.",
+        ]
+
     def show_help(self):
         """F1 — show keyboard help in a read-only scrollable dialog."""
         if getattr(self, '_free_mode', False):
@@ -9702,59 +10197,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             ]
         else:
             title = "MAP MODE HELP"
-            lines = [
-                "Arrow keys: move around the map.",
-                "Shift+arrows: fine movement.",
-                "Ctrl+arrows: jump to the next administrative region in that direction.",
-                "Ctrl+Alt+arrows: jump to the nearest foreign country in that direction.",
-                "F2: repeat location.",
-                "Shift+F2: climate zone.",
-                "F3: latitude.",
-                "F4: longitude.",
-                "Shift+F3: volume down.",
-                "Shift+F4: volume up.",
-                "F5: continent.",
-                "F6: country facts.",
-                "Shift+F6: Wikipedia summary.",
-                "F7: toggle sounds.",
-                "F8: flash country on map.",
-                "F9: toggle full-screen map.",
-                "F10: country discovery challenge.",
-                "Ctrl+F10: scored challenge session.",
-                "Shift+F10: repeat challenge target.",
-                "F11: street mode.",
-                "Shift+F11: pre-download streets.",
-                "Page Up/Page Down: cycle spatial tones between world, country, and region.",
-                "F12: tools menu.",
-                "Ctrl+F: favourites.",
-                "Ctrl+Shift+F: add current place to favourites.",
-                "J: jump to city, country, or coordinates.",
-                "G: toggle GeoFeatures on/off.",
-                "Shift+C: nearest city only.",
-                "M: store current location as mark 1, 2, or 3.",
-                "Shift+M: remove mark 1, 2, or 3.",
-                "D: set destination.",
-                "Alt+D: set destination from mark 1, 2, or 3.",
-                "Alt+1, Alt+2, Alt+3: distance and direction from mark to destination.",
-                "N: nearby geographic features.",
-                "P: POI search.",
-                "POI menu: selected POI address, hours, phone, website, Gemini, menu, and website launch.",
-                "Shift+F: find food from a saved mark to the destination.",
-                "T: local time.",
-                "Shift+T: timezone.",
-                "S: sunrise and sunset.",
-                "Ctrl+Shift+S: satellite view.",
-                "Ctrl+Shift+Alt+S: street view of selected POI (falls back to satellite if no coverage).",
-                "Shift+A: overhead flights.",
-                "Q: air quality.",
-                "L: latitude and longitude.",
-                "Shift+L: languages.",
-                "Shift+F1: capital city.",
-                "$: currency.",
-                "W: weather or sea temperature.",
-                "Ctrl+comma: settings.",
-                "F1: help.",
-            ]
+            lines = self._map_help_lines()
         if IS_MAC:
             lines = [
                 line.replace("Ctrl+", "Command+").replace("Alt+", "Option+")
@@ -10370,11 +10813,23 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             dlon = c[2] - self.lon
             return dlat*dlat + dlon*dlon
 
+        current_state = self._jump_search_text(getattr(self, "last_state_found", "") or "")
+        current_country = self._jump_search_text(getattr(self, "last_country_found", "") or "")
+
+        def _label_text(c):
+            return self._jump_search_text(c[0])
+
+        def _geo_affinity(c):
+            text = _label_text(c)
+            state_penalty = 0 if current_state and current_state in text else 1
+            country_penalty = 0 if current_country and current_country in text else 1
+            return (state_penalty, country_penalty)
+
         def _jump_candidate_sort_key(c):
             source = c[4]
             if source == "feature":
-                return (_candidate_type_rank(c), _dist_from_current(c), _dist_from_home(c))
-            return (_candidate_type_rank(c), _dist_from_home(c), _dist_from_current(c))
+                return (_geo_affinity(c), _candidate_type_rank(c), _dist_from_current(c), _dist_from_home(c))
+            return (_geo_affinity(c), _candidate_type_rank(c), _dist_from_home(c), _dist_from_current(c))
 
         candidates.sort(key=_jump_candidate_sort_key)
         candidates = candidates[:50]

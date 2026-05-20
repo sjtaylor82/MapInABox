@@ -1227,6 +1227,7 @@ class PoiFetcher:
         lat: float,
         lon: float,
         name_filter: str,
+        category_key: str = "all",
         radius: int = 3000,
         timeout: int = 25,
         address_points: list | None = None,
@@ -1239,28 +1240,80 @@ class PoiFetcher:
 
         pattern = re.escape(query_text)
         ar = f"(around:{radius},{lat},{lon})"
+
+        def _clause(selector: str) -> str:
+            return f'  nwr{selector}["name"~"{pattern}",i]{ar};'
+
+        category_clauses: dict[str, list[str]] = {
+            "all": [
+                f'  nwr["name"~"{pattern}",i]{ar};',
+            ],
+            "food": [
+                _clause('["amenity"~"cafe|restaurant|bar|fast_food|pub|food_court|ice_cream"]'),
+                _clause('["shop"~"bakery|supermarket|convenience|greengrocer|butcher"]'),
+            ],
+            "shopping": [
+                _clause('["shop"~"mall|department_store|supermarket|convenience|bakery|chemist|clothes|books|electronics|shoes|jewelry|mobile_phone"]'),
+                _clause('["amenity"="marketplace"]'),
+                _clause('["leisure"="shopping_centre"]'),
+            ],
+            "health": [
+                _clause('["amenity"~"hospital|pharmacy|dentist|doctors|clinic|veterinary"]'),
+            ],
+            "transport": [
+                _clause('["public_transport"~"stop_position|platform|station"]'),
+                _clause('["highway"="bus_stop"]'),
+                _clause('["amenity"~"bus_station|ferry_terminal"]'),
+                _clause('["railway"~"station|halt|tram_stop"]'),
+            ],
+            "trains": [
+                _clause('["railway"~"station|halt"]'),
+                _clause('["public_transport"="station"]'),
+            ],
+            "community": [
+                _clause('["amenity"~"school|library|community_centre|cinema|place_of_worship|post_office|bank|atm|toilets|college|university"]'),
+            ],
+            "arts": [
+                _clause('["amenity"~"theatre|arts_centre|conference_centre|events_venue|cinema"]'),
+                _clause('["tourism"~"attraction|museum|gallery"]'),
+                _clause('["leisure"="stadium"]'),
+                _clause('["building"="theatre"]'),
+            ],
+            "parks": [
+                _clause('["leisure"~"park|playground|sports_centre|garden|fitness_centre|stadium|theme_park"]'),
+                _clause('["tourism"~"attraction|museum|information|viewpoint|gallery|zoo|theme_park"]'),
+            ],
+            "accommodation": [
+                _clause('["tourism"~"hotel|motel|hostel|guest_house|apartment|camp_site|caravan_site"]'),
+            ],
+        }
+        clauses = category_clauses.get(category_key, category_clauses["all"])
+        if category_key == "all" and radius <= 1000:
+            clauses = clauses + [
+                f'  nwr["brand"~"{pattern}",i]{ar};',
+                f'  nwr["operator"~"{pattern}",i]{ar};',
+                f'  nwr["official_name"~"{pattern}",i]{ar};',
+            ]
+
+        effective_timeout = min(timeout, 10)
         query = (
-            f"[out:json][timeout:{timeout}];\n"
+            f"[out:json][timeout:{effective_timeout}];\n"
             "(\n"
-            f'  nwr["name"~"{pattern}",i]{ar};\n'
-            f'  nwr["brand"~"{pattern}",i]{ar};\n'
-            f'  nwr["operator"~"{pattern}",i]{ar};\n'
-            f'  nwr["official_name"~"{pattern}",i]{ar};\n'
+            + "\n".join(clauses) + "\n"
             ");\n"
-            "out body center 300;\n"
+            "out tags center 40;\n"
         )
-        print(f"[POI] OSM broad name search '{query_text}' radius={radius}m")
+        print(f"[POI] OSM broad name search '{query_text}' category={category_key} radius={radius}m timeout={effective_timeout}s")
         data = urllib.parse.urlencode({"data": query}).encode()
-        result = self._overpass.poi_request(data, timeout=timeout + 5)
+        result = self._overpass.poi_request(data, timeout=effective_timeout + 2)
         if result is None:
-            return []
+            print(f"[POI] OSM broad name search '{query_text}' failed (server error) — not caching")
+            return None
 
         pois = []
         seen_keys: set = set()
         for el in result.get("elements", []):
             tags = el.get("tags", {})
-            # Avoid returning named roads as POIs. Transport stops still come
-            # through via highway=bus_stop in normal category searches.
             if tags.get("highway") and not (
                     tags.get("amenity") or tags.get("shop")
                     or tags.get("tourism") or tags.get("leisure")
@@ -1309,6 +1362,7 @@ class PoiFetcher:
         cached    = _get_cached(cache, cache_key)
         if cached is not None:
             print(f"[POI] Background cache hit — {len(cached)} places.")
+            return cached
 
         # ── HERE path ────────────────────────────────────────────────────
         if self._here_api_key:
@@ -1402,6 +1456,17 @@ class PoiFetcher:
         else:
             print("[POI] Background cache preload miss.")
         return cached
+
+    def cached_background_age_hours(self, lat: float, lon: float) -> float | None:
+        """Return age of the background POI disk cache in hours, or None if absent."""
+        cache = _load_poi_cache(self._cache_path)
+        source = "here" if self._here_api_key else "osm"
+        key = _cache_key(round(lat, 1), round(lon, 1), "all_background",
+                         POI_BACKGROUND_RADIUS_METRES, source)
+        entry = cache.get(key)
+        if not isinstance(entry, dict):
+            return None
+        return (time.time() - entry.get("ts", 0)) / 3600
 
     # ------------------------------------------------------------------
     # Intersection lookup for POI announcements

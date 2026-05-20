@@ -386,8 +386,13 @@ def _load_road_cache(cache_dir: str, lat: float, lon: float,
                         return data
                 except Exception:
                     pass
-    
-    # Fall back to coordinate-based cache
+        # Named lookup failed — don't fall back to coordinate-based cache, which
+        # could silently return data for a neighbouring suburb (e.g. Ormiston
+        # when the user selected Wellington Point). Return nothing so the caller
+        # triggers a fresh download for the correct suburb.
+        return {}
+
+    # Fall back to coordinate-based cache (no suburb constraint)
     key = _index_key(lat, lon)
     fname = index.get(key)
     

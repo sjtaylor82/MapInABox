@@ -78,15 +78,16 @@ class OverpassClient:
         query_data: bytes,
         timeout: int = 15,
         mirrors: list[str] | None = None,
+        start_index: int | None = None,
     ) -> dict | None:
         """Send an Overpass QL query and return the parsed JSON response.
 
-        Tries servers SEQUENTIALLY starting with next in rotation.
-        Only tries other servers if first one fails.
-        This spreads load and avoids rate limiting.
+        Tries servers sequentially starting with the last known-good mirror.
+        Only tries other servers if the first one fails.
 
         Returns parsed JSON dict, or ``None`` if all mirrors failed.
         """
+        custom_mirrors = mirrors is not None
         mirror_list = list(mirrors or self._mirrors)
         label_list  = list(self._labels[:len(mirror_list)])
         while len(label_list) < len(mirror_list):
@@ -98,8 +99,11 @@ class OverpassClient:
         with self._sem:
             self._wait()
             
-            # Start with next server in rotation
-            start_index = (self._last_successful_mirror + 1) % n_mirrors
+            if start_index is None:
+                # Start with the next server after the last known-good mirror.
+                # This spreads load across mirrors while still preserving the
+                # last working choice as a fallback point.
+                start_index = (self._last_successful_mirror + 1) % n_mirrors
         
         # Try servers sequentially, starting with rotated position
         for offset in range(n_mirrors):
@@ -128,18 +132,20 @@ class OverpassClient:
                 
                 # Overpass returns a remark on runtime error
                 if "remark" in result and not result.get("elements"):
-                    print(f"[Overpass] {label} returned error remark")
+                    print(f"[Overpass] {label} error remark: {result['remark']}")
                     continue
                 
                 # Success - update rotation tracker
                 if result.get("elements"):
                     print(f"[Overpass] {label} succeeded")
-                    self._last_successful_mirror = index
+                    if not custom_mirrors:
+                        self._last_successful_mirror = index
                     return result
                     
                 # Empty but valid
                 print(f"[Overpass] {label} returned empty result")
-                self._last_successful_mirror = index
+                if not custom_mirrors:
+                    self._last_successful_mirror = index
                 return result
                 
             except Exception as exc:
@@ -185,7 +191,7 @@ class OverpassClient:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 result = json.loads(resp.read().decode())
             if "remark" in result and not result.get("elements"):
-                print(f"[Overpass] {tag} returned error remark")
+                print(f"[Overpass] {tag} error remark: {result['remark']}")
                 return None
             print(f"[Overpass] {tag} succeeded ({len(result.get('elements', []))} elements)")
             return result
@@ -203,11 +209,10 @@ class OverpassClient:
         POI queries are less likely to benefit from a caching proxy and
         more likely to time out on it, so we swap the order.
         """
-        mirrors = list(self._mirrors)
-        if len(mirrors) > 1:
-            # Move index-0 (cache proxy) to the end
-            mirrors = mirrors[1:] + mirrors[:1]
-        return self.request(query_data, timeout=timeout, mirrors=mirrors)
+        # Keep the mirror list in its original order so labels stay aligned.
+        # Start on the public mirror when we have more than one server.
+        start_index = 1 if len(self._mirrors) > 1 else 0
+        return self.request(query_data, timeout=timeout, start_index=start_index)
 
     def large_request(
         self,

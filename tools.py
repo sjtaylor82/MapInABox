@@ -60,13 +60,105 @@ class ToolsMixin:
 
     def _warn_optional_key(self, tool_name: str, key_name: str, limitation: str) -> None:
         """Announce that a tool can continue, but with reduced coverage."""
+        suppress_key = f"suppress_warn_{key_name.lower()}"
+        if self.settings.get(suppress_key, False):
+            return
         from dialogs import show_optional_key_warning
-        show_optional_key_warning(
+        suppressed = show_optional_key_warning(
             self,
             f"{tool_name} Warning",
             f"Warning: {key_name} API key not detected.\n\n"
             f"{tool_name} will still work, but {limitation}",
         )
+        if suppressed:
+            from core import save_settings
+            self.settings[suppress_key] = True
+            save_settings(self.settings)
+
+    def _location_picker_choices(self):
+        """Build the shared location-choice list used by route tools."""
+        marks = getattr(self, "_map_marks", {})
+        mark_list = [(slot, m) for slot in (1, 2, 3)
+                     if (m := marks.get(slot))]
+        choices = ["Type an address..."]
+        actions = ["address"]
+        for slot, m in mark_list:
+            choices.append(f"Mark {slot}: {m.get('name', 'current position')}")
+            actions.append(("mark", slot))
+        choices.append("Choose a favourite...")
+        actions.append("favourite")
+        choices.append(f"Current position ({self._current_map_place()[1]})")
+        actions.append("current")
+        return choices, actions, mark_list
+
+    def _pick_location(self, prompt: str, purpose: str, rt, country_code: str):
+        """Return (lat, lon, name) from a mark, favourite, current position, or typed address.
+
+        The chooser always offers a small set of explicit options, then falls
+        back to text input when needed.
+        """
+        def _pick_from_favourites():
+            from favourites import load_favourites, favourite_label
+            entries = load_favourites()
+            if not entries:
+                self._status_update("No favourites saved.", force=True)
+                return None
+            entries = sorted(entries, key=lambda e: str(e.get("name", "")).lower())
+            labels = [favourite_label(entry, self.lat, self.lon) for entry in entries]
+            dlg = wx.SingleChoiceDialog(self, prompt, "Choose a favourite", labels)
+            if dlg.ShowModal() != wx.ID_OK:
+                dlg.Destroy()
+                return None
+            idx = dlg.GetSelection()
+            dlg.Destroy()
+            if idx == wx.NOT_FOUND or idx < 0 or idx >= len(entries):
+                return None
+            entry = entries[idx]
+            try:
+                return (float(entry["lat"]), float(entry["lon"]), entry.get("name", "Favourite"))
+            except Exception:
+                self._status_update("Favourite has no valid position.", force=True)
+                return None
+
+        choices, choice_actions, mark_list = self._location_picker_choices()
+
+        dlg = wx.SingleChoiceDialog(self, prompt, purpose.title(), choices)
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy()
+            return None
+        idx = dlg.GetSelection()
+        dlg.Destroy()
+        if idx == wx.NOT_FOUND or idx < 0 or idx >= len(choice_actions):
+            return None
+        choice = choice_actions[idx]
+        if choice == "current":
+            coords, name = self._current_map_place()
+            return coords[0], coords[1], name
+        if isinstance(choice, tuple) and choice[0] == "mark":
+            _, slot = choice
+            _, mark = next(((s, m) for s, m in mark_list if s == slot), (None, None))
+            if mark:
+                lat, lon = mark["coords"]
+                return (lat, lon, mark.get("name", f"mark {slot}"))
+            return None
+        if choice == "favourite":
+            fav = _pick_from_favourites()
+            if fav is not None:
+                return fav
+            return None
+        # "Type an address..." selected — fall through to text input
+
+        dlg = self._dlgs[1](self, prompt, title=purpose.title())
+        if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
+            dlg.Destroy()
+            return None
+        text = dlg.GetValue()
+        dlg.Destroy()
+        try:
+            return self._resolve_geocode(rt, text, country_code, purpose)
+        except Exception as exc:
+            self._status_update(f"Could not find '{text}': {exc}", force=True)
+            return None
 
     def _thinking(self, msg: str = "Thinking...") -> None:
         """Announce that a longer tool action is still running."""
@@ -129,6 +221,8 @@ class ToolsMixin:
                     self._tool_flight_search()
                 elif tool == "hotel_search":
                     self._tool_hotel_search()
+                elif tool == "find_food":
+                    self._tool_find_food()
                 else:
                     self._restore_tools_sound()
             else:
@@ -213,7 +307,7 @@ class ToolsMixin:
         )
         dlg = wx.SingleChoiceDialog(
             self,
-            f"More than one match was found for '{value}'. Choose one:",
+            "",
             f"Select {purpose}",
             labels,
         )
@@ -247,8 +341,8 @@ class ToolsMixin:
             self._status_update("Detour calculator cancelled.", force=True)
             return
 
-        def _geocode(prompt_text):
-            """Show dialog, geocode, return (lat, lon, name) or None on cancel."""
+        def _geocode_text(prompt_text):
+            """Text-only geocode: show dialog, return (lat, lon, name), None, or 'retry'."""
             dlg = self._dlgs[1](self, prompt_text)
             if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
                 dlg.Destroy()
@@ -267,19 +361,15 @@ class ToolsMixin:
                 self._status_update(f"Could not find '{value}': {e}", force=True)
                 return "retry"
 
-        # 1. Start — mandatory
-        while True:
-            result = _geocode("Where are you starting from?")
-            if result is None:
-                self._status_update("Detour calculator cancelled.", force=True)
-                return
-            if result != "retry":
-                start = result
-                break
+        # 1. Start — marks, favourite, current position, or typed address
+        start = self._pick_location("Starting point (address, suburb or city):", "starting point", rt, country_code)
+        if start is None:
+            self._status_update("Detour calculator cancelled.", force=True)
+            return
 
-        # 2. Stop-off — mandatory (at least one)
+        # 2. Stop-off — mandatory (at least one), always typed
         while True:
-            result = _geocode("Where do you need to stop?")
+            result = _geocode_text("Stop-off (address, suburb or city):")
             if result is None:
                 self._status_update("Detour calculator cancelled.", force=True)
                 return
@@ -287,23 +377,18 @@ class ToolsMixin:
                 first_stop = result
                 break
 
-        # 3. Destination — mandatory
-        while True:
-            result = _geocode("What is your final destination?")
-            if result is None:
-                self._status_update("Detour calculator cancelled.", force=True)
-                return
-            if result != "retry":
-                destination = result
-                break
+        # 3. Destination — marks or typed address
+        destination = self._pick_location("Destination (address, suburb or city):", "destination", rt, country_code)
+        if destination is None:
+            self._status_update("Detour calculator cancelled.", force=True)
+            return
 
         # Build stops list: start, stop-offs..., destination
         stops = [start, first_stop]
 
-        # 4. Optional additional stop-offs
+        # 4. Optional additional stop-offs — always typed
         while True:
-            result = _geocode(
-                "Additional stop-off (or leave blank to finish):")
+            result = _geocode_text("Additional stop-off (or leave blank to finish):")
             if result is None:
                 break  # blank or cancel — done adding stops
             if result == "retry":
@@ -338,55 +423,21 @@ class ToolsMixin:
             self._finish_thinking()
             return
 
-        # Get origin
-        dlg = self._dlgs[1](
-            self, "What is your starting point? (full address, suburb or city):",
-            title="Start")
-        if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
-            dlg.Destroy()
+        origin = self._pick_location(
+            "Starting point (address, suburb or city):", "starting point", rt, country_code)
+        if origin is None:
             self._status_update("Suburb lister cancelled.", force=True)
             self._finish_thinking()
             return
-        origin_text = dlg.GetValue()
-        dlg.Destroy()
+        o_lat, o_lon, o_name = origin
 
-        self._tool_trace(f"Suburb Lister: geocoding origin {origin_text!r}.")
-        try:
-            resolved = self._resolve_geocode(rt, origin_text, country_code, "starting point")
-            if resolved is None:
-                self._status_update("Suburb lister cancelled.", force=True)
-                self._finish_thinking()
-                return
-            o_lat, o_lon, o_name = resolved
-        except Exception as e:
-            self._status_update(f"Could not find '{origin_text}': {e}", force=True)
-            self._finish_thinking()
-            return
-
-        # Get destination
-        dlg = self._dlgs[1](
-            self, "What is your destination? (full address, suburb or city):",
-            title="Destination")
-        if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
-            dlg.Destroy()
+        dest = self._pick_location(
+            "Destination (address, suburb or city):", "destination", rt, country_code)
+        if dest is None:
             self._status_update("Suburb lister cancelled.", force=True)
             self._finish_thinking()
             return
-        dest_text = dlg.GetValue()
-        dlg.Destroy()
-
-        self._tool_trace(f"Suburb Lister: geocoding destination {dest_text!r}.")
-        try:
-            resolved = self._resolve_geocode(rt, dest_text, country_code, "destination")
-            if resolved is None:
-                self._status_update("Suburb lister cancelled.", force=True)
-                self._finish_thinking()
-                return
-            d_lat, d_lon, d_name = resolved
-        except Exception as e:
-            self._status_update(f"Could not find '{dest_text}': {e}", force=True)
-            self._finish_thinking()
-            return
+        d_lat, d_lon, d_name = dest
 
         self._thinking()
         self._tool_trace("Suburb Lister: route analysis started.")
@@ -878,7 +929,7 @@ class ToolsMixin:
 
         # Get origin
         dlg = self._dlgs[1](
-            self, "Where are you starting from? (full address, suburb or city):")
+            self, "Starting point (address, suburb or city):")
         if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
             dlg.Destroy()
             self._status_update("Toll compare cancelled.", force=True)
@@ -900,7 +951,7 @@ class ToolsMixin:
 
         # Get destination
         dlg = self._dlgs[1](
-            self, "Where are you going? (full address, suburb or city):")
+            self, "Destination (address, suburb or city):")
         if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
             dlg.Destroy()
             self._status_update("Toll compare cancelled.", force=True)
@@ -962,27 +1013,21 @@ class ToolsMixin:
             self._finish_thinking()
             return
 
-        # Origin
-        dlg = self._dlgs[1](
-            self, "Where are you leaving from? (address, stop or suburb):")
-        if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
-            dlg.Destroy()
+        origin = self._pick_location(
+            "Leaving from? (address, stop or suburb):", "starting point", rt, country_code)
+        if origin is None:
             self._status_update("Journey planner cancelled.", force=True)
             self._finish_thinking()
             return
-        origin_text = dlg.GetValue()
-        dlg.Destroy()
+        o_lat, o_lon, o_name = origin
 
-        # Destination
-        dlg = self._dlgs[1](
-            self, "Where are you going? (address, stop or suburb):")
-        if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
-            dlg.Destroy()
+        dest = self._pick_location(
+            "Going to? (address, stop or suburb):", "destination", rt, country_code)
+        if dest is None:
             self._status_update("Journey planner cancelled.", force=True)
             self._finish_thinking()
             return
-        dest_text = dlg.GetValue()
-        dlg.Destroy()
+        d_lat, d_lon, d_name = dest
 
         # Timing mode
         timing_choices = ["Leave now", "Leave at a specific time",
@@ -1032,32 +1077,6 @@ class ToolsMixin:
         dlg.Destroy()
 
         transit_filter = ["all", "bus", "train", "ferry"][filter_sel]
-
-        self._status_update(f"Looking up {origin_text}...")
-        try:
-            resolved_origin = self._resolve_geocode(rt, origin_text, country_code, "starting point")
-            if resolved_origin is None:
-                self._status_update("Journey planner cancelled.", force=True)
-                self._finish_thinking()
-                return
-            o_lat, o_lon, o_name = resolved_origin
-        except Exception as e:
-            self._status_update(f"Could not find '{origin_text}': {e}", force=True)
-            self._finish_thinking()
-            return
-
-        self._status_update(f"Looking up {dest_text}...")
-        try:
-            resolved_dest = self._resolve_geocode(rt, dest_text, country_code, "destination")
-            if resolved_dest is None:
-                self._status_update("Journey planner cancelled.", force=True)
-                self._finish_thinking()
-                return
-            d_lat, d_lon, d_name = resolved_dest
-        except Exception as e:
-            self._status_update(f"Could not find '{dest_text}': {e}", force=True)
-            self._finish_thinking()
-            return
 
         def _status(msg):
             wx.CallAfter(self._status_update, msg)
@@ -1116,28 +1135,13 @@ class ToolsMixin:
             self._status_update("Departure board cancelled.", force=True)
             return
 
-        # Ask for location
-        dlg = self._dlgs[1](
-            self, "Where? (suburb, stop name, or address):")
-        if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
-            dlg.Destroy()
+        location = self._pick_location(
+            "Location (suburb, stop name, or address):", "location", rt, country_code)
+        if location is None:
             self._status_update("Departure board cancelled.", force=True)
             return
-        location_text = dlg.GetValue()
-        dlg.Destroy()
-
-        # Geocode to get lat/lon
-        self._status_update(f"Looking up {location_text}...")
-        try:
-            resolved = self._resolve_geocode(rt, location_text, country_code, "location")
-            if resolved is None:
-                self._status_update("Departure board cancelled.", force=True)
-                return
-            lat, lon, formatted = resolved
-            self._status_update(f"Searching for stops near {formatted}...")
-        except Exception as e:
-            self._status_update(f"Could not find '{location_text}': {e}", force=True)
-            return
+        lat, lon, formatted = location
+        self._status_update(f"Searching for stops near {formatted}...")
 
         # Fetch stations in background
         self._thinking()
@@ -2404,60 +2408,49 @@ class ToolsMixin:
                 "so the route and food search may be a bit less polished.",
             )
 
-        # ---- destination ---------------------------------------------------
+        # ---- resolve country code (pure lookup, no IO) --------------------
         country = getattr(self, 'last_country_found', '') or ''
+        country_code = ""
+        _CODES = {
+            "australia": "AU", "united states": "US", "usa": "US",
+            "united kingdom": "UK", "uk": "UK", "canada": "CA",
+            "new zealand": "NZ", "germany": "DE", "france": "FR",
+            "japan": "JP", "china": "CN", "india": "IN",
+        }
+        if country:
+            country_code = _CODES.get(country.lower().strip(), "")
+            if not country_code and len(country) == 2:
+                country_code = country.upper()
+
+        # ---- origin --------------------------------------------------------
         dest_text = ""
-        dest_fmt = dest_label or "current position"
-        dest_lat = dest_lon = None
-        if origin_coords is None and dest_coords is None:
-            dest = getattr(self, "_map_destination", None)
-            if not dest:
-                self._status_update("Destination not set. Press D at the destination.", force=True)
-                self._resume_location_sound()
-                return
-            marks = getattr(self, "_map_marks", {})
-            choices = []
-            slots = []
-            for slot in (1, 2, 3):
-                mark = marks.get(slot)
-                if not mark:
-                    continue
-                choices.append(f"Mark {slot}: {mark.get('name', 'current position')}")
-                slots.append(slot)
-            if not choices:
-                self._status_update("No marks set. Press M then 1, 2, or 3.", force=True)
-                self._resume_location_sound()
-                return
-            dlg = wx.SingleChoiceDialog(
-                self, "Choose mark for food search:", "Find Food", choices)
-            if dlg.ShowModal() != wx.ID_OK:
-                dlg.Destroy()
+        dest_fmt  = dest_label or "current position"
+        dest_lat  = dest_lon = None
+        self._find_food_destination = None
+        if origin_coords is None:
+            origin = self._pick_location(
+                "Starting point:", "origin", rt, country_code)
+            if origin is None:
                 self._status_update("Find Food cancelled.", force=True)
                 self._resume_location_sound()
                 return
-            slot = slots[dlg.GetSelection()]
-            dlg.Destroy()
-            mark = marks[slot]
-            origin_coords = mark["coords"]
-            dest_coords = dest["coords"]
-            dest_label = dest.get("name", "destination")
-            dest_fmt = dest_label
-            dest_text = dest_label
-            self._status_update(f"Finding food from mark {slot} to destination.")
+            origin_coords = (origin[0], origin[1])
+
+        # ---- destination ---------------------------------------------------
         if dest_coords is not None:
             dest_lat, dest_lon = dest_coords
             dest_text = dest_fmt
         else:
-            dlg = self._dlgs[1](self, "Find food on route to (suburb or address):",
-                                default="")
-            if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
-                dlg.Destroy()
+            dest_result = self._pick_location(
+                "Destination:", "destination", rt, country_code)
+            if dest_result is None:
                 self._status_update("Find Food cancelled.", force=True)
                 self._resume_location_sound()
                 return
-            dest_text = dlg.GetValue()
-            dest_fmt = dest_text
-            dlg.Destroy()
+            dest_lat, dest_lon, dest_fmt = dest_result
+            dest_coords = (dest_lat, dest_lon)
+            dest_text   = dest_fmt
+        self._find_food_destination = {"coords": (dest_lat, dest_lon), "name": dest_fmt}
 
         if origin_coords is None:
             origin_lat = self.lat
@@ -2470,27 +2463,6 @@ class ToolsMixin:
         def _search():
             nonlocal dest_lat, dest_lon, dest_fmt
             try:
-                # -- geocode destination ------------------------------------
-                country_code = ""
-                _CODES = {
-                    "australia": "AU", "united states": "US", "usa": "US",
-                    "united kingdom": "UK", "uk": "UK", "canada": "CA",
-                    "new zealand": "NZ", "germany": "DE", "france": "FR",
-                    "japan": "JP", "china": "CN", "india": "IN",
-                }
-                if country:
-                    country_code = _CODES.get(country.lower().strip(), "")
-                    if not country_code and len(country) == 2:
-                        country_code = country.upper()
-
-                if dest_coords is None:
-                    resolved = self._resolve_geocode(rt, dest_text, country_code, "destination")
-                    if resolved is None:
-                        wx.CallAfter(self._status_update, "Find Food cancelled.", True)
-                        wx.CallAfter(self._finish_thinking)
-                        return
-                    dest_lat, dest_lon, dest_fmt = resolved
-
                 wx.CallAfter(self._status_update,
                              f"Route to {dest_fmt} — fetching…",
                              True)
@@ -3136,7 +3108,12 @@ class ToolsMixin:
 
     def _show_find_food_results(self, places: list, title="Find Food"):
         """Show the FindFoodDialog with results."""
+        self._finish_thinking()
         from dialogs import FindFoodDialog
+        from core import _load_suppressed, _is_suppressed
+
+        suppressed = _load_suppressed()
+        places = [p for p in places if not _is_suppressed(p, suppressed)]
 
         by_coord = {
             (
@@ -3167,8 +3144,8 @@ class ToolsMixin:
                     pass
             return detail
 
-        dlg = FindFoodDialog(self, places, _detail_cb, title=title)
+        route_destination = getattr(self, "_find_food_destination", None) or getattr(self, "_map_destination", None)
+        dlg = FindFoodDialog(self, places, _detail_cb, title=title, route_destination=route_destination)
         dlg.ShowModal()
         dlg.Destroy()
-        self._finish_thinking()
         self.listbox.SetFocus()

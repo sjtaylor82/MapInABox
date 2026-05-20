@@ -71,6 +71,41 @@ def _log_key_event(owner, event, source: str, note: str = "") -> None:
         miab_log("verbose", f"Key {source} logging failed: {exc}", settings)
 
 
+def _hook_escape_enter(dialog, event, on_enter=None, escape_id=wx.ID_CANCEL) -> bool:
+    """Handle Escape / Enter for small modal dialogs."""
+    code = event.GetKeyCode()
+    if code == wx.WXK_ESCAPE:
+        dialog.EndModal(escape_id)
+        return True
+    if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
+        if on_enter is None:
+            dialog.EndModal(wx.ID_OK)
+        else:
+            on_enter()
+        return True
+    return False
+
+
+def _hook_detail_list(dialog, event, showing_detail: bool, show_list, show_detail,
+                      escape_id=wx.ID_CLOSE, on_primary=None) -> bool:
+    """Handle list/detail dialogs that switch between a summary list and details."""
+    code = event.GetKeyCode()
+    if on_primary is not None and on_primary(event):
+        return True
+    if showing_detail:
+        if code in (wx.WXK_ESCAPE, wx.WXK_BACK):
+            show_list()
+            return True
+    else:
+        if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
+            show_detail()
+            return True
+        if code == wx.WXK_ESCAPE:
+            dialog.EndModal(escape_id)
+            return True
+    return False
+
+
 def show_api_key_required(parent, title: str, message: str,
                           link_label: str, link_url: str) -> None:
     """Modal dialog telling the user a key is missing, with a clickable signup link."""
@@ -102,8 +137,11 @@ def show_api_key_required(parent, title: str, message: str,
     dlg.Destroy()
 
 
-def show_optional_key_warning(parent, title: str, message: str) -> None:
-    """Modal dialog explaining a missing optional key and its limitations."""
+def show_optional_key_warning(parent, title: str, message: str) -> bool:
+    """Modal dialog explaining a missing optional key and its limitations.
+
+    Returns True if the user checked "Don't show this again".
+    """
     dlg = wx.Dialog(parent, title=title,
                     style=wx.DEFAULT_DIALOG_STYLE | wx.STAY_ON_TOP)
     vs = wx.BoxSizer(wx.VERTICAL)
@@ -112,6 +150,9 @@ def show_optional_key_warning(parent, title: str, message: str) -> None:
     txt.Wrap(440)
     vs.Add(txt, 0, wx.ALL, 14)
 
+    cb = wx.CheckBox(dlg, label="Don't show this warning again")
+    vs.Add(cb, 0, wx.LEFT | wx.BOTTOM, 14)
+
     btn = wx.Button(dlg, wx.ID_OK, "OK")
     btn.SetDefault()
     vs.Add(btn, 0, wx.ALIGN_RIGHT | wx.RIGHT | wx.BOTTOM, 10)
@@ -119,7 +160,9 @@ def show_optional_key_warning(parent, title: str, message: str) -> None:
     dlg.SetSizerAndFit(vs)
     dlg.CentreOnParent()
     dlg.ShowModal()
+    suppress = cb.GetValue()
     dlg.Destroy()
+    return suppress
 
 
 def show_open_source_notice(parent) -> None:
@@ -229,6 +272,8 @@ class SettingsDialog(wx.Dialog):
         general_vs.Add(wx.StaticText(self.general_page, label="Map announcements:"), 0, wx.LEFT, 8)
         self.cb_climate_zones = wx.CheckBox(self.general_page, label="Announce climate zones during navigation")
         general_vs.Add(self.cb_climate_zones, 0, wx.LEFT | wx.BOTTOM, 8)
+        self.cb_suburb_size = wx.CheckBox(self.general_page, label="Announce suburb size when streets load")
+        general_vs.Add(self.cb_suburb_size, 0, wx.LEFT | wx.BOTTOM, 8)
 
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         general_vs.Add(wx.StaticText(self.general_page, label="Spatial tones:"), 0, wx.LEFT, 8)
@@ -265,14 +310,6 @@ class SettingsDialog(wx.Dialog):
             style=wx.CB_READONLY,
         )
         general_vs.Add(self.combo_poi_source, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
-
-        general_vs.Add(wx.StaticText(self.general_page, label="Named POI search radius:"), 0, wx.LEFT, 8)
-        self.combo_poi_name_radius = wx.ComboBox(
-            self.general_page,
-            choices=[f"{km} km" for km in range(1, 11)],
-            style=wx.CB_READONLY,
-        )
-        general_vs.Add(self.combo_poi_name_radius, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         general_vs.Add(wx.StaticText(self.general_page, label="Navigation provider (walking routes):"), 0, wx.LEFT, 8)
@@ -408,6 +445,7 @@ class SettingsDialog(wx.Dialog):
         )
         self.cb_walk_cat.SetValue(settings.get("walk_announce_category", True))
         self.cb_climate_zones.SetValue(settings.get("announce_climate_zones", True))
+        self.cb_suburb_size.SetValue(settings.get("announce_suburb_size", False))
         spatial_mode = settings.get("spatial_tones_mode", "world")
         self.combo_spatial_tones.SetSelection(
             {"world": 0, "country": 1, "region": 2, "city": 2}.get(spatial_mode, 0))
@@ -424,12 +462,6 @@ class SettingsDialog(wx.Dialog):
         self.combo_departure_board.SetSelection(1 if departure_source == "google" else 0)
         poi_source = settings.get("poi_source", "osm")
         self.combo_poi_source.SetSelection(1 if poi_source == "here" else 0)
-        try:
-            name_radius_km = int(settings.get("poi_name_search_radius_km", 10))
-        except (TypeError, ValueError):
-            name_radius_km = 10
-        name_radius_km = max(1, min(10, name_radius_km))
-        self.combo_poi_name_radius.SetSelection(name_radius_km - 1)
         self.txt_google_key.SetValue(settings.get("google_api_key", ""))
         self.txt_gemini_key.SetValue(settings.get("gemini_api_key", ""))
         self.txt_here_key.SetValue(settings.get("here_api_key", ""))
@@ -478,13 +510,13 @@ class SettingsDialog(wx.Dialog):
             "walk_poi_radius_m":      [50, 80, 120][max(0, self.combo_radius.GetSelection())],
             "walk_announce_category": self.cb_walk_cat.GetValue(),
             "announce_climate_zones": self.cb_climate_zones.GetValue(),
+            "announce_suburb_size":   self.cb_suburb_size.GetValue(),
             "spatial_tones_mode":     spatial_mode,
             "challenge_direction_mode": challenge_direction,
             "weather_temperature_unit": weather_units,
             "nav_provider":           nav_provider,
             "departure_board_source": departure_board_source,
             "poi_source":             "here" if self.combo_poi_source.GetSelection() == 1 else "osm",
-            "poi_name_search_radius_km": max(1, self.combo_poi_name_radius.GetSelection() + 1),
             "google_api_key":         self.txt_google_key.GetValue().strip(),
             "gemini_api_key":         self.txt_gemini_key.GetValue().strip(),
             "here_api_key":             self.txt_here_key.GetValue().strip(),
@@ -527,6 +559,7 @@ class POICategoryDialog(wx.Dialog):
         preferred_source: str = "osm",
         initial_key: str = "all",
         initial_name: str = "",
+        initial_radius: int = 1000,
         notice: str = "",
     ) -> None:
         super().__init__(
@@ -536,6 +569,7 @@ class POICategoryDialog(wx.Dialog):
         self.selected_key    = None
         self.selected_name   = ""
         self.selected_source = "osm"
+        self.selected_radius = 1000
         sources = available_sources or ["osm"]
         panel = wx.Panel(self)
         vs = wx.BoxSizer(wx.VERTICAL)
@@ -567,6 +601,20 @@ class POICategoryDialog(wx.Dialog):
         self.combo.SetSelection(initial_idx)
         vs.Add(self.combo, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
 
+        vs.Add(wx.StaticText(panel, label="Radius:"), 0, wx.LEFT, 10)
+        self._radius_values = [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000]
+        self.combo_radius = wx.ComboBox(
+            panel,
+            choices=["1 km", "2 km", "3 km", "4 km", "5 km", "6 km", "7 km", "8 km", "9 km", "10 km"],
+            style=wx.CB_READONLY,
+        )
+        try:
+            radius_idx = self._radius_values.index(int(initial_radius))
+        except Exception:
+            radius_idx = 0
+        self.combo_radius.SetSelection(radius_idx)
+        vs.Add(self.combo_radius, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
+
         vs.Add(wx.StaticText(panel, label="Source:"), 0, wx.LEFT, 10)
         source_labels = {"osm": "OpenStreetMap", "here": "HERE", "google": "Google Maps"}
         self._source_keys = sources
@@ -596,12 +644,7 @@ class POICategoryDialog(wx.Dialog):
         self.CentreOnParent()
 
     def _on_char_hook(self, event) -> None:
-        code = event.GetKeyCode()
-        if code == wx.WXK_ESCAPE:
-            self.EndModal(wx.ID_CANCEL)
-            return
-        if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
-            self._on_go(event)
+        if _hook_escape_enter(self, event, on_enter=lambda: self._on_go(event)):
             return
         event.Skip()
 
@@ -621,6 +664,10 @@ class POICategoryDialog(wx.Dialog):
         self.selected_source = (self._source_keys[src_idx]
                                 if 0 <= src_idx < len(self._source_keys)
                                 else "osm")
+        rad_idx = self.combo_radius.GetSelection()
+        self.selected_radius = (self._radius_values[rad_idx]
+                                if 0 <= rad_idx < len(self._radius_values)
+                                else 1000)
         self.EndModal(wx.ID_OK)
 
 
@@ -770,15 +817,12 @@ class StreetSearchDialog(wx.Dialog):
         event.Skip()
 
     def _on_char_hook(self, event) -> None:
-        code = event.GetKeyCode()
-        if code == wx.WXK_ESCAPE:
-            self.EndModal(wx.ID_CANCEL)
-            return
-        if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
+        def _on_enter():
             obj = self.FindFocus()
             if obj in (self.search, self.listbox):
                 self._choose_current()
-                return
+        if _hook_escape_enter(self, event, on_enter=_on_enter):
+            return
         event.Skip()
 
 
@@ -798,6 +842,7 @@ class ToolsMenuDialog(wx.Dialog):
         ("Departure Board",    "departure_board"),
         ("Flight Search",      "flight_search"),
         ("Hotel Search",       "hotel_search"),
+        ("Find Food",          "find_food"),
     ]
 
     def __init__(self, parent) -> None:
@@ -834,12 +879,7 @@ class ToolsMenuDialog(wx.Dialog):
         event.Skip()
 
     def _on_char_hook(self, event):
-        code = event.GetKeyCode()
-        if code == wx.WXK_ESCAPE:
-            self.EndModal(wx.ID_CANCEL)
-            return
-        if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
-            self._on_choose()
+        if _hook_escape_enter(self, event, on_enter=self._on_choose):
             return
         event.Skip()
 
@@ -876,12 +916,7 @@ class StopEntryDialog(wx.Dialog):
         return self.text.GetValue().strip()
 
     def _on_char_hook(self, event):
-        code = event.GetKeyCode()
-        if code == wx.WXK_ESCAPE:
-            self.EndModal(wx.ID_CANCEL)
-            return
-        if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
-            self.EndModal(wx.ID_OK)
+        if _hook_escape_enter(self, event):
             return
         event.Skip()
 
@@ -974,12 +1009,7 @@ class MeetPointDialog(wx.Dialog):
         event.Skip()
 
     def _on_char_hook(self, event):
-        code = event.GetKeyCode()
-        if code == wx.WXK_ESCAPE:
-            self.EndModal(wx.ID_CANCEL)
-            return
-        if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
-            self.EndModal(wx.ID_OK)
+        if _hook_escape_enter(self, event):
             return
         event.Skip()
 
@@ -1010,8 +1040,7 @@ class RouteResultsDialog(wx.Dialog):
         wx.CallAfter(self.results.SetFocus)
 
     def _on_char_hook(self, event):
-        if event.GetKeyCode() == wx.WXK_ESCAPE:
-            self.EndModal(wx.ID_CLOSE)
+        if _hook_escape_enter(self, event, escape_id=wx.ID_CLOSE):
             return
         event.Skip()
 
@@ -1077,12 +1106,7 @@ class RendezvousResultsDialog(wx.Dialog):
         event.Skip()
 
     def _on_char_hook(self, event):
-        code = event.GetKeyCode()
-        if code == wx.WXK_ESCAPE:
-            self.EndModal(wx.ID_CLOSE)
-            return
-        if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
-            self._on_choose()
+        if _hook_escape_enter(self, event, on_enter=self._on_choose, escape_id=wx.ID_CLOSE):
             return
         event.Skip()
 
@@ -1172,12 +1196,7 @@ class DateTimePickerDialog(wx.Dialog):
             return None
 
     def _on_char_hook(self, event):
-        code = event.GetKeyCode()
-        if code == wx.WXK_ESCAPE:
-            self.EndModal(wx.ID_CANCEL)
-            return
-        if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
-            self.EndModal(wx.ID_OK)
+        if _hook_escape_enter(self, event):
             return
         event.Skip()
 
@@ -1245,18 +1264,8 @@ class JourneyResultsDialog(wx.Dialog):
         self.listbox.SetFocus()
 
     def _on_char_hook(self, event):
-        code = event.GetKeyCode()
-        if self._showing_detail:
-            if code in (wx.WXK_ESCAPE, wx.WXK_BACK):
-                self._show_list()
-                return
-        else:
-            if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
-                self._show_detail()
-                return
-            if code == wx.WXK_ESCAPE:
-                self.EndModal(wx.ID_CLOSE)
-                return
+        if _hook_detail_list(self, event, self._showing_detail, self._show_list, self._show_detail):
+            return
         event.Skip()
 
 
@@ -1456,38 +1465,29 @@ class TransitLookupDialog(wx.Dialog):
 
     def _on_char_hook(self, event):
         _log_key_event(self, event, "dialog-char-hook", f"level={self._level}")
-        code = event.GetKeyCode()
-        # Ctrl+Alt+F — find food along the stop sequence shown at level 3
-        if (_primary_down(event) and event.AltDown()
-                and code in (ord('F'), ord('f'))):
-            parent = self.GetParent()
-            if self._level == 3 and self._current_stop_list:
-                import threading
-                threading.Thread(
-                    target=parent._tool_find_food_transit_line,
-                    args=({"name": self._current_route_name,
-                           "stops": self._current_stop_list},),
-                    daemon=True,
-                ).start()
-            else:
-                parent._status_update(
-                    "No stop data available. View a stop sequence first.",
-                    force=True)
-            return
-        if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
-            if self._level == 0:
-                self._show_departures()
-                return
-            elif self._level == 1 and self._fetch_stops:
-                self._show_stops()
-                return
-            elif self._level == 2:
-                self._show_stops_for_candidate()
-                return
-        if code in (wx.WXK_ESCAPE, wx.WXK_BACK):
+        def _on_primary(evt):
+            code = evt.GetKeyCode()
+            # Ctrl+Alt+F — find food along the stop sequence shown at level 3
+            if (_primary_down(evt) and evt.AltDown()
+                    and code in (ord('F'), ord('f'))):
+                parent = self.GetParent()
+                if self._level == 3 and self._current_stop_list:
+                    import threading
+                    threading.Thread(
+                        target=parent._tool_find_food_transit_line,
+                        args=({"name": self._current_route_name,
+                               "stops": self._current_stop_list},),
+                        daemon=True,
+                    ).start()
+                else:
+                    parent._status_update(
+                        "No stop data available. View a stop sequence first.",
+                        force=True)
+                return True
+            return False
+        def _show_list():
             if self._level == 3:
                 self.stops_listbox.Hide()
-                # Go back to candidates if we came from there, else departures
                 if self._candidates:
                     self.cand_listbox.Show()
                     self._level = 2
@@ -1498,7 +1498,6 @@ class TransitLookupDialog(wx.Dialog):
                     self._level = 1
                     self.Layout()
                     wx.CallAfter(self.dep_listbox.SetFocus)
-                return
             elif self._level == 2:
                 self._candidates = []
                 self.cand_listbox.Hide()
@@ -1506,7 +1505,6 @@ class TransitLookupDialog(wx.Dialog):
                 self._level = 1
                 self.Layout()
                 wx.CallAfter(self.dep_listbox.SetFocus)
-                return
             elif self._level == 1:
                 self._title_label.SetLabel("Nearby stops and stations:")
                 self.dep_listbox.Hide()
@@ -1514,10 +1512,18 @@ class TransitLookupDialog(wx.Dialog):
                 self._level = 0
                 self.Layout()
                 wx.CallAfter(self.listbox.SetFocus)
-                return
             else:
                 self.EndModal(wx.ID_CLOSE)
-                return
+        def _show_detail():
+            if self._level == 0:
+                self._show_departures()
+            elif self._level == 1 and self._fetch_stops:
+                self._show_stops()
+            elif self._level == 2:
+                self._show_stops_for_candidate()
+        if _hook_detail_list(self, event, self._level == 3, _show_list, _show_detail,
+                             escape_id=wx.ID_CLOSE, on_primary=_on_primary):
+            return
         event.Skip()
 
 
@@ -1700,13 +1706,14 @@ class FindFoodDialog(wx.Dialog):
     must return a dict with keys: address, phone, website, opening_hours.
     """
 
-    def __init__(self, parent, places: list, detail_cb, title="Find Food"):
+    def __init__(self, parent, places: list, detail_cb, title="Find Food", route_destination=None):
         super().__init__(parent, title=title,
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self._places    = places
         self._detail_cb = detail_cb
         self._showing_detail = False
         self._fetching  = False
+        self._route_destination = route_destination or {}
 
         panel = wx.Panel(self)
         self._sizer = wx.BoxSizer(wx.VERTICAL)
@@ -1850,6 +1857,344 @@ class FindFoodDialog(wx.Dialog):
             return None
         return self._places[sel]
 
+    def _selected_place_name(self, place: dict) -> str:
+        return (place.get("name") or "food place").split(",")[0].strip()
+
+    def _selected_place_coords(self):
+        place = self._selected_place()
+        if not place or self._fetching:
+            return None, None, None
+        try:
+            coords = (float(place.get("lat", 0.0)), float(place.get("lon", 0.0)))
+        except Exception:
+            return place, None, None
+        return place, coords, self._selected_place_name(place)
+
+    def _current_route_destination(self):
+        if self._route_destination:
+            return self._route_destination
+        parent = self.GetParent()
+        if parent and hasattr(parent, "_find_food_destination"):
+            return getattr(parent, "_find_food_destination", None)
+        if parent and hasattr(parent, "_map_destination"):
+            return getattr(parent, "_map_destination", None)
+        return None
+
+    def _detail_announce(self, msg: str) -> None:
+        parent = self.GetParent()
+        if parent and hasattr(parent, "_poi_detail_announce"):
+            try:
+                parent._poi_detail_announce(msg)
+                return
+            except Exception:
+                pass
+        self._announce(msg)
+
+    def _place_detail_text(self, place: dict, key_num: int) -> str:
+        tags = place.get("tags") or {}
+        name = self._selected_place_name(place)
+        if key_num == 1:
+            text = (place.get("address") or "").strip()
+            if not text:
+                text = name
+            return text or "No address available."
+        if key_num == 2:
+            return (place.get("opening_hours") or tags.get("opening_hours") or "").strip() or "Opening hours not available."
+        if key_num == 3:
+            return (place.get("phone") or tags.get("phone") or tags.get("contact:phone") or "").strip() or "No phone number available."
+        if key_num == 4:
+            return (place.get("website") or tags.get("website") or tags.get("contact:website") or "").strip() or "No website available."
+        return ""
+
+    def _place_detail_raw(self, place: dict, key_num: int) -> str:
+        tags = place.get("tags") or {}
+        if key_num == 1:
+            return (place.get("address") or "").strip()
+        if key_num == 2:
+            return (place.get("opening_hours") or tags.get("opening_hours") or "").strip()
+        if key_num == 3:
+            return (place.get("phone") or tags.get("phone") or tags.get("contact:phone") or "").strip()
+        if key_num == 4:
+            return (place.get("website") or tags.get("website") or tags.get("contact:website") or "").strip()
+        return ""
+
+    def _fetch_place_detail(self, place: dict, key_num: int, name: str) -> None:
+        self._fetching = True
+        self._detail_announce(f"Looking up {name}...")
+
+        def _fetch():
+            try:
+                info = self._detail_cb(name, place.get("lat", 0.0), place.get("lon", 0.0))
+            except Exception as exc:
+                info = {
+                    "address": f"Error: {exc}",
+                    "phone": "",
+                    "website": "",
+                    "opening_hours": "",
+                }
+            wx.CallAfter(self._finish_place_detail_action, place, key_num, info or {})
+
+        import threading
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _finish_place_detail_action(self, place: dict, key_num: int, info: dict) -> None:
+        self._fetching = False
+        place.update(info or {})
+        self._detail_announce(self._place_detail_text(place, key_num))
+
+    def _delete_selected_place(self):
+        place = self._selected_place()
+        if not place or self._fetching:
+            return
+        old_sel = self.listbox.GetSelection()
+        name = self._selected_place_name(place)
+        dlg = wx.MessageDialog(
+            self,
+            f"Are you sure '{name}' no longer exists?",
+            "Report Missing POI",
+            wx.YES_NO | wx.NO_DEFAULT | wx.ICON_QUESTION,
+        )
+        if dlg.ShowModal() != wx.ID_YES:
+            dlg.Destroy()
+            self.listbox.SetFocus()
+            return
+        dlg.Destroy()
+        parent = self.GetParent()
+        if parent and hasattr(parent, "_suppress_poi_entry"):
+            try:
+                parent._suppress_poi_entry(place, name)
+            except Exception:
+                pass
+        self._places = [p for p in self._places if p is not place]
+        summaries = [self._fmt_summary(p) for p in self._places]
+        self.listbox.Set(summaries)
+        if self._places:
+            new_sel = min(max(old_sel, 0), len(self._places) - 1)
+            self.listbox.SetSelection(new_sel)
+            self.listbox.EnsureVisible(new_sel)
+            self.listbox.SetFocus()
+            if self._showing_detail:
+                self._show_list()
+            self._announce(f"Deleted {name}.")
+        else:
+            self._announce(f"Deleted {name}. No more results.")
+            self.EndModal(wx.ID_CLOSE)
+
+    def _rename_selected_place(self):
+        place = self._selected_place()
+        if not place or self._fetching:
+            return
+        old_name = (place.get("name") or "food place").split(",")[0].strip()
+        dlg = wx.TextEntryDialog(
+            self,
+            f"New name for '{old_name}':",
+            "Rename POI",
+            old_name,
+        )
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy()
+            self.listbox.SetFocus()
+            return
+        new_name = dlg.GetValue().strip()
+        dlg.Destroy()
+        if not new_name or new_name.lower() == old_name.lower():
+            self.listbox.SetFocus()
+            return
+
+        parent = self.GetParent()
+        if parent and hasattr(parent, "_rename_poi_entry"):
+            try:
+                updated, _ = parent._rename_poi_entry(place, new_name, old_name)
+                place.update(updated)
+            except Exception:
+                place["name"] = new_name
+        else:
+            place["name"] = new_name
+
+        self.listbox.Set(self._rebuild_summaries())
+        if self._showing_detail:
+            self._show_list()
+        self._announce(f"Renamed to {new_name}.")
+
+    def _mark_selected_place(self):
+        place, coords, name = self._selected_place_coords()
+        if not place or not coords:
+            return
+        parent = self.GetParent()
+        if not parent or not hasattr(parent, "_prompt_mark_slot"):
+            return
+        parent._prompt_mark_slot(remove=False, coords=coords, name=name)
+
+    def _set_selected_place_destination(self):
+        place, coords, name = self._selected_place_coords()
+        if not place or not coords:
+            return
+        parent = self.GetParent()
+        if not parent or not hasattr(parent, "_set_route_destination_from_coords"):
+            return
+        self._route_destination = {"coords": coords, "name": name}
+        parent._set_route_destination_from_coords(coords, name)
+
+    def _handle_selected_place_key(self, event) -> bool:
+        code = event.GetKeyCode()
+        if _primary_down(event) and code in (ord("W"), ord("w")):
+            self._open_selected_website()
+            return True
+        if _primary_down(event) and not event.AltDown() and code in (ord("1"), ord("2"), ord("3")):
+            parent = self.GetParent()
+            if parent and hasattr(parent, "_announce_mark"):
+                parent._announce_mark(int(chr(code)))
+                return True
+        if _primary_down(event) and event.ShiftDown() and not event.AltDown() and code in (ord("1"), ord("2"), ord("3")):
+            parent = self.GetParent()
+            dest = self._current_route_destination()
+            if parent and dest and hasattr(parent, "_report_mark_to_destination"):
+                parent._find_food_destination = dest
+                if hasattr(parent, "_map_destination"):
+                    parent._map_destination = dest
+                parent._report_mark_to_destination(int(chr(code)))
+                return True
+        if _primary_down(event) and not event.ShiftDown() and not event.AltDown() and code in (ord("D"), ord("d")):
+            self._set_selected_place_destination()
+            return True
+        if _primary_down(event) and event.ShiftDown() and not event.AltDown() and code in (ord("D"), ord("d")):
+            dest = self._current_route_destination()
+            if dest:
+                parent = self.GetParent()
+                if parent:
+                    parent._find_food_destination = dest
+                    if hasattr(parent, "_map_destination"):
+                        parent._map_destination = dest
+                name = dest.get("name", "destination")
+                coords = dest.get("coords") or ()
+                if len(coords) == 2:
+                    lat, lon = coords
+                    self._detail_announce(f"Destination is {name}, at {lat:.4f}, {lon:.4f}.")
+                else:
+                    self._detail_announce(f"Destination is {name}.")
+                return True
+        if _primary_down(event) and not event.ShiftDown() and not event.AltDown() and code in (ord("M"), ord("m")):
+            self._mark_selected_place()
+            return True
+        if code == wx.WXK_F2:
+            self._rename_selected_place()
+            return True
+        if code == wx.WXK_DELETE:
+            self._delete_selected_place()
+            return True
+        if self._handle_ctrl_alt_place_shortcut(event):
+            return True
+        return False
+
+    def _handle_ctrl_alt_place_shortcut(self, event) -> bool:
+        if not (_primary_down(event) and event.AltDown()):
+            return False
+        code = event.GetKeyCode()
+        if code not in (ord("1"), ord("2"), ord("3"), ord("4"), ord("5"), ord("6")):
+            return False
+
+        place = self._selected_place()
+        if not place or self._fetching:
+            return True
+
+        name = self._selected_place_name(place)
+        key_num = int(chr(code))
+        parent = self.GetParent()
+
+        if key_num in (1, 2, 3, 4):
+            text = self._place_detail_raw(place, key_num)
+            if text:
+                self._detail_announce(text)
+                return True
+            if self._detail_cb:
+                self._fetch_place_detail(place, key_num, name)
+                return True
+            self._detail_announce(text or "No information available.")
+            return True
+
+        if key_num == 5:
+            gemini = getattr(parent, "_gemini", None)
+            if not gemini or not getattr(gemini, "is_configured", False):
+                self._detail_announce("Gemini not configured — add API key in settings.")
+                return True
+            kind = place.get("kind", "")
+            suburb = getattr(parent, "_current_suburb", "") or place.get("address", "")
+            cache_key = f"review_{name.lower().replace(' ','_')}_{round(place.get('lat',0),2)}_{round(place.get('lon',0),2)}"
+            self._detail_announce(f"Asking Gemini about {name}...")
+
+            def _gemini_review():
+                loc = f" in {suburb}" if suburb else ""
+                kind_s = f" ({kind})" if kind else ""
+                prompt = (f"Give a brief 2-3 sentence summary of what people say about "
+                          f"{name}{kind_s}{loc}. Focus on what it's like to visit. "
+                          f"Be concise and factual.")
+                result = gemini.query_text(prompt, cache_key)
+                result = result if result else f"No information found for {name}."
+                wx.CallAfter(self._detail_announce, result)
+
+            import threading
+            threading.Thread(target=_gemini_review, daemon=True).start()
+            return True
+
+        if key_num == 6:
+            gemini = getattr(parent, "_gemini", None)
+            settings = getattr(parent, "settings", None) or {}
+            google_key = settings.get("google_api_key", "").strip()
+            if not google_key and not (gemini and getattr(gemini, "is_configured", False)):
+                self._detail_announce(
+                    "Menu lookup needs a Google API key or Gemini API key. Add one in Settings."
+                )
+                return True
+            if not parent or not hasattr(parent, "_show_menu_links_dialog"):
+                self._detail_announce("Menu lookup is not available here.")
+                return True
+
+            self._detail_announce(f"Looking up menu for {name}...")
+
+            def _gemini_menu():
+                kind = place.get("kind", "")
+                address = (place.get("address") or getattr(parent, "_current_suburb", "") or "")
+                website = place.get("website") or ""
+                country = getattr(parent, "last_country_found", "")
+                region = getattr(parent, "_current_subregion", "")
+                suburb = (place.get("address") or
+                          getattr(parent, "_current_suburb", "") or
+                          address)
+                urls = []
+                places_website = ""
+                if google_key and gemini and getattr(gemini, "search_menu_links_places", None):
+                    urls, places_website = gemini.search_menu_links_places(
+                        name, suburb, region, country, google_key,
+                        place.get("lat") or 0.0, place.get("lon") or 0.0)
+                if not urls and gemini and getattr(gemini, "ask_menu_links", None) and getattr(gemini, "is_configured", False):
+                    effective_website = places_website or website
+                    urls = gemini.ask_menu_links(name, kind, address, effective_website, country, region)
+                if urls:
+                    wx.CallAfter(parent._show_menu_links_dialog, name, urls)
+                else:
+                    if google_key and not (gemini and getattr(gemini, "is_configured", False)):
+                        msg = (
+                            f"No menu found for {name}. "
+                            "Menu lookup can still use Gemini for broader web search if you add a Gemini API key."
+                        )
+                    elif not google_key and gemini and getattr(gemini, "is_configured", False):
+                        msg = (
+                            f"No menu found for {name}. "
+                            "Add a Google API key for Places-based menu discovery."
+                        )
+                    else:
+                        msg = f"No menu found for {name}."
+                    wx.CallAfter(self._detail_announce, msg)
+
+            import threading
+            threading.Thread(target=_gemini_menu, daemon=True).start()
+            return True
+
+        return True
+
+    def _rebuild_summaries(self):
+        return [self._fmt_summary(p) for p in self._places]
+
     def _open_selected_website(self):
         place = self._selected_place()
         if not place or self._fetching:
@@ -1907,8 +2252,11 @@ class FindFoodDialog(wx.Dialog):
 
     def _on_list_key(self, event):
         code = event.GetKeyCode()
-        if _primary_down(event) and code in (ord("W"), ord("w")):
-            self._open_selected_website()
+        if self._handle_selected_place_key(event):
+            return
+        parent = self.GetParent()
+        if parent and hasattr(parent, "on_key") and (_primary_down(event) or event.AltDown()):
+            parent.on_key(event)
             return
         if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
             self._show_detail()
@@ -1916,21 +2264,18 @@ class FindFoodDialog(wx.Dialog):
         event.Skip()
 
     def _on_char_hook(self, event):
-        code = event.GetKeyCode()
-        if _primary_down(event) and code in (ord("W"), ord("w")):
-            self._open_selected_website()
+        def _on_primary(evt):
+            if self._handle_selected_place_key(evt):
+                return True
+            parent = self.GetParent()
+            if parent and hasattr(parent, "on_key") and (_primary_down(evt) or evt.AltDown()):
+                parent.on_key(evt)
+                return True
+            return False
+        if _hook_detail_list(self, event, self._showing_detail,
+                             self._show_list, self._show_detail,
+                             escape_id=wx.ID_CLOSE, on_primary=_on_primary):
             return
-        if self._showing_detail:
-            if code in (wx.WXK_ESCAPE, wx.WXK_BACK):
-                self._show_list()
-                return
-        else:
-            if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
-                self._show_detail()
-                return
-            if code == wx.WXK_ESCAPE:
-                self.EndModal(wx.ID_CLOSE)
-                return
         event.Skip()
 
 
@@ -1978,17 +2323,11 @@ class HotelResultsDialog(wx.Dialog):
             self.EndModal(wx.ID_OK)
 
     def _on_key(self, event):
-        if event.GetKeyCode() in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
-            self._on_enter()
+        if _hook_escape_enter(self, event, on_enter=self._on_enter):
             return
         event.Skip()
 
     def _on_char(self, event):
-        code = event.GetKeyCode()
-        if code == wx.WXK_ESCAPE:
-            self.EndModal(wx.ID_CANCEL)
-            return
-        if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
-            self._on_enter()
+        if _hook_escape_enter(self, event, on_enter=self._on_enter):
             return
         event.Skip()

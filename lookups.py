@@ -1220,9 +1220,13 @@ class LookupsMixin:
         }
 
         lines = ["GeoFeatures nearby:", ""]
-        for name, code in features:
+        for name, code, dist_km, compass in features:
             label = labels.get(code, code)
-            lines.append(f"{label}: {name}")
+            if dist_km < 1.0:
+                dist_str = f"{round(dist_km * 1000)} m"
+            else:
+                dist_str = f"{round(dist_km)} km"
+            lines.append(f"{label}: {name} — {dist_str} {compass}")
 
         text = "\n".join(lines).strip()
         self._show_features_dialog(text, location)
