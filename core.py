@@ -10550,6 +10550,22 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             candidates.append((label, lat, lon, 2, "online"))
         return candidates
 
+    def _run_online_jump(self, query):
+        """Fetch online candidates for *query*, show a pick dialog, and return
+        the chosen (label, lat, lon, rank, source) tuple.  Returns None if no
+        results were found or the user cancelled, with status already updated."""
+        self._status_update("Searching online...", force=True)
+        candidates = self._online_place_candidates(query)
+        if not candidates:
+            self._status_update("No online result found.", force=True)
+            return None
+        dlg = wx.SingleChoiceDialog(self, "", "Online Jump Results",
+                                    [c[0] for c in candidates])
+        picked = dlg.ShowModal() == wx.ID_OK
+        result = candidates[dlg.GetSelection()] if picked else None
+        dlg.Destroy()
+        return result
+
     def _parse_jump_coordinates(self, query):
         text = (query or "").strip()
         if not text:
@@ -10780,23 +10796,17 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     self, msg, "Online Search", wx.YES_NO | wx.NO_DEFAULT | wx.ICON_QUESTION)
                 do_online = dlg.ShowModal() == wx.ID_YES
                 dlg.Destroy()
-                if do_online:
-                    self._status_update("Searching online...", force=True)
-                    candidates = self._online_place_candidates(original_q)
-                    if not candidates:
-                        self._status_update("No online result found.", force=True)
-                        wx.CallAfter(self.listbox.SetFocus)
-                        return
-                else:
-                    self._status_update("Not found.", force=True)
-                    wx.CallAfter(self.listbox.SetFocus)
+                if not do_online:
+                    wx.CallAfter(self.show_jump_dialog, original_q)
+                    return
+                self._status_update("Searching online...", force=True)
+                candidates = self._online_place_candidates(original_q)
+                if not candidates:
+                    self._status_update("No online result found.", force=True)
+                    wx.CallAfter(self.show_jump_dialog, original_q)
                     return
             else:
-                self._status_update(
-                    "Not found. Type at least 4 characters to search online.",
-                    force=True,
-                )
-                wx.CallAfter(self.listbox.SetFocus)
+                wx.CallAfter(self.show_jump_dialog, original_q)
                 return
 
         # Sort: exact first, then prefix, then contains; alphabetical within each group
@@ -10845,21 +10855,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             if selection == online_choice_index:
                 pick_dlg.Destroy()
                 pick_dlg = None
-                self._status_update("Searching online...", force=True)
-                online_candidates = self._online_place_candidates(original_q)
-                if not online_candidates:
-                    self._status_update("No online result found.", force=True)
-                    wx.CallAfter(self.listbox.SetFocus)
+                result = self._run_online_jump(original_q)
+                if result is None:
+                    wx.CallAfter(self.show_jump_dialog, original_q)
                     return
-                online_labels = [c[0] for c in online_candidates]
-                online_dlg = wx.SingleChoiceDialog(
-                    self, "", "Online Jump Results", online_labels)
-                if online_dlg.ShowModal() != wx.ID_OK:
-                    online_dlg.Destroy()
-                    self.listbox.SetFocus()
-                    return
-                label, lat, lon, _, source = online_candidates[online_dlg.GetSelection()]
-                online_dlg.Destroy()
+                label, lat, lon, _, source = result
             else:
                 label, lat, lon, _, source = candidates[selection]
             self.lat = lat
