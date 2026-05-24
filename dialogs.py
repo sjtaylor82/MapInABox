@@ -1542,8 +1542,16 @@ class FlightSearchDialog(wx.Dialog):
 
         vs = wx.BoxSizer(wx.VERTICAL)
 
-        self._prompt_lbl = wx.StaticText(self, label="From — type city or airport name:")
-        vs.Add(self._prompt_lbl, 0, wx.LEFT | wx.TOP, 8)
+        prompt = "From — type city or airport name:"
+        self._prompt_lbl = wx.TextCtrl(
+            self,
+            value=prompt,
+            style=wx.TE_READONLY | wx.BORDER_NONE,
+        )
+        self._prompt_lbl.SetName(prompt)
+        self._prompt_lbl.SetBackgroundColour(self.GetBackgroundColour())
+        self._prompt_lbl.SetForegroundColour(wx.SystemSettings.GetColour(wx.SYS_COLOUR_WINDOWTEXT))
+        vs.Add(self._prompt_lbl, 0, wx.LEFT | wx.TOP | wx.EXPAND, 8)
         self.txt = wx.TextCtrl(self)
         vs.Add(self.txt, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
 
@@ -1667,7 +1675,8 @@ class FlightSearchDialog(wx.Dialog):
             self.origin_iata = iata
             prompt = "To — type destination city or airport name"
             self.SetTitle(f"Flight search — {prompt}")
-            self._prompt_lbl.SetLabel(f"{prompt}:")
+            self._prompt_lbl.SetValue(f"{prompt}:")
+            self._prompt_lbl.SetName(f"{prompt}:")
             self.txt.Clear()
             self.lb.Clear()
             self._matches = []

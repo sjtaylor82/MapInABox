@@ -1020,7 +1020,11 @@ class LookupsMixin:
         self.lat = lat
         self.lon = lon
         self._status_update(msg, force=True)
-        threading.Thread(target=self._lookup, daemon=True).start()
+        if hasattr(self, "_start_lookup_after_jump"):
+            self._start_lookup_after_jump()
+        else:
+            self._fetch_in_progress = True
+            threading.Thread(target=self._lookup, daemon=True).start()
 
     # ------------------------------------------------------------------
     # REST Countries (languages, capital, currency)
