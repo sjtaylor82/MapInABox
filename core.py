@@ -54,14 +54,6 @@ try:
 except Exception:
     _ao2 = None
 
-try:
-    import pyttsx3 as _pyttsx3
-except Exception:
-    _pyttsx3 = None
-
-_coord_tts = None
-_coord_tts_lock = threading.Lock()
-
 def _speak(msg: str, interrupt: bool = True) -> None:
     """Output directly to the active screen reader via AO2."""
     if _ao2:
@@ -83,34 +75,6 @@ def _braille(msg: str) -> None:
         except Exception:
             pass
 
-def _speak_coordinates(msg: str, interrupt: bool = True) -> None:
-    """Speak coordinate text through the local Windows TTS engine."""
-    text = str(msg)
-    if not _pyttsx3:
-        _speak(text, interrupt=interrupt)
-        return
-
-    def _run():
-        global _coord_tts
-        try:
-            with _coord_tts_lock:
-                if _coord_tts is None:
-                    _coord_tts = _pyttsx3.init()
-                    try:
-                        rate = int(_coord_tts.getProperty("rate"))
-                        _coord_tts.setProperty("rate", max(140, rate - 20))
-                    except Exception:
-                        pass
-                if interrupt:
-                    _coord_tts.stop()
-                _coord_tts.say(text)
-                _coord_tts.runAndWait()
-        except Exception:
-            pass
-
-    threading.Thread(target=_run, daemon=True).start()
-
-
 # ── Sub-modules ──────────────────────────────────────────────────
 from geo import (
     bearing_deg,
@@ -127,7 +91,7 @@ from here_poi import HereClient as HerePoi
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0.0.7'
+APP_VERSION   = '1.0.0.8'
 
 # Bundled read-only resources — inside the exe (_MEIPASS) or next to the script.
 BASE_DIR      = getattr(_sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -1791,27 +1755,6 @@ class WorldMapPanel(wx.Panel):
             if self._canonical_country_name(key) == target:
                 return key
         return ""
-
-    def _iter_city_indices_in_box(self, lat_min, lat_max, lon_min, lon_max):
-        owner = self._owner_ref()
-        if not owner:
-            return
-        grid = getattr(owner, "_city_grid", {})
-        seen = set()
-        gy_min = int(math.floor(lat_min * 10))
-        gy_max = int(math.floor(lat_max * 10))
-        gx_min = int(math.floor(lon_min * 10))
-        gx_max = int(math.floor(lon_max * 10))
-        for gy in range(gy_min, gy_max + 1):
-            for gx in range(gx_min, gx_max + 1):
-                for idx in grid.get((gy, gx), []):
-                    if idx in seen:
-                        continue
-                    seen.add(idx)
-                    lat = owner._city_lats[idx]
-                    lon = owner._city_lons[idx]
-                    if lat_min <= lat <= lat_max and lon_min <= lon <= lon_max:
-                        yield idx
 
     def _draw_country_overlay(self, gc, entry, w, h, fill, outline=None):
         if not entry:
@@ -8214,31 +8157,6 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._last_location_announcement_pos = pos
         self._announce_transient(msg_text)
 
-    def _schedule_location_announcement(self, msg, delay_ms=0):
-        """Queue a live location announcement without adding extra lag."""
-        msg_text = str(msg)
-        if getattr(self, "_suppress_location_restore", False):
-            self._verbose_trace(f"_schedule_location_announcement suppressed while location restore is active: {msg!r}")
-            return
-        if delay_ms and delay_ms > 0:
-            self._pending_location_announcement = msg_text
-            timer = getattr(self, "_location_announcement_timer", None)
-            if timer is not None:
-                try:
-                    timer.Stop()
-                except Exception:
-                    pass
-            self._location_announcement_timer = wx.CallLater(delay_ms, self._flush_location_announcement)
-            return
-        self._announce_location(msg_text)
-
-    def _flush_location_announcement(self):
-        msg = getattr(self, "_pending_location_announcement", "")
-        self._pending_location_announcement = ""
-        self._location_announcement_timer = None
-        if msg:
-            self._announce_location(msg)
-
     def _update_location_focus(self, msg):
         """Update the focused location row, for real position changes."""
         if getattr(self, "_suppress_location_restore", False):
@@ -8246,7 +8164,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             return
         self._verbose_trace(f"_update_location_focus applied: {msg!r}")
         self._refresh_info_panel()
-        self._schedule_location_announcement(msg)
+        self._announce_location(msg)
         if getattr(self, "_poi_list", []):
             wx.CallAfter(self.listbox.SetFocus)
 
