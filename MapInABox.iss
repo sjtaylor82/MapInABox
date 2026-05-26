@@ -7,13 +7,13 @@
 ;      iscc MapInABox.iss
 
 #define AppName    "Map in a Box"
-#define AppVersion "1.0.0.8"
+#define AppVersion "1.0.0.9"
 #define AppExe     "MapInABox.exe"
 #define AppDir     "dist\MapInABox"
 
 [Setup]
 AppName={#AppName}
-AppVersion=1.0.0.8
+AppVersion=1.0.0.9
 AppVerName={#AppName} {#AppVersion}
 AppPublisher=Sam Taylor
 AppCopyright=Copyright (C) 2026 Sam Taylor
@@ -70,7 +70,7 @@ Filename: "{app}\{#AppExe}"; \
     Description: "Launch {#AppName}"; \
     Flags: nowait postinstall skipifsilent
 ; Offer to open the manual after install
-Filename: "{app}\manual.html"; \
+Filename: "{app}\_internal\manual.html"; \
     Description: "Open the &Manual"; \
     Flags: postinstall shellexec skipifsilent
 

@@ -91,7 +91,7 @@ from here_poi import HereClient as HerePoi
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0.0.8'
+APP_VERSION   = '1.0.0.9'
 
 # Bundled read-only resources — inside the exe (_MEIPASS) or next to the script.
 BASE_DIR      = getattr(_sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -2841,8 +2841,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         add_item(help_menu, "help", "&Help\tF1",
                  lambda e: self.show_help())
         add_item(help_menu, "manual", "&Manual",
-                 lambda e: __import__("webbrowser").open(
-                     "file:///" + os.path.join(BASE_DIR, "manual.html").replace("\\", "/")))
+                 lambda e: os.startfile(os.path.join(BASE_DIR, "manual.html")))
         add_item(help_menu, "about", "&About",
                  lambda e: self._show_about())
         help_menu.AppendSeparator()

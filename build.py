@@ -53,7 +53,7 @@ if not DO_MAC_APP:
     iss = re.sub(r'(OutputBaseFilename=MapInABox-)[\d.]+', rf'\g<1>{VERSION}', iss)
     manual_run = (
         '; Offer to open the manual after install\n'
-        'Filename: "{app}\\manual.html"; \\\n'
+        'Filename: "{app}\\_internal\\manual.html"; \\\n'
         '    Description: "Open the &Manual"; \\\n'
         '    Flags: postinstall shellexec skipifsilent\n'
     )
