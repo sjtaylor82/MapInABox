@@ -1,4 +1,4 @@
-﻿"""street_data.py — Road segment fetching and street-name queries for Map in a Box.
+"""street_data.py — Road segment fetching and street-name queries for Map in a Box.
 
 All Overpass queries related to road/street data live here.
 No wx imports, no MapNavigator state mutation — every method takes its
@@ -12,7 +12,9 @@ MapNavigator holds a StreetFetcher instance and is responsible for:
 Classes
 -------
 StreetFetcher
-    fetch_road_data(lat, lon, radius) → (segments, addresses) | raises
+    fetch_road_data(lat, lon, radius)
+        → (segments, addresses, from_cache, snap_lat, snap_lon,
+           skip_stage2, natural_features, interpolations) | raises
     nearest_road(lat, lon, segments) → (primary_name, cross_name | None)
     nearest_roads_with_distances(lat, lon, segments) → list[(name, distance_m)]
     street_names_from_segments(segments) → list[str]
@@ -521,9 +523,10 @@ class StreetFetcher:
         fetch_lat: float | None = None,
         fetch_lon: float | None = None,
         status_cb=None,
+        stage1_done_cb=None,
         suburb_name: str | None = None,
         country_code: str | None = None,
-    ) -> tuple[list, list, bool, float | None, float | None]:
+    ) -> tuple:
         """Fetch road segments and address points for the area around (lat, lon).
 
         Parameters
@@ -536,10 +539,13 @@ class StreetFetcher:
             If provided, fetch is centred here instead of lat/lon.
         status_cb:
             Optional callable(str) for progress messages.
+        stage1_done_cb:
+            Optional zero-argument callback invoked when stage 1 completes.
 
         Returns
         -------
-        (segments, addresses, from_cache, snap_lat, snap_lon)
+        (segments, addresses, from_cache, snap_lat, snap_lon,
+         skip_stage2, natural_features, interpolations)
         """
         def status(msg):
             if status_cb:
@@ -579,6 +585,7 @@ class StreetFetcher:
         try:
             return self._live_fetch(centre_lat, centre_lon, radius,
                                     snap=snap, status_cb=status_cb,
+                                    stage1_done_cb=stage1_done_cb,
                                     suburb_name=suburb_name,
                                     country_code=country_code)
         except RuntimeError:
@@ -598,6 +605,7 @@ class StreetFetcher:
         radius: int,
         snap: tuple = (None, None),
         status_cb=None,
+        stage1_done_cb=None,
         suburb_name: str | None = None,
         country_code: str | None = None,
     ) -> tuple:
@@ -608,7 +616,7 @@ class StreetFetcher:
         get their own streets, not neighbours.
         Fallback: radius query if no boundary found in OSM.
 
-        Returns (segs, addrs, False, snap_lat, snap_lon).
+        Returns the same tuple shape as ``fetch_road_data``.
         """
         def status(msg):
             if status_cb:
@@ -739,7 +747,7 @@ class StreetFetcher:
                     segments.append({"name": label, "kind": kind, "coords": coords,
                                       "way_id": el.get("id", 0), "raw_name": name})
                 
-                # Natural/landuse/leisure/waterway/barrier = natural feature
+                # Address interpolation way
                 elif "addr:interpolation" in tags:
                     # Address interpolation way
                     interp_type = tags.get("addr:interpolation", "all")
@@ -804,6 +812,8 @@ class StreetFetcher:
 
         source = "boundary" if used_boundary else "radius"
         print(f"[Street] Stage 1 complete ({source}): {len(segments)} segments, {len(natural_features)} natural features, {len(interpolations)} interpolations")
+        if stage1_done_cb:
+            stage1_done_cb()
         
         # Use GNAF for Australia, Overpass elsewhere
         country_code = country_code or ""
@@ -823,20 +833,8 @@ class StreetFetcher:
                 "ts":        time.time(),
             }, suburb_name=suburb_name, used_boundary=True)
             print(f"[Street] Cached {len(segments)} segments for future use")
-            
-            # Disabled: 7km prefetch causes rate limiting (429) and timeouts (504)
-            # Large radius already provides good coverage without hammering server
-            # threading.Thread(
-            #     target=self._prefetch_neighbors,
-            #     args=(centre_lat, centre_lon, suburb_name, status_cb),
-            #     daemon=True
-            # ).start()
-            # print(f"[Street] Starting 7km neighbor pre-fetch in background...")
+            # 7km neighbor prefetch stays disabled to avoid rate limiting and timeouts.
 
-        # 6th element: whether query is complete (skip Stage 2 if True)
-        # Since we now fetch full radius in Stage 1, mark as complete
-        # 7th element: natural features list
-        # 8th element: interpolations list
         return segments, addresses, False, snap[0], snap[1], True, natural_features, interpolations
     
     def _prefetch_neighbors(
@@ -908,7 +906,7 @@ class StreetFetcher:
                     "raw_name": name
                 })
             
-            # Natural/landuse/leisure/waterway/barrier = natural feature
+            # Natural, landuse, leisure, waterway, and barrier features
             else:
                 feature_type = None
                 feature_name = tags.get("name", "")
@@ -1029,32 +1027,28 @@ class StreetFetcher:
     def _fetch_gnaf_addresses(self, lat, lon, suburb, radius=2000):
         """Fetch addresses from GNAF server (Australia only)."""
         GNAF_SERVER = "https://samtaylor9.nfshost.com/cgi-bin/gnaf_server.py"
-        
-        import urllib.request
-        import urllib.parse
-        import json
-        
+
         params = urllib.parse.urlencode({
             "lat": round(lat, 6),
             "lon": round(lon, 6),
             "suburb": suburb,
             "radius": radius,
         })
-        
+
         try:
             url = f"{GNAF_SERVER}?{params}"
             req = urllib.request.Request(url, headers={"User-Agent": "MapInABox/1.0"})
             with urllib.request.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read().decode())
-            
+
             if "error" in data:
                 print(f"[GNAF] Server error: {data['error']}")
                 return []
-            
+
             addresses = data.get("addresses", [])
             print(f"[GNAF] Fetched {len(addresses)} addresses for {suburb}")
             return addresses
-            
+
         except Exception as e:
             print(f"[GNAF] Fetch failed: {e}")
             return []

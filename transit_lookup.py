@@ -1,4 +1,4 @@
-﻿"""transit_lookup.py — GTFS / transit timetable lookup for Map in a Box.
+"""transit_lookup.py — GTFS / transit timetable lookup for Map in a Box.
 
 Replaces the old transit.py stub.  All GTFS parsing, MobilityData catalog
 management, feed discovery, and timetable queries live here.

@@ -1,4 +1,4 @@
-﻿"""streetview.py — Google Street View imagery lookup with vision analysis.
+"""streetview.py — Google Street View imagery lookup with vision analysis.
 
 Fetches two Street View frames at a given coordinate (one in each direction
 along the street) and uses Gemini to describe what is visible from street
@@ -7,12 +7,12 @@ level — shops, signage, building types, access features.
 Parallel to satellite.py in structure and calling convention.
 """
 
-import json
-import os
-import time
 import urllib.parse
 import urllib.request
+import json
 from typing import Optional, Tuple
+
+from cache_utils import _get_cached, _load_cache, _save_cache, _set_cached
 
 
 # ── Heading helpers ────────────────────────────────────────────────────────────
@@ -75,43 +75,6 @@ def _fetch_streetview_image(
         return None
 
 
-# ── Cache helpers (same format as satellite.py) ────────────────────────────────
-
-def _load_cache(cache_path: str) -> dict:
-    if os.path.exists(cache_path):
-        try:
-            with open(cache_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"[StreetView] Cache load failed: {e}")
-    return {}
-
-
-def _save_cache(cache_path: str, cache: dict) -> None:
-    try:
-        with open(cache_path, "w", encoding="utf-8") as f:
-            json.dump(cache, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"[StreetView] Cache save failed: {e}")
-
-
-def _get_cached(cache: dict, key: str, ttl_days: int = 30) -> Optional[str]:
-    """Get cached description if still fresh.
-
-    30-day TTL — street scenes change more often than satellite imagery.
-    """
-    entry = cache.get(key)
-    if not isinstance(entry, dict):
-        return None
-    if (time.time() - entry.get("ts", 0)) / 86400 > ttl_days:
-        return None
-    return entry.get("text")
-
-
-def _set_cached(cache: dict, key: str, value: str) -> None:
-    cache[key] = {"text": value, "ts": time.time()}
-
-
 # ── Public entry point ─────────────────────────────────────────────────────────
 
 def lookup_streetview_description(
@@ -137,7 +100,7 @@ def lookup_streetview_description(
 
     cache_key = f"sv_{lat:.4f}_{lon:.4f}"
     cache = _load_cache(cache_path)
-    cached_desc = _get_cached(cache, cache_key)
+    cached_desc = _get_cached(cache, cache_key, ttl_days=30)
 
     # ── Coverage check ─────────────────────────────────────────────────────
     print(f"[StreetView] Checking coverage at ({lat:.4f}, {lon:.4f})...")

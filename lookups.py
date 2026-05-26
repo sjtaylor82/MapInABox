@@ -1,4 +1,4 @@
-﻿"""lookups.py — LookupsMixin for Map in a Box.
+"""lookups.py — LookupsMixin for Map in a Box.
 
 All world-map data-fetch methods live here as a mixin class.
 MapNavigator inherits from this alongside wx.Frame.
@@ -186,163 +186,6 @@ class LookupsMixin:
         threading.Thread(target=_fetch_geo, daemon=True).start()
         return
 
-        COUNTRY_ALIASES = self._country_aliases()
-        country_q = COUNTRY_ALIASES.get(country, country)
-        state_q   = getattr(self, 'last_state_found',  '') or ''
-        city_q    = getattr(self, 'last_city_found',   '') or ''
-        suburb_q  = getattr(self, '_current_suburb',   '') or ''
-        cached_label = ""
-        nearby_cached = getattr(self, "_nearby_cached_place_label", None)
-        if callable(nearby_cached):
-            cached_label = nearby_cached(self.lat, self.lon) or ""
-        if cached_label:
-            cached_main = cached_label.split(",", 1)[0].strip()
-            if cached_main:
-                suburb_q = cached_main
-                city_q = cached_main
-
-        self._wiki_ensure_cache()
-        cache_key = f"{suburb_q}|{city_q}|{state_q}|{country_q}"
-        if cache_key in self._wiki_cache:
-            self._status_update(self._wiki_cache[cache_key], force=True)
-            return
-
-        hint = suburb_q or city_q or state_q or country_q
-        self._status_update(f"Looking up {hint}...")
-
-        def _http(url):
-            req = urllib.request.Request(url, headers={"User-Agent": "MapInABox/1.0"})
-            with urllib.request.urlopen(req, timeout=10) as r:
-                return json.loads(r.read().decode())
-
-        def _opensearch(query):
-            params = urllib.parse.urlencode({
-                "action": "opensearch", "search": query,
-                "limit": 5, "namespace": 0, "format": "json",
-            })
-            data   = _http(f"https://en.wikipedia.org/w/api.php?{params}")
-            titles = data[1] if isinstance(data, list) and len(data) > 1 else []
-            return titles[0] if titles else ""
-
-        def _summary(title):
-            t = urllib.parse.quote(title.replace(" ", "_"))
-            return _http(f"https://en.wikipedia.org/api/rest_v1/page/summary/{t}")
-
-        def _wikidata(qid):
-            if not qid:
-                return None, "", None
-            data   = _http(f"https://www.wikidata.org/wiki/Special:EntityData/{qid}.json")
-            entity = (data.get("entities") or {}).get(qid, {})
-            claims = entity.get("claims", {})
-            best_val, best_year, best_time = None, "", ""
-            for stmt in claims.get("P1082", []):
-                mv  = stmt.get("mainsnak", {}).get("datavalue", {}).get("value", {})
-                amt = mv.get("amount") if isinstance(mv, dict) else None
-                if amt is None:
-                    continue
-                try:
-                    pop = int(float(str(amt)))
-                except ValueError:
-                    continue
-                time_str = year = ""
-                for qval in stmt.get("qualifiers", {}).get("P585", []):
-                    tv = qval.get("datavalue", {}).get("value", {}).get("time", "")
-                    if tv:
-                        time_str, year = tv, tv[1:5]
-                        break
-                if time_str > best_time or best_val is None:
-                    best_time, best_val, best_year = time_str, pop, year
-            area = None
-            for stmt in claims.get("P2046", []):
-                mv  = stmt.get("mainsnak", {}).get("datavalue", {}).get("value", {})
-                amt = mv.get("amount") if isinstance(mv, dict) else None
-                if amt is not None:
-                    try:
-                        area = float(str(amt))
-                        break
-                    except ValueError:
-                        pass
-            return best_val, best_year, area
-
-        def _fmt_pop(pop, year):
-            if pop is None:
-                return ""
-            s = f"{pop:,}"
-            if year:
-                try:
-                    if datetime.date.today().year - int(year) >= 5:
-                        return f"{s} (last census {year})"
-                except ValueError:
-                    pass
-            return s
-
-        def _fmt_area(area):
-            if area is None:
-                return ""
-            if area >= 1_000_000:
-                return f"{area/1_000_000:,.1f} million km²"
-            if area >= 1000:
-                return f"{area:,.0f} km²"
-            return f"{area:.1f} km²"
-
-        def _try_article(query, context_words):
-            title = _opensearch(query)
-            if not title:
-                return None
-            try:
-                data = _summary(title)
-            except Exception:
-                return None
-            if data.get("type") != "standard":
-                return None
-            extract = (data.get("extract") or "").strip()
-            if not extract or len(extract) < 80:
-                return None
-            el = extract.lower()
-            if context_words and not any(w.lower() in el for w in context_words):
-                print(f"[Wiki] '{title}' doesn't mention {context_words} — skipping")
-                return None
-            qid  = data.get("wikibase_item", "")
-            pop, yr, area = _wikidata(qid)
-            summary = ". ".join(extract.split(". ")[:3]).strip()
-            if not summary.endswith("."):
-                summary += "."
-            stats = []
-            if pop:
-                stats.append(f"Population: {_fmt_pop(pop, yr)}")
-            if area:
-                stats.append(f"Area: {_fmt_area(area)}")
-            stats_str = f"  {'.  '.join(stats)}." if stats else ""
-            return title, f"{title}.{stats_str}  {summary}"
-
-        def _fetch():
-            try:
-                context = [w for w in [state_q, country_q] if w]
-                for search, ctx in [
-                    (f"{suburb_q} {state_q or country_q}", context)
-                        if suburb_q and suburb_q.lower() not in
-                            (city_q.lower(), country_q.lower()) else (None, None),
-                    (f"{city_q} {state_q or country_q}", context)
-                        if city_q and city_q.lower() != country_q.lower() else (None, None),
-                    (f"{state_q} {country_q}", [country_q] if country_q else [])
-                        if state_q and state_q.lower() != country_q.lower() else (None, None),
-                    (country_q, []),
-                ]:
-                    if not search:
-                        continue
-                    result = _try_article(search, ctx)
-                    if result:
-                        _, text = result
-                        wx.CallAfter(self._on_wiki_result, cache_key, text)
-                        return
-                wx.CallAfter(self._on_wiki_result, cache_key,
-                             f"No Wikipedia article found for {hint}.")
-            except Exception as exc:
-                wx.CallAfter(self._on_wiki_result, cache_key,
-                             f"Lookup failed: {exc}")
-
-        threading.Thread(target=_fetch, daemon=True).start()
-
     def _wiki_ensure_cache(self):
         """Load wiki cache from disk if not already loaded."""
         if not hasattr(self, '_wiki_cache'):
@@ -437,54 +280,53 @@ class LookupsMixin:
     # Time / Timezone
     # ------------------------------------------------------------------
 
-    def announce_time(self):
-        """T key — local time at current position."""
+    def _resolve_timezone(self):
+        """Return (IANA name, ZoneInfo) for the current location."""
         try:
             from timezonefinder import TimezoneFinder
-            import pytz
-            tf      = TimezoneFinder()
-            tz_name = tf.timezone_at(lat=self.lat, lng=self.lon)
-            if tz_name:
-                tz  = pytz.timezone(tz_name)
-                now = datetime.datetime.now(tz)
-                loc = tz_name.replace("_", " ")
-            else:
-                now = datetime.datetime.now()
-                loc = "local"
+            from zoneinfo import ZoneInfo
+            tz_name = TimezoneFinder().timezone_at(lat=self.lat, lng=self.lon)
+            if not tz_name:
+                return None, None
+            try:
+                return tz_name, ZoneInfo(tz_name)
+            except Exception:
+                return tz_name, None
         except Exception:
+            return None, None
+
+    def announce_time(self):
+        """T key — local time at current position."""
+        tz_name, tz = self._resolve_timezone()
+        if tz_name and tz:
+            now = datetime.datetime.now(tz)
+            loc = tz_name.replace("_", " ")
+        else:
             now = datetime.datetime.now()
             loc = "local"
         hour = now.hour % 12 or 12
-        self._status_update(
+        self._announce_transient(
             f"{loc} time: {hour}:{now.strftime('%M')} {now.strftime('%p')}, "
             f"{now.strftime('%A')} {now.day} {now.strftime('%B %Y')}.",
-            force=True
         )
 
     def _announce_timezone(self):
         """Shift+T — timezone name and UTC offset."""
-        try:
-            from timezonefinder import TimezoneFinder
-            import pytz
-            tf      = TimezoneFinder()
-            tz_name = tf.timezone_at(lat=self.lat, lng=self.lon)
-            if not tz_name:
-                self._status_update("No timezone found for this location.", force=True)
-                return
-            tz            = pytz.timezone(tz_name)
-            now           = datetime.datetime.now(tz)
-            offset        = now.utcoffset()
-            total_minutes = int(offset.total_seconds() / 60)
-            hours, mins   = divmod(abs(total_minutes), 60)
-            sign          = "+" if total_minutes >= 0 else "-"
-            offset_str    = f"UTC{sign}{hours}" if mins == 0 else f"UTC{sign}{hours}:{mins:02d}"
-            dst_offset    = tz.dst(datetime.datetime.now().replace(tzinfo=None))
-            dst_str       = "  Daylight saving time currently active." \
-                            if dst_offset and dst_offset.total_seconds() > 0 else ""
-            friendly      = tz_name.replace("_", " ").replace("/", ", ")
-            self._status_update(f"Timezone: {friendly}.  {offset_str}.{dst_str}", force=True)
-        except Exception as exc:
-            self._status_update(f"Could not determine timezone: {exc}", force=True)
+        tz_name, tz = self._resolve_timezone()
+        if not tz_name or not tz:
+            self._announce_transient("No timezone found for this location.")
+            return
+
+        now = datetime.datetime.now(tz)
+        offset = now.utcoffset() or datetime.timedelta(0)
+        total_minutes = int(offset.total_seconds() / 60)
+        hours, mins = divmod(abs(total_minutes), 60)
+        sign = "+" if total_minutes >= 0 else "-"
+        offset_str = f"UTC{sign}{hours}" if mins == 0 else f"UTC{sign}{hours}:{mins:02d}"
+        dst_offset = now.dst() or datetime.timedelta(0)
+        dst_str = "  Daylight saving time currently active." if dst_offset.total_seconds() > 0 else ""
+        friendly = tz_name.replace("_", " ").replace("/", ", ")
+        self._announce_transient(f"Timezone: {friendly}.  {offset_str}.{dst_str}")
 
     # ------------------------------------------------------------------
     # Weather / Environment
@@ -516,11 +358,14 @@ class LookupsMixin:
         import time as _time
         cached = cache.get(cache_key)
         if cached and (_time.time() - cached["ts"]) < 600:
-            self._status_update(cached["text"], force=True)
+            self._announce_transient(
+                cached["text"],
+                braille_msg=cached.get("braille", cached["text"]),
+            )
             return
 
         city = self._weather_place_label()
-        self._status_update("Fetching weather...")
+        self._announce_transient("Fetching weather...")
         lat, lon = self.lat, self.lon
 
         wmo = {
@@ -621,23 +466,27 @@ class LookupsMixin:
                 full = current_str + forecast_str
                 if not hasattr(self, "_weather_cache"):
                     self._weather_cache = {}
-                self._weather_cache[cache_key] = {"text": full, "ts": _time.time()}
-                wx.CallAfter(self._status_update, full, True)
+                braille_summary = current_str
+                self._weather_cache[cache_key] = {
+                    "text": full,
+                    "braille": braille_summary,
+                    "ts": _time.time(),
+                }
+                wx.CallAfter(self._announce_transient, full, braille_msg=braille_summary)
             except Exception as exc:
-                wx.CallAfter(self._status_update, f"Could not fetch weather: {exc}", True)
+                wx.CallAfter(self._announce_transient, f"Could not fetch weather: {exc}")
 
         threading.Thread(target=_fetch, daemon=True).start()
 
     def _announce_sunrise_sunset(self):
         """S key — sunrise and sunset times at current position."""
-        self._status_update("Fetching sunrise and sunset...")
+        self._announce_transient("Fetching sunrise and sunset...")
         lat, lon = self.lat, self.lon
 
         def _fetch():
             try:
-                from timezonefinder import TimezoneFinder
-                tf      = TimezoneFinder()
-                tz_name = tf.timezone_at(lat=lat, lng=lon) or "UTC"
+                tz_name, _ = self._resolve_timezone()
+                tz_name = tz_name or "UTC"
                 params  = urllib.parse.urlencode({
                     "latitude":      round(lat, 4),
                     "longitude":     round(lon, 4),
@@ -653,23 +502,22 @@ class LookupsMixin:
                 sunrises = daily.get("sunrise", [])
                 sunsets  = daily.get("sunset",  [])
                 if not sunrises or not sunsets:
-                    wx.CallAfter(self._status_update, "Sunrise/sunset data not available.", True)
+                    wx.CallAfter(self._announce_transient, "Sunrise/sunset data not available.")
                     return
                 def _fmt(iso):
                     t = datetime.datetime.fromisoformat(iso)
                     h = t.hour % 12 or 12
                     return f"{h}:{t.strftime('%M')} {t.strftime('%p')}"
-                wx.CallAfter(self._status_update,
-                             f"Sunrise: {_fmt(sunrises[0])}.  Sunset: {_fmt(sunsets[0])}.",
-                             True)
+                wx.CallAfter(self._announce_transient,
+                             f"Sunrise: {_fmt(sunrises[0])}.  Sunset: {_fmt(sunsets[0])}.")
             except Exception as exc:
-                wx.CallAfter(self._status_update, f"Could not fetch sunrise/sunset: {exc}", True)
+                wx.CallAfter(self._announce_transient, f"Could not fetch sunrise/sunset: {exc}")
 
         threading.Thread(target=_fetch, daemon=True).start()
 
     def _announce_sea_temperature(self):
         """Called by map-mode weather over open water via Open-Meteo Marine."""
-        self._status_update("Fetching sea surface temperature...")
+        self._announce_transient("Fetching sea surface temperature...")
         lat, lon = self.lat, self.lon
         imperial = self._weather_uses_fahrenheit()
 
@@ -690,7 +538,7 @@ class LookupsMixin:
                 wh   = cur.get("wave_height")
                 wdir = cur.get("wave_direction")
                 if sst is None:
-                    wx.CallAfter(self._status_update, "Sea temperature data not available here.", True)
+                    wx.CallAfter(self._announce_transient, "Sea temperature data not available here.")
                     return
                 from geo import compass_name
                 if imperial:
@@ -698,9 +546,9 @@ class LookupsMixin:
                 parts = [f"Sea surface temperature: {round(sst, 1)}{'°F' if imperial else '°C'}."]
                 if wh   is not None: parts.append(f"Wave height: {round(wh, 1)} metres.")
                 if wdir is not None: parts.append(f"Waves from the {compass_name(wdir)}.")
-                wx.CallAfter(self._status_update, "  ".join(parts), True)
+                wx.CallAfter(self._announce_transient, "  ".join(parts))
             except Exception as exc:
-                wx.CallAfter(self._status_update, f"Could not fetch sea temperature: {exc}", True)
+                wx.CallAfter(self._announce_transient, f"Could not fetch sea temperature: {exc}")
 
         threading.Thread(target=_fetch, daemon=True).start()
 

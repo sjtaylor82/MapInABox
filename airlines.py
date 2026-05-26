@@ -1,4 +1,4 @@
-﻿"""airlines.py — ICAO callsign prefix to airline name/IATA mapping for Map in a Box.
+"""airlines.py — ICAO callsign prefix to airline name/IATA mapping for Map in a Box.
 
 Used by Shift+A overhead flights to convert raw OpenSky callsigns like
 'QFA421' into readable 'Qantas QF421'.

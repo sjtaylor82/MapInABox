@@ -1,4 +1,4 @@
-﻿"""aviationstack.py — AviationStack API client for Map in a Box."""
+"""aviationstack.py — AviationStack API client for Map in a Box."""
 
 import json
 import re

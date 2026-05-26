@@ -1,4 +1,4 @@
-﻿"""timetable.py — TimeTable Lookup API client for Map in a Box.
+"""timetable.py — TimeTable Lookup API client for Map in a Box.
 
 Returns OTA XML which we parse into plain dicts.
 """

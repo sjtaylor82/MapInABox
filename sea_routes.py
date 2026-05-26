@@ -1,4 +1,4 @@
-﻿"""sea_routes.py — Offline sea routing for Map in a Box.
+"""sea_routes.py — Offline sea routing for Map in a Box.
 
 Hardcoded ports, waypoints and routes for educational maritime routing.
 No API required — all distances calculated via haversine.

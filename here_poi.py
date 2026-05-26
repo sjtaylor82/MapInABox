@@ -1,4 +1,4 @@
-﻿"""here_poi.py — HERE POI detail and ratings lookup for Map in a Box.
+"""here_poi.py — HERE POI detail and ratings lookup for Map in a Box.
 
 Provides address, phone, opening hours and ratings for points of interest
 via the HERE Discover and Lookup APIs.  Street data comes from OSM/Overpass.

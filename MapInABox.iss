@@ -13,7 +13,7 @@
 
 [Setup]
 AppName={#AppName}
-AppVersion=1.0.0.5
+AppVersion=1.0.0.6
 AppVerName={#AppName} {#AppVersion}
 AppPublisher=Sam Taylor
 AppCopyright=Copyright (C) 2026 Sam Taylor
@@ -69,6 +69,10 @@ Name: "{userdesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 Filename: "{app}\{#AppExe}"; \
     Description: "Launch {#AppName}"; \
     Flags: nowait postinstall skipifsilent
+; Offer to open the manual after install
+Filename: "{app}\manual.html"; \
+    Description: "Open the &Manual"; \
+    Flags: postinstall shellexec skipifsilent
 
 [UninstallDelete]
 ; Remove the cache folder the app creates (the user data in %APPDATA% is intentionally left alone)

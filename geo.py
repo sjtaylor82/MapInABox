@@ -1,4 +1,4 @@
-﻿"""geo.py — shared geodesic helpers for Map in a Box.
+"""geo.py — shared geodesic helpers for Map in a Box.
 
 All distance, bearing, compass-direction, and point-on-segment maths
 live here so they are never duplicated across modules.

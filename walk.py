@@ -1,4 +1,4 @@
-﻿"""walk.py — WalkMixin for Map in a Box.
+"""walk.py — WalkMixin for Map in a Box.
 
 All walking-mode methods as a mixin class.
 MapNavigator inherits from this alongside wx.Frame.

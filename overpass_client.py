@@ -1,4 +1,4 @@
-﻿"""overpass_client.py — Overpass API client for Map in a Box.
+"""overpass_client.py — Overpass API client for Map in a Box.
 
 A single shared helper so every query goes through one semaphore,
 one cooldown timer, and one mirror-fallback loop.  MapNavigator

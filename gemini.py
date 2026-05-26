@@ -1,4 +1,4 @@
-﻿"""gemini.py — All Gemini AI queries for Map in a Box.
+"""gemini.py — All Gemini AI queries for Map in a Box.
 
 One module, one client, one cache file.  Core.py imports GeminiClient and
 calls clean methods — no prompts, no JSON parsing, no google-genai imports

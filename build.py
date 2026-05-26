@@ -51,6 +51,24 @@ if not DO_MAC_APP:
     iss = re.sub(r'(#define AppVersion\s+")[^"]+(")', rf'\g<1>{VERSION}\2', iss)
     iss = re.sub(r'(AppVersion=).*',                       rf'\g<1>{VERSION}', iss)
     iss = re.sub(r'(OutputBaseFilename=MapInABox-)[\d.]+', rf'\g<1>{VERSION}', iss)
+    manual_run = (
+        '; Offer to open the manual after install\n'
+        'Filename: "{app}\\manual.html"; \\\n'
+        '    Description: "Open the &Manual"; \\\n'
+        '    Flags: postinstall shellexec skipifsilent\n'
+    )
+    if 'Open the &Manual' not in iss:
+        launch_block = (
+            '[Run]\n'
+            '; Offer to launch after install\n'
+            'Filename: "{app}\\{#AppExe}"; \\\n'
+            '    Description: "Launch {#AppName}"; \\\n'
+            '    Flags: nowait postinstall skipifsilent\n'
+        )
+        if launch_block in iss:
+            iss = iss.replace(launch_block, launch_block + manual_run)
+        elif '[Run]\n' in iss:
+            iss = iss.replace('[Run]\n', '[Run]\n' + manual_run, 1)
     open(iss_path, "w", encoding="utf-8").write(iss)
     print(f"Updated MapInABox.iss -> version {VERSION}")
 

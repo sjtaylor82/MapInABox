@@ -1,4 +1,4 @@
-﻿"""opensky.py — OpenSky Network API client for Map in a Box.
+"""opensky.py — OpenSky Network API client for Map in a Box.
 
 Handles OAuth2 Client Credentials authentication and all OpenSky API calls.
 Credentials are read from credentials.json in the app directory.

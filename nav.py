@@ -1,4 +1,4 @@
-﻿"""nav.py — Turn-by-turn navigation engine for Map in a Box.
+"""nav.py — Turn-by-turn navigation engine for Map in a Box.
 
 All routing logic lives here: Dijkstra pathfinding over the walk graph,
 instruction building, HERE/Google/OSM route fetching, polyline decoding,

@@ -1,4 +1,4 @@
-﻿import json
+import json
 import os
 import urllib.parse
 import urllib.error

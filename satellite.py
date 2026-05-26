@@ -1,15 +1,14 @@
-﻿"""satellite.py — Google Maps satellite imagery lookup with vision analysis.
+"""satellite.py — Google Maps satellite imagery lookup with vision analysis.
 
 Fetches satellite/aerial imagery at a given coordinate and uses Gemini 2.5 Flash Lite
 to provide a rich, detailed description of the landscape suitable for accessibility.
 """
 
-import json
-import os
-import time
 import urllib.parse
 import urllib.request
 from typing import Optional, Tuple
+
+from cache_utils import _get_cached, _load_cache, _save_cache, _set_cached
 
 
 def lat_lon_to_tile_url(lat: float, lon: float, zoom: int, api_key: str) -> str:
@@ -66,41 +65,6 @@ def fetch_satellite_image(lat: float, lon: float, zoom: int, api_key: str) -> Op
         return None
 
 
-def _load_cache(cache_path: str) -> dict:
-    """Load cache from JSON file."""
-    if os.path.exists(cache_path):
-        try:
-            with open(cache_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"[Satellite] Cache load failed: {e}")
-    return {}
-
-
-def _save_cache(cache_path: str, cache: dict) -> None:
-    """Save cache to JSON file."""
-    try:
-        with open(cache_path, "w", encoding="utf-8") as f:
-            json.dump(cache, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"[Satellite] Cache save failed: {e}")
-
-
-def _get_cached(cache: dict, key: str, ttl_days: int = 90) -> Optional[str]:
-    """Get cached value if fresh."""
-    entry = cache.get(key)
-    if not isinstance(entry, dict):
-        return None
-    if (time.time() - entry.get("ts", 0)) / 86400 > ttl_days:
-        return None
-    return entry.get("text")
-
-
-def _set_cached(cache: dict, key: str, value: str) -> None:
-    """Set cache value with timestamp."""
-    cache[key] = {"text": value, "ts": time.time()}
-
-
 def lookup_satellite_description(
     lat: float,
     lon: float,
@@ -130,7 +94,7 @@ def lookup_satellite_description(
 
     # Load/check cache
     cache = _load_cache(cache_path)
-    cached_desc = _get_cached(cache, cache_key)
+    cached_desc = _get_cached(cache, cache_key, ttl_days=90)
 
     # Fetch image
     image_bytes = fetch_satellite_image(lat, lon, zoom, google_api_key)

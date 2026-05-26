@@ -1,4 +1,4 @@
-﻿"""route_tools.py — Driving route tools for Map in a Box.
+"""route_tools.py — Driving route tools for Map in a Box.
 
 Provides geocoding, detour comparison, and route exploration.
 

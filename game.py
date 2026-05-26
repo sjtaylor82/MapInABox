@@ -1,4 +1,4 @@
-﻿"""game.py — Country Discovery Challenge for Map in a Box.
+"""game.py — Country Discovery Challenge for Map in a Box.
 
 The player is given a random country name and must navigate the world map
 to find it within 5 minutes.  Audio feedback:

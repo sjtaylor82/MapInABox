@@ -1,4 +1,4 @@
-﻿"""tools.py — ToolsMixin for Map in a Box.
+"""tools.py — ToolsMixin for Map in a Box.
 
 F12 tools (detour calculator, route explorer, toll compare,
 journey planner, departure board) as a mixin class.

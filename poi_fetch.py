@@ -1,4 +1,4 @@
-﻿"""poi_fetch.py — POI fetching and parsing for Map in a Box.
+"""poi_fetch.py — POI fetching and parsing for Map in a Box.
 
 All Overpass queries related to Points of Interest live here.
 No wx imports, no MapNavigator state — every method takes what it needs

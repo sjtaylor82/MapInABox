@@ -1,4 +1,4 @@
-﻿"""free.py — free-flow spatial exploration mode for Map in a Box.
+"""free.py — free-flow spatial exploration mode for Map in a Box.
 
 Purpose
 -------
