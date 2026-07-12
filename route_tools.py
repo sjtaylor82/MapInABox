@@ -21,11 +21,12 @@ from __future__ import annotations
 
 import datetime
 import json
-import math
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Callable, Optional
+
+from geo import haversine_m as _haversine_m
 
 
 # ---------------------------------------------------------------------------
@@ -52,6 +53,52 @@ def _fmt_distance(metres: int) -> str:
     if km < 10.0:
         return f"{km:.1f} km"
     return f"{int(round(km))} km"
+
+
+def _gd(value) -> dict:
+    """Coerce an API-returned value to a dict.
+
+    Some transit/route API fields are documented as objects but occasionally
+    come back missing, null, or (rarely) as a bare string in malformed
+    responses. Calling .get() on those directly raises AttributeError and
+    kills the whole journey plan. Route every such field through this first.
+    """
+    return value if isinstance(value, dict) else {}
+
+
+class GeocodeResult:
+    """Tuple-like geocode result with optional Google place metadata."""
+
+    __slots__ = ("lat", "lon", "formatted", "place_id")
+
+    def __init__(
+        self,
+        lat: float,
+        lon: float,
+        formatted: str,
+        place_id: str = "",
+    ) -> None:
+        self.lat = float(lat)
+        self.lon = float(lon)
+        self.formatted = formatted
+        self.place_id = place_id or ""
+
+    def __iter__(self):
+        yield self.lat
+        yield self.lon
+        yield self.formatted
+
+    def __len__(self) -> int:
+        return 3
+
+    def __getitem__(self, idx):
+        return (self.lat, self.lon, self.formatted)[idx]
+
+    def __repr__(self) -> str:
+        return (
+            f"GeocodeResult(lat={self.lat!r}, lon={self.lon!r}, "
+            f"formatted={self.formatted!r}, place_id={'set' if self.place_id else 'empty'})"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -82,16 +129,6 @@ def _decode_polyline(encoded: str) -> list[tuple[float, float]]:
                 lng += delta
         points.append((lat / 1e5, lng / 1e5))
     return points
-
-
-def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Great-circle distance in metres between two points."""
-    R = 6_371_000.0
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dp = math.radians(lat2 - lat1)
-    dl = math.radians(lon2 - lon1)
-    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
 def _sample_polyline(points: list[tuple[float, float]],
@@ -179,13 +216,18 @@ class RouteTools:
 
     def _google_geocode(
         self, address: str, country_code: str = ""
-    ) -> tuple[float, float, str]:
+    ) -> GeocodeResult:
         candidates = self._google_geocode_candidates(address, country_code)
         if not candidates:
             raise RuntimeError(f"Could not find '{address}': no results")
         result = candidates[0]
         loc = result["geometry"]["location"]
-        return float(loc["lat"]), float(loc["lng"]), result.get("formatted_address", address)
+        return GeocodeResult(
+            loc["lat"],
+            loc["lng"],
+            result.get("formatted_address", address),
+            result.get("place_id", ""),
+        )
 
     def _google_geocode_candidates(
         self, address: str, country_code: str = "", limit: int = 5
@@ -205,12 +247,12 @@ class RouteTools:
 
     def _nominatim_geocode(
         self, address: str, country_code: str = ""
-    ) -> tuple[float, float, str]:
+    ) -> GeocodeResult:
         candidates = self._nominatim_geocode_candidates(address, country_code)
         if not candidates:
             raise RuntimeError(f"Could not find '{address}' with open geocoder.")
         item = candidates[0]
-        return float(item["lat"]), float(item["lon"]), item.get("display_name", address)
+        return GeocodeResult(item["lat"], item["lon"], item.get("display_name", address))
 
     def _nominatim_geocode_candidates(
         self, address: str, country_code: str = "", limit: int = 5
@@ -239,7 +281,7 @@ class RouteTools:
 
     def _photon_geocode(
         self, address: str, country_code: str = ""
-    ) -> tuple[float, float, str]:
+    ) -> GeocodeResult:
         candidates = self._photon_geocode_candidates(address, country_code)
         if not candidates:
             raise RuntimeError(f"Could not find '{address}' with open geocoder.")
@@ -252,7 +294,7 @@ class RouteTools:
         label = props.get("name") or props.get("street") or address
         if props.get("city") and props.get("city") not in label:
             label = f"{label}, {props.get('city')}"
-        return float(coords[1]), float(coords[0]), label
+        return GeocodeResult(coords[1], coords[0], label)
 
     def _photon_geocode_candidates(
         self, address: str, country_code: str = "", limit: int = 5
@@ -274,7 +316,7 @@ class RouteTools:
 
     def _open_geocode(
         self, address: str, country_code: str = ""
-    ) -> tuple[float, float, str]:
+    ) -> GeocodeResult:
         last_exc: Exception | None = None
         for fn in (self._nominatim_geocode, self._photon_geocode):
             try:
@@ -288,9 +330,9 @@ class RouteTools:
 
     def geocode_candidates(
         self, address: str, country_code: str = "", limit: int = 5
-    ) -> list[tuple[float, float, str]]:
+    ) -> list[GeocodeResult]:
         """Return up to `limit` candidate geocodes for disambiguation."""
-        candidates: list[tuple[float, float, str]] = []
+        candidates: list[GeocodeResult] = []
         try:
             if self._key:
                 for item in self._google_geocode_candidates(address, country_code, limit=limit):
@@ -300,7 +342,9 @@ class RouteTools:
                     lng = loc.get("lng")
                     if lat is None or lng is None:
                         continue
-                    candidates.append((float(lat), float(lng), formatted))
+                    candidates.append(
+                        GeocodeResult(lat, lng, formatted, item.get("place_id", ""))
+                    )
         except Exception:
             candidates = []
 
@@ -313,7 +357,7 @@ class RouteTools:
                 lon = item.get("lon")
                 if lat is None or lon is None:
                     continue
-                candidates.append((float(lat), float(lon), item.get("display_name", address)))
+                candidates.append(GeocodeResult(lat, lon, item.get("display_name", address)))
         except Exception:
             pass
 
@@ -330,7 +374,7 @@ class RouteTools:
                 label = props.get("name") or props.get("street") or address
                 if props.get("city") and props.get("city") not in label:
                     label = f"{label}, {props.get('city')}"
-                candidates.append((float(coords[1]), float(coords[0]), label))
+                candidates.append(GeocodeResult(coords[1], coords[0], label))
         except Exception:
             pass
 
@@ -342,7 +386,7 @@ class RouteTools:
 
     def geocode(
         self, address: str, country_code: str = ""
-    ) -> tuple[float, float, str]:
+    ) -> GeocodeResult:
         """Resolve an address string to (lat, lon, formatted_address)."""
         try:
             if self._key:
@@ -520,6 +564,90 @@ class RouteTools:
 
         return data.get("routes", [])
 
+    def _google_walking_routes_request(
+        self,
+        origin: tuple[float, float],
+        destination: tuple[float, float],
+        alternatives: bool = False,
+        *,
+        origin_place_id: str = "",
+        dest_place_id: str = "",
+        variant_label: str = "",
+    ) -> list[dict]:
+        """Google Routes API walking directions with rich step details."""
+        if not self._key:
+            raise RuntimeError("No Google API key configured.")
+
+        def _wp(lat, lon):
+            return {"location": {"latLng": {"latitude": lat, "longitude": lon}}}
+
+        def _place_wp(place_id: str):
+            return {"placeId": place_id}
+
+        body: dict = {
+            "origin": _place_wp(origin_place_id) if origin_place_id else _wp(*origin),
+            "destination": _place_wp(dest_place_id) if dest_place_id else _wp(*destination),
+            "travelMode": "WALK",
+            "computeAlternativeRoutes": alternatives,
+            "polylineEncoding": "ENCODED_POLYLINE",
+        }
+
+        fields = [
+            "routes.duration",
+            "routes.distanceMeters",
+            "routes.description",
+            "routes.warnings",
+            "routes.legs.duration",
+            "routes.legs.distanceMeters",
+            "routes.legs.startLocation",
+            "routes.legs.endLocation",
+            "routes.legs.steps.distanceMeters",
+            "routes.legs.steps.staticDuration",
+            "routes.legs.steps.startLocation",
+            "routes.legs.steps.endLocation",
+            "routes.legs.steps.navigationInstruction",
+            "routes.legs.steps.polyline.encodedPolyline",
+            "routes.polyline.encodedPolyline",
+            "routes.localizedValues",
+            "routes.legs.localizedValues",
+            "routes.legs.steps.localizedValues",
+        ]
+
+        headers = {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": self._key,
+            "X-Goog-FieldMask": ",".join(fields),
+        }
+
+        req = urllib.request.Request(
+            self._ROUTES_URL,
+            data=json.dumps(body).encode(),
+            headers=headers,
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode())
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.read().decode()
+            except Exception:
+                pass
+            print(f"[RouteTools] HTTP {exc.code}: {detail}")
+            raise RuntimeError(
+                f"Google Routes API error {exc.code}. {detail[:300]}"
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Walking routes request failed: {exc}")
+
+        routes = data.get("routes", [])
+        if variant_label:
+            for route in routes:
+                route["_waypoint_variant"] = variant_label
+        return routes
+
     def _osrm_routes_request(
         self,
         origin: tuple[float, float],
@@ -623,6 +751,133 @@ class RouteTools:
             "legs": legs,
             "provider": "osrm",
             "supports_tolls": False,
+        }
+
+    @staticmethod
+    def _parse_google_walking_route(route: dict, route_num: int) -> dict:
+        """Parse a Google Routes API WALK route into the shared route format."""
+        def _loc_to_tuple(loc: dict) -> tuple[float | None, float | None]:
+            ll = (loc or {}).get("latLng") or {}
+            lat = ll.get("latitude")
+            lon = ll.get("longitude")
+            if lat is None or lon is None:
+                return None, None
+            return float(lat), float(lon)
+
+        def _duration_s(value) -> int:
+            if isinstance(value, str) and value.endswith("s"):
+                try:
+                    return int(round(float(value[:-1])))
+                except Exception:
+                    return 0
+            try:
+                return int(round(float(value)))
+            except Exception:
+                return 0
+
+        duration_s = _duration_s(route.get("duration", 0))
+        distance_m = int(round(float(route.get("distanceMeters", 0))))
+        description = str(route.get("description", "")).strip()
+        route_basis = str(route.get("_waypoint_variant", "")).strip()
+        warnings = [str(w).strip() for w in (route.get("warnings") or []) if str(w).strip()]
+
+        legs = []
+        leg_steps = []
+        leg = (route.get("legs") or [{}])[0]
+        for step in leg.get("steps", []):
+            nav = step.get("navigationInstruction") or {}
+            text = str(nav.get("instructions", "")).strip()
+            maneuver = str(nav.get("maneuver", "")).strip()
+            dist_m = int(round(float(step.get("distanceMeters", 0) or 0)))
+            dur_s = _duration_s(step.get("staticDuration", 0))
+            start_lat, start_lon = _loc_to_tuple(step.get("startLocation") or {})
+            end_lat, end_lon = _loc_to_tuple(step.get("endLocation") or {})
+
+            if not text and maneuver:
+                text = maneuver.replace("_", " ").title()
+            if not text:
+                continue
+
+            if dist_m >= 1000:
+                dist_text = f"{dist_m / 1000:.1f} km"
+            else:
+                dist_text = f"{dist_m} m"
+
+            leg_steps.append({
+                "lat": start_lat,
+                "lon": start_lon,
+                "end_lat": end_lat,
+                "end_lon": end_lon,
+                "instruction": text,
+                "maneuver": maneuver,
+                "distance_m": dist_m,
+                "duration_s": dur_s,
+                "distance": dist_text,
+            })
+
+        leg_distance_m = int(round(float(leg.get("distanceMeters", distance_m) or distance_m)))
+        leg_duration_s = _duration_s(leg.get("duration", duration_s))
+        start_lat, start_lon = _loc_to_tuple(leg.get("startLocation") or {})
+        end_lat, end_lon = _loc_to_tuple(leg.get("endLocation") or {})
+
+        leg_steps_poly = []
+        for step in leg.get("steps", []):
+            step_poly = (step.get("polyline") or {}).get("encodedPolyline", "")
+            if step_poly:
+                leg_steps_poly.extend(_decode_polyline(step_poly))
+
+        if not leg_steps_poly:
+            route_poly = (route.get("polyline") or {}).get("encodedPolyline", "")
+            if route_poly:
+                leg_steps_poly = _decode_polyline(route_poly)
+        walk_path_points = [
+            {"lat": lat, "lon": lon, "instruction": "", "maneuver": ""}
+            for lat, lon in leg_steps_poly
+        ]
+        if not walk_path_points and start_lat is not None and start_lon is not None:
+            walk_path_points = [{"lat": start_lat, "lon": start_lon, "instruction": "", "maneuver": ""}]
+
+        walking_leg = {
+            "type": "walking",
+            "duration": _fmt_duration(leg_duration_s),
+            "distance": _fmt_distance(leg_distance_m),
+            "instructions": [
+                (f"{s['instruction']} ({_fmt_distance(s['distance_m'])})"
+                 if s.get("distance_m") else s["instruction"])
+                for s in leg_steps
+            ],
+            "steps": leg_steps,
+            "_walk_points": [
+                {
+                    "lat": s["lat"],
+                    "lon": s["lon"],
+                    "instruction": s["instruction"],
+                    "maneuver": s["maneuver"],
+                }
+                for s in leg_steps
+                if s.get("lat") is not None and s.get("lon") is not None
+            ],
+            "_walk_path_points": walk_path_points,
+        }
+
+        basis_text = f", {route_basis}" if route_basis else ""
+        return {
+            "summary": (f"Option {route_num}: Walk {_fmt_duration(duration_s)}, "
+                        f"{_fmt_distance(distance_m)}{basis_text}"
+                        + (f" via {description}" if description else "") + "."),
+            "duration_text": _fmt_duration(duration_s),
+            "distance_text": _fmt_distance(distance_m),
+            "duration_seconds": duration_s,
+            "distance_m": distance_m,
+            "departure_time": "",
+            "arrival_time": "",
+            "departure_value": 0,
+            "legs": [walking_leg],
+            "transfers": 0,
+            "services": ["walk"],
+            "dedup_key": f"walk|{duration_s}|{distance_m}|{route.get('description','')}",
+            "warnings": warnings,
+            "route_basis": route_basis,
         }
 
     # ------------------------------------------------------------------
@@ -1024,22 +1279,35 @@ class RouteTools:
         departure_time: int | None = None,
         arrival_time: int | None = None,
         transit_mode: str | None = None,
+        *,
+        origin_coords: tuple[float, float] | None = None,
+        dest_coords: tuple[float, float] | None = None,
     ) -> list[dict]:
         """Single Google Directions API call for transit.
 
         Returns list of raw route dicts from the API response.
         """
+        origin_value = (
+            f"{origin_coords[0]},{origin_coords[1]}"
+            if origin_coords is not None else origin_text
+        )
+        dest_value = (
+            f"{dest_coords[0]},{dest_coords[1]}"
+            if dest_coords is not None else dest_text
+        )
+
         params: dict = {
-            "origin": origin_text,
-            "destination": dest_text,
+            "origin": origin_value,
+            "destination": dest_value,
             "mode": "transit",
             "alternatives": "true",
             "key": self._key,
         }
-        if country_code:
+        if country_code and origin_coords is None:
             # Bias results to country by appending to addresses
             if country_code not in origin_text.upper():
                 params["origin"] = f"{origin_text}, {country_code}"
+        if country_code and dest_coords is None:
             if country_code not in dest_text.upper():
                 params["destination"] = f"{dest_text}, {country_code}"
         if departure_time:
@@ -1066,6 +1334,56 @@ class RouteTools:
 
         return data.get("routes", [])
 
+    def _walking_directions(
+        self,
+        origin_text: str,
+        dest_text: str,
+        country_code: str = "",
+        *,
+        origin_coords: tuple[float, float] | None = None,
+        dest_coords: tuple[float, float] | None = None,
+        alternatives: bool = False,
+    ) -> list[dict]:
+        """Google Directions API call for walking route(s)."""
+        origin_value = (
+            f"{origin_coords[0]},{origin_coords[1]}"
+            if origin_coords is not None else origin_text
+        )
+        dest_value = (
+            f"{dest_coords[0]},{dest_coords[1]}"
+            if dest_coords is not None else dest_text
+        )
+        params: dict = {
+            "origin": origin_value,
+            "destination": dest_value,
+            "mode": "walking",
+            "alternatives": "true" if alternatives else "false",
+            "key": self._key,
+        }
+        if country_code and origin_coords is None:
+            if country_code not in origin_text.upper():
+                params["origin"] = f"{origin_text}, {country_code}"
+        if country_code and dest_coords is None:
+            if country_code not in dest_text.upper():
+                params["destination"] = f"{dest_text}, {country_code}"
+
+        url = f"{self._DIRECTIONS_URL}?{urllib.parse.urlencode(params)}"
+        req = urllib.request.Request(url, headers={"User-Agent": "MapInABox/1.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode())
+        except Exception as exc:
+            raise RuntimeError(f"Walking directions request failed: {exc}")
+
+        if data.get("status") != "OK":
+            if data.get("status") == "ZERO_RESULTS":
+                return []
+            raise RuntimeError(
+                f"Walking directions failed: {data.get('status', 'unknown')}"
+            )
+
+        return data.get("routes", [])
+
     @staticmethod
     def _parse_transit_route(route: dict, route_num: int) -> dict:
         """Parse a raw Directions API transit route into a clean structure.
@@ -1078,12 +1396,12 @@ class RouteTools:
         def _strip_html(s):
             return re.sub(r'<[^>]+>', ' ', s).replace('&nbsp;', ' ').strip()
 
-        leg = route["legs"][0]  # transit routes always have one leg
+        leg = _gd((route.get("legs") or [{}])[0])  # transit routes always have one leg
 
-        duration_text = leg["duration"]["text"]
-        dep_time = leg.get("departure_time", {}).get("text", "")
-        arr_time = leg.get("arrival_time", {}).get("text", "")
-        dep_value = leg.get("departure_time", {}).get("value", 0)
+        duration_text = _gd(leg.get("duration")).get("text", "")
+        dep_time = _gd(leg.get("departure_time")).get("text", "")
+        arr_time = _gd(leg.get("arrival_time")).get("text", "")
+        dep_value = _gd(leg.get("departure_time")).get("value", 0)
 
         steps = leg.get("steps", [])
         parsed_legs: list[dict] = []
@@ -1094,15 +1412,21 @@ class RouteTools:
             mode = step.get("travel_mode", "")
 
             if mode == "TRANSIT":
-                td = step.get("transit_details", {})
-                line = td.get("line", {})
+                td = _gd(step.get("transit_details"))
+                line = _gd(td.get("line"))
                 line_name = line.get("short_name") or line.get("name", "")
-                vehicle_type = line.get("vehicle", {}).get("type", "")
-                agency = line.get("agencies", [{}])[0].get("name", "")
-                dep_stop = td.get("departure_stop", {}).get("name", "")
-                arr_stop = td.get("arrival_stop", {}).get("name", "")
-                dep_t = td.get("departure_time", {}).get("text", "")
-                arr_t = td.get("arrival_time", {}).get("text", "")
+                vehicle_type = _gd(line.get("vehicle")).get("type", "")
+                agencies = line.get("agencies") or []
+                first_agency = agencies[0] if agencies else {}
+                agency = _gd(first_agency).get("name", "")
+                dep_stop_obj = _gd(td.get("departure_stop"))
+                arr_stop_obj = _gd(td.get("arrival_stop"))
+                dep_stop = dep_stop_obj.get("name", "")
+                arr_stop = arr_stop_obj.get("name", "")
+                dep_stop_loc = _gd(dep_stop_obj.get("location"))
+                arr_stop_loc = _gd(arr_stop_obj.get("location"))
+                dep_t = _gd(td.get("departure_time")).get("text", "")
+                arr_t = _gd(td.get("arrival_time")).get("text", "")
                 num_stops = td.get("num_stops", 0)
                 headsign = td.get("headsign", "")
 
@@ -1116,36 +1440,104 @@ class RouteTools:
                     "vehicle_type": vehicle_type,
                     "agency": agency,
                     "departure_stop": dep_stop,
+                    "departure_stop_lat": dep_stop_loc.get("lat"),
+                    "departure_stop_lon": dep_stop_loc.get("lng"),
                     "arrival_stop": arr_stop,
+                    "arrival_stop_lat": arr_stop_loc.get("lat"),
+                    "arrival_stop_lon": arr_stop_loc.get("lng"),
                     "departure_time": dep_t,
                     "arrival_time": arr_t,
                     "num_stops": num_stops,
                     "headsign": headsign,
-                    "duration": step.get("duration", {}).get("text", ""),
+                    "duration": _gd(step.get("duration")).get("text", ""),
                 })
 
             elif mode == "WALKING":
                 walk_steps: list[str] = []
-                for sub in step.get("steps", []):
+                walk_points: list[dict] = []
+                walk_path_points: list[dict] = []
+                _TURN_MANEUVERS = frozenset({
+                    "turn-left", "turn-right",
+                    "turn-slight-left", "turn-slight-right",
+                    "turn-sharp-left", "turn-sharp-right",
+                    "uturn-left", "uturn-right",
+                })
+                last_path_coord = None
+                for i, sub in enumerate(step.get("steps", [])):
                     instruction = _strip_html(sub.get("html_instructions", ""))
-                    dist = sub.get("distance", {}).get("text", "")
-                    if instruction:
+                    dist = _gd(sub.get("distance")).get("text", "")
+                    if not instruction:
+                        continue
+                    _wm = re.match(r'^walk for (\d+(?:\.\d+)?)\s*(km?)\b',
+                                   instruction, re.IGNORECASE)
+                    if _wm:
+                        unit = "kilometres" if _wm.group(2).lower() == "km" else "metres"
+                        walk_steps.append(f"Walk for {_wm.group(1)} {unit}")
+                    else:
                         walk_steps.append(f"{instruction} ({dist})" if dist else instruction)
+                    loc = _gd(sub.get("start_location"))
+                    slat = loc.get("lat")
+                    slng = loc.get("lng")
+                    maneuver = sub.get("maneuver", "")
+                    if slat is not None and slng is not None:
+                        if i == 0 or maneuver in _TURN_MANEUVERS:
+                            walk_points.append({
+                                "lat": slat,
+                                "lon": slng,
+                                "instruction": instruction,
+                                "maneuver": maneuver,
+                            })
+
+                    step_poly = (sub.get("polyline") or {}).get("points", "")
+                    path_points = _decode_polyline(step_poly) if step_poly else []
+                    if not path_points and slat is not None and slng is not None:
+                        path_points = [(slat, slng)]
+                    for plat, plon in path_points:
+                        coord_key = (round(plat, 6), round(plon, 6))
+                        if coord_key == last_path_coord:
+                            continue
+                        walk_path_points.append({
+                            "lat": plat,
+                            "lon": plon,
+                            "instruction": instruction,
+                            "maneuver": maneuver,
+                        })
+                        last_path_coord = coord_key
 
                 parsed_legs.append({
                     "type": "walking",
-                    "duration": step.get("duration", {}).get("text", ""),
-                    "distance": step.get("distance", {}).get("text", ""),
+                    "duration": _gd(step.get("duration")).get("text", ""),
+                    "distance": _gd(step.get("distance")).get("text", ""),
                     "instructions": walk_steps,
+                    "_walk_points": walk_points,
+                    "_walk_path_points": walk_path_points,
                 })
 
-        # Build summary line for the listbox
-        services = ", ".join(service_names) if service_names else "Walk"
+        # Build summary line — include "walk" in order where walking legs occur
+        services_parts: list[str] = []
+        prev_walk = False
+        for leg in parsed_legs:
+            if leg["type"] == "transit":
+                name = leg.get("line_name") or leg.get("vehicle_type") or ""
+                if name:
+                    services_parts.append(name)
+                prev_walk = False
+            elif leg["type"] == "walking":
+                if not prev_walk:
+                    services_parts.append("walk")
+                prev_walk = True
+        services = ", ".join(services_parts) if services_parts else "Walk"
+        if services.lower() == "walk":
+            services = "Walk"
         transfer_text = (f", {transfers} transfer{'s' if transfers != 1 else ''}"
                          if transfers > 0 else ", direct")
-        summary = (f"Option {route_num}: {duration_text}"
-                   f", depart {dep_time}, arrive {arr_time}"
-                   f". {services}{transfer_text}.")
+        if dep_time or arr_time:
+            summary = (f"Option {route_num}: {duration_text}"
+                       f", depart {dep_time}, arrive {arr_time}"
+                       f". {services}{transfer_text}.")
+        else:
+            summary = (f"Option {route_num}: {duration_text}. "
+                       f"{services}{transfer_text}.")
 
         # Dedup key: departure time + services used (to detect same route from two calls)
         dedup_key = f"{dep_value}|{'|'.join(service_names)}"
@@ -1153,6 +1545,7 @@ class RouteTools:
         return {
             "summary": summary,
             "duration_text": duration_text,
+            "distance_text": _gd(leg.get("distance")).get("text", ""),
             "departure_time": dep_time,
             "arrival_time": arr_time,
             "departure_value": dep_value,
@@ -1162,13 +1555,33 @@ class RouteTools:
             "dedup_key": dedup_key,
         }
 
+
     def _build_detail_text(self, parsed_route: dict) -> str:
         """Build the full detail text for a single parsed transit route."""
         lines: list[str] = []
-        lines.append(f"Depart {parsed_route['departure_time']}"
-                     f", arrive {parsed_route['arrival_time']}"
-                     f", {parsed_route['duration_text']}.")
-        lines.append("")
+        has_times = bool(parsed_route.get("departure_time") or parsed_route.get("arrival_time"))
+        if has_times:
+            lines.append(f"Depart {parsed_route['departure_time']}"
+                         f", arrive {parsed_route['arrival_time']}"
+                         f", {parsed_route['duration_text']}.")
+            lines.append("")
+        else:
+            dist = parsed_route.get("distance_text", "")
+            dur = parsed_route.get("duration_text", "")
+            if dist and dur:
+                lines.append(f"Walk {dur}, {dist}.")
+            elif dur:
+                lines.append(f"Walk {dur}.")
+            elif dist:
+                lines.append(f"Walk {dist}.")
+            if parsed_route.get("route_basis"):
+                lines.append(f"Route basis: {parsed_route['route_basis']}.")
+            lines.append("")
+
+        for warning in parsed_route.get("warnings", []) or []:
+            lines.append(f"Warning: {warning}.")
+        if parsed_route.get("warnings"):
+            lines.append("")
 
         for i, leg in enumerate(parsed_route["legs"]):
             if leg["type"] == "transit":
@@ -1178,7 +1591,9 @@ class RouteTools:
                 if leg["agency"]:
                     line_desc += f" ({leg['agency']})"
                 lines.append(f"Board {line_desc}.")
-                lines.append(f"  From {leg['departure_stop']}"
+                plat = leg.get("departure_platform", "")
+                plat_str = f", platform {plat}" if plat else ""
+                lines.append(f"  From {leg['departure_stop']}{plat_str}"
                             f" at {leg['departure_time']}.")
                 lines.append(f"  To {leg['arrival_stop']}"
                             f" at {leg['arrival_time']}.")
@@ -1188,7 +1603,8 @@ class RouteTools:
                 lines.append("")
 
             elif leg["type"] == "walking":
-                lines.append(f"Walk {leg['duration']}, {leg['distance']}.")
+                if has_times:
+                    lines.append(f"Walk {leg['duration']}, {leg['distance']}.")
                 for instruction in leg["instructions"]:
                     lines.append(f"  {instruction}")
                 lines.append("")
@@ -1204,6 +1620,12 @@ class RouteTools:
         timestamp: int | None = None,
         transit_filter: str = "all",
         status_cb: Callable[[str], None] | None = None,
+        travel_mode: str = "transit",
+        *,
+        origin_coords: tuple[float, float] | None = None,
+        dest_coords: tuple[float, float] | None = None,
+        origin_place_id: str = "",
+        dest_place_id: str = "",
     ) -> list[dict]:
         """Plan a transit journey and return parsed route options.
 
@@ -1211,6 +1633,9 @@ class RouteTools:
         ----------
         origin_text, dest_text:
             Raw address strings (geocoded by Directions API).
+        origin_coords, dest_coords:
+            Optional exact coordinates for the selected points. When provided,
+            these are used for routing so Google does not re-geocode the text.
         country_code:
             Two-letter ISO code to bias address resolution.
         timing_mode:
@@ -1221,6 +1646,9 @@ class RouteTools:
             "all", "bus", "train", or "ferry".
         status_cb:
             Optional callback for progress updates.
+        travel_mode:
+            "transit" for public transport itineraries, "walking" for a
+            direct walking route.
 
         Returns list of parsed route dicts sorted by departure time.
         Each dict has: summary, duration_text, departure_time,
@@ -1232,49 +1660,104 @@ class RouteTools:
                 "For open departures and stop sequences, use the Departure Board."
             )
 
-        mode_filter = self.TRANSIT_FILTERS.get(transit_filter)
+        travel_mode = (travel_mode or "transit").strip().lower()
 
-        # Build timing params
-        dep_time = None
-        arr_time = None
-        if timing_mode == "now":
-            dep_time = int(datetime.datetime.now().timestamp())
-        elif timing_mode == "depart" and timestamp:
-            dep_time = timestamp
-        elif timing_mode == "arrive" and timestamp:
-            arr_time = timestamp
-
-        if status_cb:
-            status_cb("Searching for transit options...")
-
-        # First call with the user's chosen timing
-        routes_raw = self._transit_directions(
-            origin_text, dest_text, country_code,
-            departure_time=dep_time, arrival_time=arr_time,
-            transit_mode=mode_filter,
-        )
-
-        # Second call for "all" filter: arrive by end of day to catch coaches
-        if transit_filter == "all" and timing_mode != "arrive":
+        if travel_mode == "walking":
             if status_cb:
-                status_cb("Checking for additional services...")
-            # Arrive by 11pm same day
-            if timestamp:
-                base_dt = datetime.datetime.fromtimestamp(timestamp)
+                status_cb("Searching for walking route...")
+            if origin_coords is not None and dest_coords is not None:
+                variants: list[tuple[str, str, str]] = [
+                    ("map point route", "", ""),
+                ]
+                if dest_place_id:
+                    variants.append(("destination access point route", "", dest_place_id))
+                if origin_place_id:
+                    variants.append(("origin access point route", origin_place_id, ""))
+                if origin_place_id and dest_place_id:
+                    variants.append(
+                        ("place access point route", origin_place_id, dest_place_id)
+                    )
+
+                routes_raw = []
+                errors = []
+                seen_variants: set[tuple[str, str]] = set()
+                for i, (label, opid, dpid) in enumerate(variants):
+                    key = (opid, dpid)
+                    if key in seen_variants:
+                        continue
+                    seen_variants.add(key)
+                    if i == 1 and status_cb:
+                        status_cb("Checking place access points...")
+                    try:
+                        routes_raw.extend(
+                            self._google_walking_routes_request(
+                                origin_coords,
+                                dest_coords,
+                                alternatives=True,
+                                origin_place_id=opid,
+                                dest_place_id=dpid,
+                                variant_label=label,
+                            )
+                        )
+                    except Exception as exc:
+                        errors.append(exc)
+                if not routes_raw and errors:
+                    raise errors[0]
             else:
-                base_dt = datetime.datetime.now()
-            eod = base_dt.replace(hour=23, minute=0, second=0)
-            eod_ts = int(eod.timestamp())
-            if eod_ts > int(datetime.datetime.now().timestamp()):
-                extra = self._transit_directions(
+                routes_raw = self._walking_directions(
                     origin_text, dest_text, country_code,
-                    arrival_time=eod_ts,
-                    transit_mode=mode_filter,
+                    origin_coords=origin_coords,
+                    dest_coords=dest_coords,
+                    alternatives=True,
                 )
-                routes_raw.extend(extra)
+        else:
+            mode_filter = self.TRANSIT_FILTERS.get(transit_filter)
+
+            # Build timing params
+            dep_time = None
+            arr_time = None
+            if timing_mode == "now":
+                dep_time = int(datetime.datetime.now().timestamp())
+            elif timing_mode == "depart" and timestamp:
+                dep_time = timestamp
+            elif timing_mode == "arrive" and timestamp:
+                arr_time = timestamp
+
+            if status_cb:
+                status_cb("Searching for transit options...")
+
+            # First call with the user's chosen timing
+            routes_raw = self._transit_directions(
+                origin_text, dest_text, country_code,
+                origin_coords=origin_coords,
+                dest_coords=dest_coords,
+                departure_time=dep_time, arrival_time=arr_time,
+                transit_mode=mode_filter,
+            )
+
+            # Second call for "all" filter: arrive by end of day to catch coaches
+            if transit_filter == "all" and timing_mode != "arrive":
+                if status_cb:
+                    status_cb("Checking for additional services...")
+                # Arrive by 11pm same day
+                if timestamp:
+                    base_dt = datetime.datetime.fromtimestamp(timestamp)
+                else:
+                    base_dt = datetime.datetime.now()
+                eod = base_dt.replace(hour=23, minute=0, second=0)
+                eod_ts = int(eod.timestamp())
+                if eod_ts > int(datetime.datetime.now().timestamp()):
+                    extra = self._transit_directions(
+                        origin_text, dest_text, country_code,
+                        origin_coords=origin_coords,
+                        dest_coords=dest_coords,
+                        arrival_time=eod_ts,
+                        transit_mode=mode_filter,
+                    )
+                    routes_raw.extend(extra)
 
         if not routes_raw:
-            raise RuntimeError("No transit routes found for this journey.")
+            raise RuntimeError("No routes found for this journey.")
 
         if status_cb:
             status_cb("Processing results...")
@@ -1283,19 +1766,52 @@ class RouteTools:
         seen_keys: set[str] = set()
         parsed: list[dict] = []
         for raw in routes_raw:
-            r = self._parse_transit_route(raw, 0)  # number assigned after sort
+            raw = _gd(raw)
+            first_leg = _gd((raw.get("legs") or [{}])[0])
+            first_step = _gd((first_leg.get("steps") or [{}])[0])
+            if travel_mode == "walking" and first_step.get("navigationInstruction"):
+                r = self._parse_google_walking_route(raw, 0)
+            else:
+                r = self._parse_transit_route(raw, 0)  # number assigned after sort
+            if travel_mode == "walking" and origin_coords and dest_coords:
+                straight_m = int(round(_haversine_m(
+                    origin_coords[0], origin_coords[1], dest_coords[0], dest_coords[1]
+                )))
+                route_m = int(r.get("distance_m", 0) or 0)
+                if straight_m > 0:
+                    r["straight_line_distance_m"] = straight_m
+                if route_m and straight_m and route_m > max(250, straight_m * 3):
+                    note = (
+                        "Route is much longer than the direct map distance "
+                        f"({_fmt_distance(straight_m)}). It may be using a mapped "
+                        "entrance or crossing."
+                    )
+                    warnings = r.setdefault("warnings", [])
+                    if note not in warnings:
+                        warnings.append(note)
             if r["dedup_key"] in seen_keys:
                 continue
             seen_keys.add(r["dedup_key"])
             r["detail_text"] = self._build_detail_text(r)
+            if travel_mode == "walking":
+                r["travel_mode"] = "walking"
             parsed.append(r)
 
-        # Sort by departure time
-        parsed.sort(key=lambda r: r["departure_value"])
+        # Sort by departure time for transit; by shortest plausible option for walks.
+        if travel_mode == "walking":
+            parsed.sort(key=lambda r: (
+                int(r.get("duration_seconds", 0) or 0),
+                int(r.get("distance_m", 0) or 0),
+            ))
+        else:
+            parsed.sort(key=lambda r: r["departure_value"])
 
         # Re-number
         for i, r in enumerate(parsed):
             r["summary"] = r["summary"].replace("Option 0:", f"Option {i + 1}:")
+            if travel_mode == "walking" and r.get("warnings"):
+                warning = " ".join(r["warnings"])
+                r["summary"] = f"{r['summary']} Warning: {warning}"
 
         return parsed
 

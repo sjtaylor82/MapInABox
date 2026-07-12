@@ -25,6 +25,11 @@ settings.json
 credentials.json
 credentials.json.bak
 
+# Cloudflare Worker proxy — deployed to Cloudflare, not needed in the repo
+proxy/
+.dev.vars
+.wrangler/
+
 # Runtime cache directories (rebuilt on first run)
 gtfs_cache/
 road_cache/
@@ -39,6 +44,11 @@ here_poi_cache.json
 wiki_cache.json
 favourites.json
 flight_dest_cache.json
+search_cache.json
+
+# Media files (large, not part of source)
+*.m4a
+*.mp4
 
 # Packaging leftovers
 *.spec~
@@ -70,3 +80,8 @@ ssh-git.cmd
 # Temporary Git scratch folders
 gitdata/
 gitdir/
+
+# Debug/probe artifacts (not source)
+__pycache_check__/
+tmp_*.pyc.*
+streetview_cache.json

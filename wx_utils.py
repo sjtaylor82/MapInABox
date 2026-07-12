@@ -7,6 +7,75 @@ from logging_utils import miab_log
 IS_MAC = wx.Platform == "__WXMAC__"
 
 
+class MSAAListBox(wx.ListBox):
+    """A wx.ListBox that updates without double-reads on Windows screen readers.
+
+    Background
+    ----------
+    Two common wx.ListBox update patterns each fire more than one MSAA event
+    per logical change, which Windows screen readers (notably NVDA) read as
+    either a stale value, a duplicate, or both:
+
+      * ``SetString(i, text)`` mutates an existing item — fires two events.
+      * ``Set([text])`` + ``SetSelection(0)`` replaces the contents and the
+        selection separately — fires two events.
+
+    The reliable workaround (see project memory: project_listbox_msaa.md) is
+    the Append+Select+Delete cycle: append the new value, select it, then
+    delete the prior items. The selection-change event for the newly added
+    item is the only MSAA write event the screen reader sees.
+
+    This subclass exposes that cycle as three intent-named methods so callers
+    do not have to remember the dance. Mixing them with the bare wx API is
+    safe — they are only safer alternatives for the patterns above, not
+    replacements for the whole API.
+    """
+
+    def set_single(self, text: str) -> None:
+        """Replace contents with one selected item, read exactly once."""
+        n = self.GetCount()
+        self.Append(str(text))
+        self.SetSelection(n)
+        for i in range(n - 1, -1, -1):
+            self.Delete(i)
+
+    def set_many(self, items, sel: int = 0) -> None:
+        """Replace contents with a list, focus a specific index, read once.
+
+        Use this instead of ``Set(labels)`` + ``SetSelection(idx)``. ``sel`` is
+        clamped to a valid index for the new list.
+        """
+        items = list(items)
+        if not items:
+            self.set_single("")
+            return
+        n = self.GetCount()
+        for it in items:
+            self.Append(str(it))
+        new_idx = max(0, min(int(sel), len(items) - 1))
+        self.SetSelection(n + new_idx)
+        for i in range(n - 1, -1, -1):
+            self.Delete(i)
+
+    def update_focused(self, text: str) -> None:
+        """Change the text of the current selection, read exactly once.
+
+        Equivalent to ``SetString(GetSelection(), text)`` but without the
+        double-read. Falls back to ``set_single`` when there is no selection.
+        The new value occupies the same position as the old one, so
+        surrounding items keep their order.
+        """
+        sel = self.GetSelection()
+        if sel == wx.NOT_FOUND:
+            self.set_single(text)
+            return
+        # Insert the replacement directly above the old item so the order is
+        # preserved, select it, then drop the now-stale old item below.
+        self.Insert(str(text), sel)
+        self.SetSelection(sel)
+        self.Delete(sel + 1)
+
+
 def _primary_down(event) -> bool:
     """Treat Command as the primary modifier on macOS and Control elsewhere."""
     if IS_MAC and hasattr(event, "CmdDown"):

@@ -177,7 +177,6 @@ class WalkMixin:
         visited = {from_nid}
         current = from_nid
         first_step = True
-        prev_before_current = prev_nid
 
         while True:
             candidates = []
@@ -204,7 +203,6 @@ class WalkMixin:
                 return next_nid, seg_bearing, current
 
             heading = seg_bearing
-            prev_before_current = current
             current = next_nid
             first_step = False
 
@@ -321,10 +319,9 @@ class WalkMixin:
         """Toggle walking mode on or off."""
         if self._walking_mode:
             self._walking_mode = False
-            self._walk_announced_pois = set()
             self._poi_list  = []  # restore free nav arrow keys
             self._poi_index = 0
-            self.update_ui("Walking mode off.  Free movement restored.")
+            self.update_ui("Walking mode off.  Free movement restored.", force=True)
             wx.CallAfter(self.listbox.SetFocus)
             return
 
@@ -397,8 +394,6 @@ class WalkMixin:
 
         # Move to the intersection position
         self.lat, self.lon = nodes[best_nid]
-        self._walk_cross_options = self._walk_get_cross_streets(best_nid, self._walk_street)
-        self._walk_cross_idx = 0
         self._walk_turn_options = []
         self._walk_option_idx = None
         self._walk_prev_node = None
@@ -410,7 +405,7 @@ class WalkMixin:
         desc = self._walk_describe_intersection(best_nid, self._walk_street, self._walk_heading)
         self.street_label = self._walk_street
         wx.CallAfter(self.map_panel.set_position, self.lat, self.lon, True, self.street_label)
-        self.update_ui(f"Walking mode on.  {n_intersections} intersections found.  {desc}")
+        self.update_ui(f"Walking mode on.  {n_intersections} intersections found.  {desc}", force=True)
         # Fetch POIs in background for walk-announce if not already loaded
         # Delayed 3s so walk graph build and first announcement complete first
         if not getattr(self, '_all_pois', []):
@@ -432,7 +427,7 @@ class WalkMixin:
         next_nid, bearing, incoming_nid = result
         self._walk_preferred_next = None
         if next_nid is None:
-            self.update_ui(f"End of {self._walk_street}.")
+            self.update_ui(f"End of {self._walk_street}.", force=True)
             return
 
         nodes = self._walk_graph["nodes"]
@@ -452,8 +447,6 @@ class WalkMixin:
         self._walk_heading = overall_bearing if diff < 90 else self._walk_heading
         self._walk_prev_node = incoming_nid
         self.lat, self.lon = nodes[next_nid]
-        self._walk_cross_options = self._walk_get_cross_streets(next_nid, self._walk_street)
-        self._walk_cross_idx = 0
         self._walk_browsing = False
         self._walk_turn_options = []
         self._walk_option_idx = None
@@ -467,17 +460,15 @@ class WalkMixin:
         # Nav: check progress and get upcoming instruction to append
         nav_str = self._nav_check_progress(next_nid)
         if nav_str:
-            self.update_ui(f"{desc}  {nav_str}")
-            self._nav_last_announced = nav_str
+            self.update_ui(f"{desc}  {nav_str}", force=True)
         else:
             # If nav active, append distance/direction to destination
             if getattr(self, '_nav_active', False):
                 upcoming = self._nav_next_instruction_str()
                 if upcoming:
-                    self.update_ui(f"{desc}  {upcoming}")
-                    self._nav_last_announced = upcoming
+                    self.update_ui(f"{desc}  {upcoming}", force=True)
                     return
-            self.update_ui(desc)
+            self.update_ui(desc, force=True)
 
     def _walk_backward(self):
         """Down arrow in walking mode — walk to previous intersection behind."""
@@ -486,7 +477,7 @@ class WalkMixin:
             self._walk_browsing = False
             self._walk_turn_options = []
             self._walk_option_idx = None
-            self.update_ui(f"Start of tracked path on {self._walk_street}.")
+            self.update_ui(f"Start of tracked path on {self._walk_street}.", force=True)
             return
 
         nodes = self._walk_graph["nodes"]
@@ -495,8 +486,6 @@ class WalkMixin:
         # Keep original heading; user moved back but is still facing the same way.
         self._walk_prev_node = history[-1] if history else None
         self._walk_preferred_next = None
-        self._walk_cross_options = self._walk_get_cross_streets(target_nid, self._walk_street)
-        self._walk_cross_idx = 0
         self._walk_browsing = False
         self._walk_turn_options = []
         self._walk_option_idx = None
@@ -507,7 +496,7 @@ class WalkMixin:
         bounds = self._spatial_tone_bounds() if hasattr(self, "_spatial_tone_bounds") else None
         self.sound.play_spatial_tone(self.lat, self.lon, bounds)
         desc = self._walk_describe_intersection(target_nid, self._walk_street, self._walk_heading)
-        self.update_ui(desc)
+        self.update_ui(desc, force=True)
 
 
     def _walk_get_turn_options(self, node_id, current_street, heading):
@@ -622,7 +611,7 @@ class WalkMixin:
                     if nearby:
                         msg += "  Ahead: " + "; ".join(nearby) + "."
 
-        self.update_ui(msg)
+        self.update_ui(msg, force=True)
 
     def _walk_turn_right(self):
         """Right arrow — browse turn options toward the right."""
@@ -645,12 +634,10 @@ class WalkMixin:
         self.street_label = chosen["street"]
         self._walk_preferred_next = chosen["neighbour"]
         self._walk_prev_node = self._walk_node
-        self._walk_cross_options = self._walk_get_cross_streets(self._walk_node, chosen["street"])
-        self._walk_cross_idx = 0
 
         if announce:
             heading_name = self._walk_compass_name(self._walk_heading)
-            self.update_ui(f"{self._walk_option_text(chosen)}  Heading {heading_name}.")
+            self.update_ui(f"{self._walk_option_text(chosen)}  Heading {heading_name}.", force=True)
         wx.CallAfter(self.map_panel.set_position, self.lat, self.lon, True, self.street_label)
         return True
 
@@ -658,7 +645,7 @@ class WalkMixin:
         """X key — turn 180 degrees."""
         self._walk_heading = (self._walk_heading + 180) % 360
         heading_name = self._walk_compass_name(self._walk_heading)
-        self.update_ui(f"Turning around.  Now heading {heading_name} along {self._walk_street}.")
+        self.update_ui(f"Turning around.  Now heading {heading_name} along {self._walk_street}.", force=True)
 
     def _download_new_area(self):
         """User pressed Space outside the barrier — fetch street data for current position."""

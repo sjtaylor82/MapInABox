@@ -299,6 +299,39 @@ def _make_display(name: str, kind: str) -> str:
 
 _INDEX_FILE = "index.json"
 
+# Sidecar file: cache key -> [lat, lon] the entry was actually centred on,
+# regardless of whether the key itself is a coordinate grid cell or a
+# suburb name. index.json alone can't answer "what's cached near here?"
+# for suburb-keyed entries, since a key like "suburb_annerley" doesn't
+# encode a coordinate the way "-27.5_153.0" does - so a plain coordinate
+# lookup (organic navigation, which usually doesn't know the suburb name
+# in advance) would never find a suburb pre-fetched by name, e.g. via the
+# city-pack wizard or Shift+F11, and would silently re-fetch and re-cache
+# it under a different key instead. This sidecar makes that coordinate
+# lookup able to check every cached area's real centre, not just ones
+# whose key happens to be coordinate-shaped.
+_CENTERS_FILE = "centers_index.json"
+
+
+def _load_centers_index(cache_dir: str) -> dict:
+    """Load cache key -> [lat, lon] sidecar. Returns {} on any failure."""
+    path = os.path.join(cache_dir, _CENTERS_FILE)
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_centers_index(cache_dir: str, centers: dict) -> None:
+    try:
+        with open(os.path.join(cache_dir, _CENTERS_FILE), "w", encoding="utf-8") as f:
+            json.dump(centers, f, ensure_ascii=False)
+    except Exception:
+        pass
+
 
 def _safe_name(s: str) -> str:
     """Convert a place name to a safe filename stem."""
@@ -369,35 +402,15 @@ def _resolve_friendly_name(lat: float, lon: float) -> str:
     return _index_key(lat, lon)
 
 
-def _load_road_cache(cache_dir: str, lat: float, lon: float, 
-                     suburb_name: str = None) -> dict:
-    """Load cached road data. Tries suburb-based key first if available."""
+def _load_road_cache_by_coord(cache_dir: str, lat: float, lon: float) -> dict:
+    """Load cached road data by coordinate grid cell (no suburb constraint).
+    Checks the exact cell, then adjacent cells (±0.1 degrees = ~11km),
+    validating any adjacent-cell hit is within 7km of the target so it
+    doesn't silently return a distant/unrelated area's data."""
     index = _load_index(cache_dir)
-    
-    # Try suburb-based cache first if we have a suburb name
-    if suburb_name:
-        suburb_key = _index_key(lat, lon, suburb_name, used_boundary=True)
-        fname = index.get(suburb_key)
-        if fname:
-            path = os.path.join(cache_dir, fname)
-            if os.path.exists(path):
-                try:
-                    with open(path, encoding="utf-8") as f:
-                        data = json.load(f)
-                    if data.get("_version") == _CACHE_VERSION:
-                        return data
-                except Exception:
-                    pass
-        # Named lookup failed — don't fall back to coordinate-based cache, which
-        # could silently return data for a neighbouring suburb (e.g. Ormiston
-        # when the user selected Wellington Point). Return nothing so the caller
-        # triggers a fresh download for the correct suburb.
-        return {}
-
-    # Fall back to coordinate-based cache (no suburb constraint)
     key = _index_key(lat, lon)
     fname = index.get(key)
-    
+
     # If exact cell misses, check adjacent grid cells (±0.1 degrees = ~11km)
     # Only use if cache center is within 7km (max radius coverage)
     if not fname:
@@ -431,20 +444,114 @@ def _load_road_cache(cache_dir: str, lat: float, lon: float,
                         except Exception:
                             pass
                     fname = None  # Reset if validation failed
-    
-    if not fname:
+
+    if fname:
+        path = os.path.join(cache_dir, fname)
+        if os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+                if data.get("_version") == _CACHE_VERSION:
+                    return data
+            except Exception:
+                pass
+
+    # Last resort: this spot may only be cached under a suburb-name key
+    # (e.g. bulk-downloaded via the city-pack wizard, or single-suburb
+    # prefetched via Shift+F11 - both cache by suburb name, not by grid
+    # coordinate). A key like "suburb_annerley" isn't coordinate-shaped,
+    # so the grid lookups above never see it even though it covers this
+    # exact spot - without this, organic navigation into a suburb that
+    # was only ever bulk-downloaded by name would always miss cache and
+    # silently re-fetch/re-cache it under a different key. The sidecar
+    # centre index makes this a single small-file read rather than
+    # opening every cached area's JSON file to check its centre.
+    import math
+    centers = _load_centers_index(cache_dir)
+    # One-time backfill for entries saved before this sidecar existed
+    # (e.g. suburbs already downloaded via an earlier version of the
+    # city-pack wizard) - without this, only newly-saved areas would
+    # benefit and something like Annerley would need to be re-fetched
+    # once more before it started being found this way. Only opens files
+    # for keys not already in the sidecar, and only on an actual miss, so
+    # it's a bounded one-off cost, not a per-request one.
+    backfilled = False
+    for cand_key, cand_fname in index.items():
+        if cand_key in centers or cand_key == key:
+            continue
+        cand_path = os.path.join(cache_dir, cand_fname)
+        if not os.path.exists(cand_path):
+            continue
+        try:
+            with open(cand_path, encoding="utf-8") as f:
+                cand_data = json.load(f)
+            clat, clon = cand_data.get("cache_center_lat"), cand_data.get("cache_center_lon")
+            if clat is not None and clon is not None:
+                centers[cand_key] = [clat, clon]
+                backfilled = True
+        except Exception:
+            continue
+    if backfilled:
+        _save_centers_index(cache_dir, centers)
+
+    best_key, best_dist = None, 7000.0
+    for cand_key, (clat, clon) in centers.items():
+        if cand_key == key:
+            continue  # already checked above
+        dlat_m = (lat - clat) * 111000
+        dlon_m = (lon - clon) * 111000 * math.cos(math.radians(lat))
+        dist = math.sqrt(dlat_m ** 2 + dlon_m ** 2)
+        if dist < best_dist:
+            best_key, best_dist = cand_key, dist
+    if best_key:
+        cand_fname = index.get(best_key)
+        if cand_fname:
+            path = os.path.join(cache_dir, cand_fname)
+            if os.path.exists(path):
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        data = json.load(f)
+                    if data.get("_version") == _CACHE_VERSION:
+                        print(f"[Street] Found cache via centre-index scan ({best_key}), {best_dist:.0f}m away")
+                        return data
+                except Exception:
+                    pass
+
+    return {}
+
+
+def _load_road_cache(cache_dir: str, lat: float, lon: float,
+                     suburb_name: str = None) -> dict:
+    """Load cached road data. Tries suburb-based key first if available."""
+    index = _load_index(cache_dir)
+
+    # Try suburb-based cache first if we have a suburb name
+    if suburb_name:
+        suburb_key = _index_key(lat, lon, suburb_name, used_boundary=True)
+        fname = index.get(suburb_key)
+        if fname:
+            path = os.path.join(cache_dir, fname)
+            if os.path.exists(path):
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        data = json.load(f)
+                    if data.get("_version") == _CACHE_VERSION:
+                        return data
+                except Exception:
+                    pass
+        # Named (suburb-boundary) lookup missed — this suburb may only ever
+        # have been cached via the radius fallback (e.g. no OSM admin
+        # boundary matched its name). Fall back to the coordinate-grid
+        # cache rather than giving up and re-hitting Overpass every time;
+        # the distance check in _load_road_cache_by_coord still guards
+        # against silently returning a distant/unrelated area's data.
+        coord_hit = _load_road_cache_by_coord(cache_dir, lat, lon)
+        if coord_hit:
+            return coord_hit
         return {}
-    path = os.path.join(cache_dir, fname)
-    if not os.path.exists(path):
-        return {}
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        if data.get("_version") != _CACHE_VERSION:
-            return {}
-        return data
-    except Exception:
-        return {}
+
+    # No suburb name — coordinate-based cache only.
+    return _load_road_cache_by_coord(cache_dir, lat, lon)
 
 
 def _save_road_cache(cache_dir: str, lat: float, lon: float, entry: dict,
@@ -469,6 +576,9 @@ def _save_road_cache(cache_dir: str, lat: float, lon: float, entry: dict,
                 n += 1
             index[key] = fname
             _save_index(cache_dir, index)
+            centers = _load_centers_index(cache_dir)
+            centers[key] = [lat, lon]
+            _save_centers_index(cache_dir, centers)
         entry["_version"] = _CACHE_VERSION
         with open(os.path.join(cache_dir, fname), "w", encoding="utf-8") as f:
             json.dump(entry, f, ensure_ascii=False)
@@ -526,6 +636,7 @@ class StreetFetcher:
         stage1_done_cb=None,
         suburb_name: str | None = None,
         country_code: str | None = None,
+        use_gnaf: bool = True,
     ) -> tuple:
         """Fetch road segments and address points for the area around (lat, lon).
 
@@ -557,10 +668,43 @@ class StreetFetcher:
         snap       = (fetch_lat, fetch_lon) if (fetch_lat and fetch_lon) else (None, None)
 
         entry = _load_road_cache(self._cache_dir, centre_lat, centre_lon, suburb_name)
+        stale_entry = entry
 
         if entry:
             segs  = entry.get("segments", [])
             addrs = entry.get("addresses", [])
+            if suburb_name and len(segs) < 150 and not entry.get("boundary_supplemented"):
+                print(
+                    f"[Street] small suburb cache — {len(segs)} segments, refreshing with radius supplement"
+                )
+                entry = {}
+
+        if entry:
+            segs  = entry.get("segments", [])
+            addrs = entry.get("addresses", [])
+            address_source = entry.get("address_source", "")
+            address_source_corrected = False
+            if country_code and country_code.lower() == "au":
+                if use_gnaf and address_source != "gnaf":
+                    addrs = self._fetch_gnaf_addresses(centre_lat, centre_lon, suburb_name or "", radius)
+                    address_source = "gnaf"
+                    address_source_corrected = True
+                elif not use_gnaf and address_source != "osm":
+                    addrs = self._fetch_addresses(centre_lat, centre_lon, radius)
+                    address_source = "osm"
+                    address_source_corrected = True
+            if address_source_corrected:
+                # Persist the correction, not just this call's return value -
+                # otherwise an entry cached with the "wrong" address source
+                # (e.g. downloaded by the city-pack wizard with GNAF on,
+                # while this install has GNAF off) would re-hit the address
+                # server on every single visit forever, not just once.
+                entry["addresses"] = addrs
+                entry["address_source"] = address_source
+                _save_road_cache(
+                    self._cache_dir, centre_lat, centre_lon, entry,
+                    suburb_name=suburb_name, used_boundary=bool(suburb_name),
+                )
             natural_features = entry.get("natural_features", [])
             interpolations = entry.get("interpolations", [])
             stale = _cache_is_stale(entry)
@@ -574,24 +718,35 @@ class StreetFetcher:
                 import threading as _threading
                 def _bg_refresh():
                     try:
-                        self._live_fetch(centre_lat, centre_lon, radius)
+                        self._live_fetch(
+                            centre_lat, centre_lon, radius,
+                            suburb_name=suburb_name,
+                            country_code=country_code,
+                            use_gnaf=use_gnaf,
+                        )
                     except Exception:
                         pass
                 _threading.Thread(target=_bg_refresh, daemon=True).start()
                 return segs, addrs, True, snap[0], snap[1], False, natural_features, interpolations
 
         # No fresh cache — try live fetch, fall back to stale if all mirrors fail.
-        stale_entry = entry
         try:
             return self._live_fetch(centre_lat, centre_lon, radius,
                                     snap=snap, status_cb=status_cb,
                                     stage1_done_cb=stage1_done_cb,
                                     suburb_name=suburb_name,
-                                    country_code=country_code)
+                                    country_code=country_code,
+                                    use_gnaf=use_gnaf)
         except RuntimeError:
             if stale_entry:
                 segs  = stale_entry.get("segments", [])
                 addrs = stale_entry.get("addresses", [])
+                address_source = stale_entry.get("address_source", "")
+                if country_code and country_code.lower() == "au":
+                    if use_gnaf and address_source != "gnaf":
+                        addrs = self._fetch_gnaf_addresses(centre_lat, centre_lon, suburb_name or "", radius)
+                    elif not use_gnaf and address_source != "osm":
+                        addrs = self._fetch_addresses(centre_lat, centre_lon, radius)
                 natural_features = stale_entry.get("natural_features", [])
                 interpolations = stale_entry.get("interpolations", [])
                 status("All servers timed out — using cached streets (may be outdated).")
@@ -608,6 +763,7 @@ class StreetFetcher:
         stage1_done_cb=None,
         suburb_name: str | None = None,
         country_code: str | None = None,
+        use_gnaf: bool = True,
     ) -> tuple:
         """Fetch streets using OSM admin boundary if available, else radius.
 
@@ -709,6 +865,51 @@ class StreetFetcher:
                 print(f"[Street] Radius fallback succeeded: {len(result['elements'])} ways")
             else:
                 print(f"[Street] Radius fallback also failed")
+
+        boundary_supplemented = False
+        if used_boundary and result and len(result.get("elements", [])) < 250:
+            print(
+                f"[Street] Boundary result for {suburb_name!r} is small; "
+                "supplementing with radius streets..."
+            )
+            radius_query = (
+                f"[out:json][timeout:30];\n(\n"
+                f'  way["highway"~"primary|secondary|tertiary|residential|unclassified|living_street|trunk|motorway"](around:{radius},{centre_lat},{centre_lon});\n'
+                f'  way["highway"~"footway|cycleway|path|service"]["name"](around:{radius},{centre_lat},{centre_lon});\n'
+                f'  way["natural"~"water|wetland|wood|beach|scrub|grassland|heath"](around:{radius},{centre_lat},{centre_lon});\n'
+                f'  way["waterway"~"river|stream|canal|drain"](around:{radius},{centre_lat},{centre_lon});\n'
+                f'  way["leisure"~"park|nature_reserve|recreation_ground"](around:{radius},{centre_lat},{centre_lon});\n'
+                f'  way["landuse"~"farmland|orchard|vineyard|meadow|forest|grass|quarry"](around:{radius},{centre_lat},{centre_lon});\n'
+                f'  way["barrier"~"fence|hedge|gate"](around:{radius},{centre_lat},{centre_lon});\n'
+                f'  way["addr:interpolation"](around:{radius},{centre_lat},{centre_lon});\n'
+                f");\n"
+                f"out geom;\n"
+                f"(\n"
+                f"  way._[\"addr:interpolation\"];\n"
+                f"  node(w)[\"addr:housenumber\"];\n"
+                f");\n"
+                f"out;\n"
+            )
+            data = urllib.parse.urlencode({"data": radius_query}).encode()
+            extra = self._overpass.large_request(data, timeout=35)
+            if extra and extra.get("elements"):
+                seen = {
+                    (el.get("type"), el.get("id"))
+                    for el in result.get("elements", [])
+                    if el.get("type") and el.get("id") is not None
+                }
+                added = 0
+                for el in extra.get("elements", []):
+                    key = (el.get("type"), el.get("id"))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    result["elements"].append(el)
+                    added += 1
+                boundary_supplemented = True
+                print(f"[Street] Radius supplement added {added} elements")
+            else:
+                print("[Street] Radius supplement returned nothing")
 
         self._overpass.status_cb = None
         if not result:
@@ -815,24 +1016,35 @@ class StreetFetcher:
         if stage1_done_cb:
             stage1_done_cb()
         
-        # Use GNAF for Australia, Overpass elsewhere
+        # Use GNAF for Australia when enabled, otherwise use OSM addresses.
         country_code = country_code or ""
-        if country_code.lower() == 'au':
+        if country_code.lower() == 'au' and use_gnaf:
             addresses = self._fetch_gnaf_addresses(centre_lat, centre_lon, suburb_name or "", radius)
+            address_source = "gnaf"
         else:
             addresses = self._fetch_addresses(centre_lat, centre_lon, radius)
+            address_source = "osm"
 
-        # Boundary query returns all road types in one shot — cache immediately
-        # so Shift+F11 pre-downloads are persisted and F11 entry is instant.
-        if used_boundary and len(segments) >= 10:
+        # Cache immediately so Shift+F11 pre-downloads are persisted and F11
+        # entry is instant — for both the boundary query (suburb-keyed) and
+        # the radius fallback (coordinate-grid-keyed). Previously only the
+        # boundary path was cached, so any suburb where the OSM boundary
+        # query didn't match (rural areas, name mismatches, etc.) silently
+        # re-hit Overpass on every single visit.
+        if len(segments) >= 10:
             _save_road_cache(self._cache_dir, centre_lat, centre_lon, {
                 "segments":  segments,
                 "addresses": addresses,
+                "address_source": address_source,
                 "interpolations": interpolations,
                 "natural_features": natural_features,
+                "boundary_supplemented": boundary_supplemented,
                 "ts":        time.time(),
-            }, suburb_name=suburb_name, used_boundary=True)
-            print(f"[Street] Cached {len(segments)} segments for future use")
+                "cache_center_lat": centre_lat,
+                "cache_center_lon": centre_lon,
+            }, suburb_name=suburb_name, used_boundary=used_boundary)
+            print(f"[Street] Cached {len(segments)} segments for future use "
+                  f"({'boundary' if used_boundary else 'radius'})")
             # 7km neighbor prefetch stays disabled to avoid rate limiting and timeouts.
 
         return segments, addresses, False, snap[0], snap[1], True, natural_features, interpolations
@@ -1019,6 +1231,7 @@ class StreetFetcher:
             _save_road_cache(self._cache_dir, centre_lat, centre_lon, {
                 "segments":  new_segments,
                 "addresses": addresses,
+                "address_source": "osm",
                 "ts":        time.time(),
             }, suburb_name=None, used_boundary=False)
 
@@ -1046,6 +1259,9 @@ class StreetFetcher:
                 return []
 
             addresses = data.get("addresses", [])
+            for addr in addresses:
+                if isinstance(addr, dict):
+                    addr["source"] = "gnaf"
             print(f"[GNAF] Fetched {len(addresses)} addresses for {suburb}")
             return addresses
 
@@ -1054,11 +1270,23 @@ class StreetFetcher:
             return []
 
     def _fetch_addresses(self, lat: float, lon: float, radius: int) -> list:
-        """Fetch address nodes as a separate query — silent failure is fine."""
+        """Fetch address nodes, building polygons and multipolygon buildings.
+
+        Big buildings (e.g. apartment blocks, schools, shopping centres)
+        almost always carry their addr:housenumber on the building polygon
+        rather than a separate node. Querying ways and relations as well
+        catches these; ``out center;`` makes Overpass return a centroid
+        for each shape so we can use it as the address point. Silent
+        failure is fine — the caller falls back to nodes-only data.
+        """
         query = (
             "[out:json][timeout:15];\n"
-            f'node["addr:housenumber"]["addr:street"](around:{radius},{lat},{lon});\n'
-            "out;\n"
+            "(\n"
+            f'  node["addr:housenumber"]["addr:street"](around:{radius},{lat},{lon});\n'
+            f'  way["addr:housenumber"]["addr:street"](around:{radius},{lat},{lon});\n'
+            f'  relation["addr:housenumber"]["addr:street"](around:{radius},{lat},{lon});\n'
+            ");\n"
+            "out center;\n"
         )
         data = urllib.parse.urlencode({"data": query}).encode()
         try:
@@ -1070,18 +1298,38 @@ class StreetFetcher:
             print(f"[Street] Address fetch empty result at ({lat:.5f},{lon:.5f}) r={radius}")
             return []
         addresses = []
+        n_node = n_way = n_rel = 0
         for el in result.get("elements", []):
             tags   = el.get("tags", {})
             number = tags.get("addr:housenumber", "")
             street = tags.get("addr:street", "")
-            if number and street:
-                addresses.append({
-                    "number": number,
-                    "street": street,
-                    "lat":    el.get("lat", 0),
-                    "lon":    el.get("lon", 0),
-                })
-        print(f"[Street] Fetched {len(addresses)} addresses at ({lat:.5f},{lon:.5f}) r={radius}")
+            if not (number and street):
+                continue
+            kind = el.get("type", "node")
+            if kind == "node":
+                plat = el.get("lat", 0)
+                plon = el.get("lon", 0)
+                n_node += 1
+            else:
+                # way / relation: centroid from `out center;`
+                centre = el.get("center") or {}
+                plat = centre.get("lat", 0)
+                plon = centre.get("lon", 0)
+                if not plat or not plon:
+                    continue
+                if kind == "way":
+                    n_way += 1
+                else:
+                    n_rel += 1
+            addresses.append({
+                "number": number,
+                "street": street,
+                "lat":    plat,
+                "lon":    plon,
+                "source": "osm",
+            })
+        print(f"[Street] Fetched {len(addresses)} addresses at ({lat:.5f},{lon:.5f}) "
+              f"r={radius}  (nodes={n_node} ways={n_way} relations={n_rel})")
         return addresses
 
     # ------------------------------------------------------------------

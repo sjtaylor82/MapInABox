@@ -1,8 +1,9 @@
 """streetview.py — Google Street View imagery lookup with vision analysis.
 
 Fetches two Street View frames at a given coordinate (one in each direction
-along the street) and uses Gemini to describe what is visible from street
-level — shops, signage, building types, access features.
+along the street) and uses Mistral to describe what is visible from street
+level or an indoor/place preview - crossings, entrances, stairs, signage, and
+other access features.
 
 Parallel to satellite.py in structure and calling convention.
 """
@@ -81,9 +82,11 @@ def lookup_streetview_description(
     lat: float,
     lon: float,
     google_api_key: str = "",
-    gemini_client=None,
+    mistral_client=None,
     street_heading: Optional[float] = None,
     cache_path: str = "streetview_cache.json",
+    include_images: bool = True,
+    mode: str = "explore",
 ) -> Optional[Tuple[list, str]]:
     """Fetch Street View imagery and return image bytes list + description.
 
@@ -93,14 +96,23 @@ def lookup_streetview_description(
     description.  When None we default to north (0 deg) and south (180 deg).
 
     Returns (image_bytes_list, description) or None if no coverage or error.
-    image_bytes_list contains 1 or 2 JPEG byte strings for display.
+    image_bytes_list contains 1 or 2 JPEG byte strings for display unless
+    include_images is False, in which case an empty list is returned.
     """
     if not google_api_key:
         return None
 
-    cache_key = f"sv_{lat:.4f}_{lon:.4f}"
+    h1 = street_heading if street_heading is not None else 0.0
+    h2 = _opposite(h1)
+    mode = (mode or "explore").strip().lower()
+    mode_tag = "nav" if mode == "navigation" else "exp"
+    cache_key = f"sv_v3_{mode_tag}_{lat:.4f}_{lon:.4f}_{h1:.0f}_{h2:.0f}"
     cache = _load_cache(cache_path)
     cached_desc = _get_cached(cache, cache_key, ttl_days=30)
+
+    if cached_desc and not include_images:
+        print(f"[StreetView] Cache hit for {cache_key} (text only).")
+        return ([], cached_desc)
 
     # ── Coverage check ─────────────────────────────────────────────────────
     print(f"[StreetView] Checking coverage at ({lat:.4f}, {lon:.4f})...")
@@ -108,16 +120,15 @@ def lookup_streetview_description(
         print("[StreetView] No Street View coverage at this location.")
         return None
 
-    # ── Determine headings ─────────────────────────────────────────────────
-    h1 = street_heading if street_heading is not None else 0.0
-    h2 = _opposite(h1)
+    mistral_ready = bool(mistral_client and getattr(mistral_client, "is_configured", False))
 
+    # ── Determine headings ─────────────────────────────────────────────────
     # ── Fetch images ───────────────────────────────────────────────────────
     print(f"[StreetView] Fetching images (headings {h1:.0f}deg and {h2:.0f}deg)...")
     img_a = _fetch_streetview_image(lat, lon, h1, google_api_key)
     img_b = _fetch_streetview_image(lat, lon, h2, google_api_key)
 
-    images = []   # list of (bytes, heading) for Gemini
+    images = []   # list of (bytes, heading) for Mistral
     if img_a:
         images.append((img_a, h1))
     if img_b:
@@ -132,22 +143,27 @@ def lookup_streetview_description(
     # ── Description (cached text reused with fresh images) ─────────────────
     if cached_desc:
         print(f"[StreetView] Cache hit for {cache_key}.")
-        return (image_bytes_list, cached_desc)
+        return (image_bytes_list if include_images else [], cached_desc)
 
-    if not gemini_client:
+    if not mistral_ready:
         return (
-            image_bytes_list,
-            "Street View imagery loaded. A Gemini API key is required to fetch a visual description.",
+            image_bytes_list if include_images else [],
+            "Street View imagery loaded. A Mistral API key is required to fetch a visual description.",
         )
 
     headings = [h for _, h in images]
-    description = gemini_client.describe_streetview_images(
-        image_bytes_list, headings
-    )
+    try:
+        description = mistral_client.describe_streetview_images(image_bytes_list, headings, mode=mode)
+    except Exception as exc:
+        print(f"[StreetView] Mistral description failed: {exc}")
+        description = ""
     if not description:
-        return None
+        description = (
+            "Street View imagery loaded, but Mistral could not generate a description right now."
+        )
 
-    _set_cached(cache, cache_key, description)
-    _save_cache(cache_path, cache)
+    if description and "Mistral could not generate a description" not in description:
+        _set_cached(cache, cache_key, description)
+        _save_cache(cache_path, cache)
 
-    return (image_bytes_list, description)
+    return (image_bytes_list if include_images else [], description)

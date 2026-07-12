@@ -1,887 +1,1025 @@
-"""gemini.py — All Gemini AI queries for Map in a Box.
+"""mistral.py - Mistral-backed AI queries for Map in a Box."""
 
-One module, one client, one cache file.  Core.py imports GeminiClient and
-calls clean methods — no prompts, no JSON parsing, no google-genai imports
-live anywhere else.
+from __future__ import annotations
 
-Classes
--------
-GeminiClient
-    init(api_key)
-    is_configured  → bool
-    ask_transit(lat, lon, place_name)  → list[dict]
-    ask_times(operator, service, route_name)  → str
-    ask_shopping(centre_name, lat, lon)  → list[dict]
-    ask_menu_links(name, kind, address_or_coords, website)  → list[str]
-"""
-
+import base64
 import json
 import os
+import re
 import time
 import urllib.parse
 import urllib.request
 from typing import Optional
 
-GEMINI_MODEL       = "gemini-2.5-flash-lite"
-GEMINI_MENU_MODEL  = "gemini-2.5-flash-lite"
-GEMINI_THINKING_BUDGET = 0
-_CACHE_TTL_DAYS       = 90
-_MENU_CACHE_TTL_DAYS  = 30
-class GeminiClient:
-    """Single Gemini client shared across all Map in a Box AI features.
+MISTRAL_TEXT_MODEL = "mistral-small-latest"
+MISTRAL_VISION_MODEL = "mistral-small-2506"
+_CACHE_TTL_DAYS = 90
+_MENU_CACHE_TTL_DAYS = 30
 
-    Parameters
-    ----------
-    script_dir:
-        Directory where ``gemini_cache.json`` is stored.
-        Defaults to the directory containing this file.
-    """
 
+class MistralClient:
     def __init__(self, script_dir: Optional[str] = None) -> None:
         import sys
-        self._base   = script_dir or getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
-        self._client = None
+        self._base = script_dir or getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+        self._api_key = ""
         self._cache: dict = {}
         self._load_cache()
 
-    # ------------------------------------------------------------------
-    # Initialisation
-    # ------------------------------------------------------------------
-
     def init(self, api_key: str) -> None:
-        """Initialise (or re-initialise) the Gemini client.  Safe with empty string."""
         if not api_key or not api_key.strip():
-            self._client = None
-            print("[Gemini] No API key provided — Gemini disabled.")
+            self._api_key = ""
+            print("[Mistral] No API key provided - Mistral disabled.")
             return
-        try:
-            from google import genai
-            self._client = genai.Client(api_key=api_key.strip())
-            print("[Gemini] Client initialised.")
-        except Exception as exc:
-            self._client = None
-            print(f"[Gemini] Init failed: {exc}")
+        self._api_key = api_key.strip()
+        print("[Mistral] Key loaded.")
 
     @property
     def is_configured(self) -> bool:
-        return self._client is not None
+        return bool(self._api_key)
 
-    # ------------------------------------------------------------------
-    # Transit — regional routes + stops
-    # ------------------------------------------------------------------
-
-    def ask_transit(
-        self, lat: float, lon: float, place_name: str = "this location"
-    ) -> list[dict]:
-        """Return regional routes serving *place_name*.
-
-        Each dict: operator, service, route_name, stops (list[str]).
-        Cached 90 days.
-        """
+    def ask_transit(self, lat: float, lon: float, place_name: str = "this location") -> list[dict]:
         if not self.is_configured:
-            print("[Gemini] Not configured — skipping transit query.")
             return []
-
-        cache_key = f"transit_{round(lat, 2)}_{round(lon, 2)}"
-        cached = self._get_cache(cache_key)
-        if cached is not None:
-            print(f"[Gemini] Transit cache hit for {place_name}.")
-            return cached
-
+        print(f"[Mistral] Transit lookup start: {place_name!r} at ({lat:.4f}, {lon:.4f})")
+        snippets, links = self._search_web_grounding(
+            [
+                f"{place_name} regional bus train ferry",
+                f"{place_name} timetable coach regional bus",
+                f"{place_name} public transport routes",
+            ],
+            label="Transit",
+        )
         prompt = (
             f"List every REGIONAL and LONG-DISTANCE public transport route "
-            f"(coach, regional bus, regional train, ferry) "
-            f"that serves or stops at '{place_name}' at coordinates {lat:.4f}, {lon:.4f}. "
-            f"Do NOT include local urban or suburban routes. "
-            f"Include ALL regional operators serving this stop. "
-            f"For each route list every stop in order from first to last. "
-            f"Return ONLY a JSON array, no explanation, no markdown:\n"
-            f"[\n"
-            f"  {{\n"
-            f"    \"operator\": \"Operator name\",\n"
-            f"    \"service\": \"Route number or code\",\n"
-            f"    \"route_name\": \"Origin to Destination\",\n"
-            f"    \"stops\": [\"Stop A\", \"Stop B\", \"Stop C\"]\n"
-            f"  }}\n"
-            f"]\n"
-            f"route_name MUST be 'Origin to Destination' — never '?' or 'Unknown'. "
-            f"Only include routes that genuinely serve this stop. "
-            f"Do not invent routes or stops."
+            f"(coach, regional bus, regional train, ferry) that serves or stops at "
+            f"'{place_name}' at coordinates {lat:.4f}, {lon:.4f}. Do NOT include local "
+            f"urban or suburban routes. Return ONLY a JSON array of objects with keys "
+            f"operator, service, route_name, and stops.\n\n"
+            f"WEB SNIPPETS:\n{snippets}\n\n"
+            f"CANDIDATE LINKS:\n{chr(10).join(links)}"
         )
-
         try:
-            print(f"[Gemini] place_name='{place_name}' lat={lat} lon={lon}")
-            print(f"[Gemini] Querying regional transit at '{place_name}'…")
-            text   = self._grounded_query(prompt, label="transit")
+            text = self._chat(prompt)
+            print(f"[Mistral] Transit raw response length: {len(text or '')}")
             routes = self._parse_json_list(text)
-            print(f"[Gemini] _parse_json_list returned {len(routes)} item(s)")
-            if routes:
-                print(f"[Gemini] First item keys: {list(routes[0].keys()) if isinstance(routes[0], dict) else type(routes[0])}")
-            clean  = [
-                {
-                    "operator":   str(r.get("operator",   "")).strip(),
-                    "service":    str(r.get("service",    "")).strip(),
-                    "route_name": str(r.get("route_name", "")).strip(),
-                    "stops":      [str(s) for s in r.get("stops", []) if s],
-                }
-                for r in routes if isinstance(r, dict)
-                if r.get("operator") and r.get("service")
-            ]
-            print(f"[Gemini] {len(clean)} regional route(s) returned.")
-            if clean:
-                self._set_cache(cache_key, clean)
+            print(f"[Mistral] Transit parsed entries: {len(routes)}")
+            clean = []
+            for r in routes:
+                if isinstance(r, dict) and r.get("operator") and r.get("service"):
+                    clean.append({
+                        "operator": str(r.get("operator", "")).strip(),
+                        "service": str(r.get("service", "")).strip(),
+                        "route_name": str(r.get("route_name", "")).strip(),
+                        "stops": [str(s) for s in (r.get("stops", []) or []) if s],
+                    })
+            print(f"[Mistral] Transit usable entries: {len(clean)}")
             return clean
         except Exception as exc:
-            print(f"[Gemini] Transit query failed: {exc}")
+            print(f"[Mistral] Transit query failed: {exc}")
             return []
 
-    # ------------------------------------------------------------------
-    # Transit — plain-English timetable summary
-    # ------------------------------------------------------------------
-
-    def ask_times(
-        self, operator: str, service: str, route_name: str = ""
-    ) -> str:
-        """Return a plain-English timetable summary for one service.
-
-        Cached 90 days.  Returns a human-readable string.
-        """
+    def ask_times(self, operator: str, service: str, route_name: str = "") -> str:
         if not self.is_configured:
-            return "Gemini not configured."
-
-        # Key on operator+service only — direction (route_name) is irrelevant
-        # for timetable data, and this prevents cache misses on reverse direction
-        cache_key = (f"times_{operator}_{service}"
-                     .lower()
-                     .replace(" ", "_")
-                     .replace("(", "")
-                     .replace(")", "")
-                     .replace(".", ""))
+            return "Mistral not configured."
+        cache_key = (f"times_{operator}_{service}".lower().replace(" ", "_").replace("(", "").replace(")", "").replace(".", ""))
         cached = self._get_cache(cache_key, text=True)
         if cached is not None:
-            print(f"[Gemini] Times cache hit for {operator} {service}.")
+            print(f"[Mistral] Times cache hit for {operator} {service}")
             return cached
-
-        desc = f"{service} ({route_name})" if route_name else service
-        prompt = (
-            f"Describe the timetable for the {operator} service {desc} "
-            f"in plain English. "
-            f"Include: frequency, approximate first and last service, "
-            f"and any differences on weekends or public holidays. "
-            f"Be concise — two or three sentences. "
-            f"If you are not certain about specific times, say so rather than guessing."
+        print(f"[Mistral] Times lookup start: {operator} {service} {route_name!r}")
+        snippets, links = self._search_web_grounding(
+            [
+                f"{operator} {service} timetable",
+                f"{operator} {service} route timetable",
+                f"{operator} {service} schedule",
+            ],
+            label="Times",
         )
-
+        prompt = (
+            f"Describe the timetable for the {operator} service {service} "
+            f"{f'({route_name})' if route_name else ''} in plain English. "
+            f"Include frequency, approximate first and last service, and weekend/public holiday differences. "
+            f"Be concise.\n\n"
+            f"WEB SNIPPETS:\n{snippets}\n\n"
+            f"CANDIDATE LINKS:\n{chr(10).join(links)}"
+        )
         try:
-            print(f"[Gemini] Fetching times for {operator} {service}…")
-            text = self._grounded_query(prompt, label="times")
+            text = self._chat(prompt)
             if text:
+                print(f"[Mistral] Times raw response length: {len(text)}")
                 self._set_cache(cache_key, text, text=True)
                 return text
         except Exception as exc:
-            print(f"[Gemini] Times query failed: {exc}")
-
+            print(f"[Mistral] Times query failed: {exc}")
         return "Could not retrieve timetable information."
 
-    # ------------------------------------------------------------------
-    # Shopping — store directory
-    # ------------------------------------------------------------------
-
     def ask_shopping(
-        self, centre_name: str, lat: float, lon: float
+        self,
+        centre_name: str,
+        lat: float,
+        lon: float,
+        centre_address: str = "",
+        existing_names: list[str] | None = None,
     ) -> list[str]:
-        """Return store names for *centre_name* — fast, names only.
-
-        Cached 90 days.  Returns a sorted list of store name strings.
-        """
         if not self.is_configured:
-            print("[Gemini] Not configured — skipping shopping query.")
             return []
-
-        cache_key = f"shop_names_{centre_name.lower().strip()}"
+        address_key = re.sub(r"[^a-z0-9]+", "", (centre_address or "").lower())
+        cache_key = f"shop_names_{centre_name.lower().strip()}_{address_key}"
         cached = self._get_cache(cache_key)
         if cached is not None:
-            print(f"[Gemini] Shopping cache hit for {centre_name}.")
+            print(f"[Mistral] Shopping cache hit for {centre_name}")
             return cached
-
-        prompt = (
-            f"Search the web for the current tenant list of '{centre_name}' "
-            f"shopping centre in Australia (near {lat:.4f}, {lon:.4f}). "
-            f"Include ALL stores — specialty, food, services, department stores. "
-            f"Return the names in strict alphabetical order (A to Z). "
-            f"Return ONLY a JSON array of store name strings — "
-            f"no floors, no categories, no explanation, no markdown:\n"
-            f'["Store A", "Store B", "Store C"]'
-        )
-
         try:
-            print(f"[Gemini] Querying store names (grounded) for '{centre_name}'\u2026")
-            text = self._grounded_query(prompt, label="shopping")
+            centre_hint = f"{centre_name} {centre_address}".strip()
+            queries = [
+                f"\"{centre_hint}\" store directory",
+                f"\"{centre_hint}\" directory stores",
+                f"\"{centre_hint}\" tenants",
+                f"\"{centre_hint}\" official stores",
+                f"\"{centre_hint}\" food restaurants cafes takeaway dining",
+                f"\"{centre_hint}\" food court restaurants cafes outlets",
+            ]
+            print(f"[Mistral] Shopping lookup start: {centre_name!r} at ({lat:.4f}, {lon:.4f})")
+            snippets, links = self._search_web_grounding(queries, label="Shopping")
+            combined_text = snippets[:25000]
+            print(
+                f"[Mistral] Shopping combined text length: {len(combined_text)} "
+                f"(links={len(links)})"
+            )
+            if combined_text:
+                print(f"[Mistral] Shopping text preview: {combined_text[:500]!r}")
+            else:
+                print("[Mistral] Shopping grounding empty; skipping model call.")
+                return []
+
+            confirmed = ""
+            if existing_names:
+                confirmed = "Already confirmed tenants: " + ", ".join(existing_names[:80]) + "\n\n"
+            prompt = (
+                f"Search the web for the current tenant list of the shopping centre at '{centre_hint}' in Australia "
+                f"(near {lat:.4f}, {lon:.4f}). Include ALL stores - specialty, food, services, department stores. "
+                f"Only include tenants that are explicitly supported by the official centre directory or by clearly "
+                f"matching source text. Do not infer, guess, embellish, or fill in gaps. If a store is not directly "
+                f"evidenced, omit it. Return only actual tenant/store names. Do not return directory headings, section "
+                f"titles, or the shopping centre name itself. Keep renamed food venues and current tenant names only "
+                f"when the source explicitly shows they are the same store. Check for food outlets separately as well "
+                f"as general tenants, because restaurant and takeaway tenants are often listed on different pages. "
+                f"Treat search snippets as discovery hints only; trust the fetched page text and source URLs below. "
+                f"If the sources are thin or noisy, return fewer names rather than guessing. "
+                f"Return the names in strict alphabetical order (A to Z). Return ONLY a JSON array of store "
+                f"name strings - no floors, no categories, no explanation, no markdown.\n\n"
+                f"{confirmed}"
+                f"Use the SOURCE blocks below as the evidence. Ignore anything not supported there:\n"
+                f"{combined_text}"
+            )
+            text = self._chat(prompt)
+            print(f"[Mistral] Shopping raw response length: {len(text or '')}")
             names = self._parse_json_list(text)
-            clean = sorted({str(n).strip() for n in names if n and str(n).strip()},
-                           key=str.lower)
-            print(f"[Gemini] {len(clean)} store names returned.")
+            print(f"[Mistral] Shopping parsed entries: {len(names)}")
+            clean = self._clean_store_names(names, centre_name)
+            clean = self._retain_evidenced_store_names(clean, combined_text, existing_names=existing_names)
+            print(f"[Mistral] Shopping usable entries: {len(clean)}")
             if clean:
                 self._set_cache(cache_key, clean)
             return clean
         except Exception as exc:
-            print(f"[Gemini] Shopping query failed: {exc}")
+            print(f"[Mistral] Shopping query failed: {exc}")
             return []
 
     def ask_store_detail(
-        self, store_name: str, centre_name: str
+        self,
+        store_name: str,
+        centre_name: str,
+        centre_address: str = "",
+        source_text: str = "",
+        source_links: list[str] | None = None,
     ) -> str:
-        """Return plain-English location detail for one store.
-
-        e.g. "Ground floor, near the food court entrance."
-        Cached 90 days.  Returns a string.
-        """
         if not self.is_configured:
-            return "Gemini not configured."
-
-        cache_key = (f"store_{centre_name}_{store_name}"
-                     .lower().replace(" ", "_"))
+            return "Mistral not configured."
+        cache_key = f"store_{centre_name}_{centre_address}_{store_name}".lower().replace(" ", "_")
         cached = self._get_cache(cache_key, text=True)
         if cached is not None:
-            print(f"[Gemini] Store detail cache hit for {store_name}.")
+            print(f"[Mistral] Store detail cache hit for {store_name}")
             return cached
-
+        centre_hint = f"{centre_name} {centre_address}".strip()
+        snippets = source_text or ""
+        links = list(source_links or [])
+        if not snippets:
+            snippets, links = self._search_web_grounding(
+                [
+                    f"{store_name} {centre_hint} location",
+                    f"{store_name} {centre_hint} where is it located",
+                    f"{store_name} {centre_hint} store directory",
+                ],
+                label="StoreDetail",
+            )
         prompt = (
-            f"In '{centre_name}' shopping centre, where is {store_name} located? "
-            f"Give the floor level and what it is near (e.g. near the food court, "
-            f"near the main entrance). One or two sentences maximum. "
-            f"If you are not certain, say so."
+            f"In the shopping centre at '{centre_hint}', extract the details for {store_name} from the official "
+            f"source text and URLs below. Use only the official source text and URLs. "
+            f"Return a short plain-text summary with any of these details that are explicitly supported: floor or "
+            f"level, nearby landmark or section, opening hours, phone, and website. "
+            f"Do not guess, infer, embellish, or use typical mall layouts. "
+            f"If no location details are stated, say only that the store is listed in the official directory. "
+            f"Use at most three short sentences.\n\n"
+            f"PAGE TEXT:\n{snippets}\n\n"
+            f"CANDIDATE LINKS:\n{chr(10).join(links)}"
         )
-
         try:
-            print(f"[Gemini] Fetching store detail for '{store_name}'…")
-            text = self._grounded_query(prompt, label="store_detail")
+            print(f"[Mistral] Fetching store detail for '{store_name}'...")
+            text = self._chat(prompt)
             if text:
+                if text.strip().upper() == "NONE":
+                    text = f"{store_name} is listed in the official store directory."
                 self._set_cache(cache_key, text, text=True)
                 return text
         except Exception as exc:
-            print(f"[Gemini] Store detail query failed: {exc}")
+            print(f"[Mistral] Store detail query failed: {exc}")
+        return f"{store_name} is listed in the official store directory."
 
-        return "Location details not available."
+    def ask_store_floor(self, store_name: str, centre_name: str) -> str:
+        """Return floor/section info for a store inside a shopping centre.
 
-    # ------------------------------------------------------------------
-    # Menu links — URL discovery only, no menu extraction
-    # ------------------------------------------------------------------
-
-    def search_menu_links_places(
-        self,
-        name: str,
-        suburb: str = "",
-        region: str = "",
-        country: str = "",
-        api_key: str = "",
-        lat: float = 0.0,
-        lon: float = 0.0,
-    ) -> tuple[list[str], str]:
-        """Find menu links via Google Places + path probing.
-        Returns (urls, places_website) — urls may be empty if probing found nothing."""
-        if not api_key or not name:
-            return [], ""
-
-        location_str = ", ".join(p for p in [suburb, region, country] if p)
-        cache_key = (
-            f"menu_places_v4_{name}_{suburb}_{region}_{country}"
-            .lower().replace(" ", "_").replace(",", "").replace(".", "")
-        )
-        entry = self._cache.get(cache_key)
-        if isinstance(entry, dict):
-            if (time.time() - entry.get("ts", 0)) / 86400 <= _MENU_CACHE_TTL_DAYS:
-                cached = entry.get("data")
-                if cached:
-                    print(f"[Places] Menu cache hit for {name}.")
-                    return cached, ""
-
-        # Step 1a — find place_id via findplacefromtext
-        query = f"{name} {location_str}".strip()
-        location_restrict = (f"&locationrestrict=circle:50000@{lat},{lon}"
-                              if lat and lon else "")
-        find_url = (
-            "https://maps.googleapis.com/maps/api/place/findplacefromtext/json"
-            f"?input={urllib.parse.quote(query)}"
-            "&inputtype=textquery"
-            "&fields=place_id,name"
-            f"&key={urllib.parse.quote(api_key)}"
-            f"{location_restrict}"
-        )
-        try:
-            print(f"[Places] Finding place for '{query}'…")
-            req = urllib.request.Request(find_url, headers={"User-Agent": "MapInABox/1.0"})
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                data = json.loads(resp.read().decode())
-            print(f"[Places] findplacefromtext response: {data}")
-            candidates_list = data.get("candidates") or []
-            place_id = candidates_list[0].get("place_id", "") if candidates_list else ""
-            print(f"[Places] place_id: {place_id!r}")
-        except Exception as exc:
-            print(f"[Places] findplacefromtext failed: {exc}")
-            return [], ""
-
-        if not place_id:
-            return [], ""
-
-        # Step 1b — fetch website from Place Details
-        details_url = (
-            "https://maps.googleapis.com/maps/api/place/details/json"
-            f"?place_id={urllib.parse.quote(place_id)}"
-            "&fields=website"
-            f"&key={urllib.parse.quote(api_key)}"
-        )
-        try:
-            req = urllib.request.Request(details_url, headers={"User-Agent": "MapInABox/1.0"})
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                detail_data = json.loads(resp.read().decode())
-            website = detail_data.get("result", {}).get("website", "")
-            print(f"[Places] Website: {website!r}")
-        except Exception as exc:
-            print(f"[Places] Place Details failed: {exc}")
-            return [], ""
-
-        if not website:
-            print(f"[Places] No website found for {name}.")
-            return [], ""
-
-        # Step 2 — probe common menu paths on the domain
-        parsed = urllib.parse.urlparse(website)
-        base = f"{parsed.scheme}://{parsed.netloc}"
-        location_path = parsed.path.rstrip("/")
-        suburb_slug = suburb.lower().replace(" ", "-") if suburb else ""
-
-        browser_headers = {
-            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                           "AppleWebKit/537.36 (KHTML, like Gecko) "
-                           "Chrome/124.0.0.0 Safari/537.36"),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-AU,en;q=0.9",
-        }
-
-        candidates = []
-        if location_path and location_path not in ("", "/"):
-            candidates += [
-                f"{base}{location_path}/menu/",
-                f"{base}{location_path}/menu",
-            ]
-        if suburb_slug:
-            candidates += [
-                f"{base}/location/{suburb_slug}/menu/",
-                f"{base}/locations/{suburb_slug}/menu/",
-            ]
-        candidates += [
-            f"{base}/menu/",
-            f"{base}/menu",
-            f"{base}/our-menu",
-        ]
-
-        found = []
-        seen = set()
-        for url in candidates:
-            if url in seen:
-                continue
-            seen.add(url)
-            try:
-                req = urllib.request.Request(url, headers=browser_headers)
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    final = resp.url
-                    if final not in found:
-                        found.append(final)
-                        print(f"[Places] ✓ {url} → {final}")
-                    if len(found) >= 3:
-                        break
-            except Exception as e:
-                print(f"[Places] ✗ {url} → {type(e).__name__}: {e}")
-
-        print(f"[Places] Verified menu URLs: {found}")
-        if found:
-            self._set_cache(cache_key, found)
-        return found, website
-
-    # ------------------------------------------------------------------
-
-    def ask_menu_links(
-        self,
-        name: str,
-        kind: str = "food outlet",
-        address_or_coords: str = "",
-        website: str = "",
-        country: str = "",
-        region: str = "",
-    ) -> list[str]:
-        """Return likely menu-related URLs for a food business.
-
-        This deliberately returns links only. It does not extract or structure menu content.
-        """
-        if not self.is_configured:
-            print("[Gemini] Not configured — skipping menu link query.")
-            return []
-
-        safe_name = str(name or "").strip()
-        safe_kind = str(kind or "food outlet").strip() or "food outlet"
-        safe_location = str(address_or_coords or "").strip()
-        safe_website = str(website or "").strip()
-        safe_country = str(country or "").strip()
-        safe_region = str(region or "").strip()
-        if not safe_name:
-            return []
-
-        location_str = ", ".join(p for p in [safe_location, safe_region, safe_country] if p)
-
-        cache_key = (
-            f"menu_links_v7_{safe_name}_{safe_kind}_{safe_location}_{safe_region}_{safe_country}"
-            .lower()
-            .replace(" ", "_")
-            .replace("/", "_")
-            .replace("\\", "_")
-            .replace("(", "")
-            .replace(")", "")
-            .replace(".", "")
-            .replace(",", "")
-        )
-        entry = self._cache.get(cache_key)
-        if isinstance(entry, dict):
-            age_days = (time.time() - entry.get("ts", 0)) / 86400
-            if age_days <= _MENU_CACHE_TTL_DAYS:
-                cached = entry.get("data")
-                if cached:
-                    print(f"[Gemini] Menu link cache hit for {safe_name}.")
-                    return cached
-
-        kind_str = f" ({safe_kind})" if safe_kind and safe_kind != "food outlet" else ""
-        prompt = (
-            f"Link me to the menu or products page for {safe_name}{kind_str} in {location_str}.\n"
-            f"Return the direct URL to the menu or products page — not the homepage.\n"
-            f"Prefer the location-specific menu page for {location_str} over a generic menu page.\n"
-            f"Also include delivery aggregators (Uber Eats, DoorDash, OpenTable) for this location if available.\n"
-            f"One URL per line. No explanation."
-        )
-
-        try:
-            print(f"[Gemini] Finding menu links for '{safe_name}'…")
-            from google.genai import types
-            resp = self._client.models.generate_content(
-                model=GEMINI_MENU_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    tools=[types.Tool(google_search=types.GoogleSearch())],
-                ),
-            )
-            text = self._extract_text(resp)
-            raw_grounding = self._extract_grounding_urls(resp)
-
-            # Follow grounding-api-redirect wrappers to get the real destination URL.
-            # Also drop any entry containing a newline — those are whole-text false positives.
-            import urllib.request as _ureq
-            resolved = []
-            for u in raw_grounding:
-                if "\n" in u or " " in u:
-                    continue  # whole-text blob, not a real URL
-                if "grounding-api-redirect" in u or "vertexaisearch" in u:
-                    try:
-                        req = _ureq.Request(u, headers={"User-Agent": "Mozilla/5.0"})
-                        with _ureq.urlopen(req, timeout=5) as r:
-                            resolved.append(r.url)
-                            print(f"[Gemini] Redirect {u[:60]}… → {r.url}")
-                    except Exception as e:
-                        print(f"[Gemini] Redirect failed: {e}")
-                else:
-                    resolved.append(u)
-
-            text_urls = [u for u in self._parse_url_list(text) if "\n" not in u and " " not in u]
-
-            print(f"[Gemini] Menu text response: {repr(text[:300]) if text else '(empty)'}")
-            print(f"[Gemini] Resolved grounding URLs: {resolved}")
-
-            if not text and not resolved:
-                print(f"[Gemini] No response from menu search.")
-                return []
-
-            all_urls = resolved + text_urls
-            print(f"[Gemini] All URLs before filter: {all_urls}")
-            clean = self._clean_url_list(all_urls)
-
-            print(f"[Gemini] Found {len(clean)} menu link(s) after filter: {clean}")
-            if clean:
-                self._set_cache(cache_key, clean)
-            return clean
-        except Exception as exc:
-            print(f"[Gemini] Menu link query failed: {exc}")
-            return []
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    # ------------------------------------------------------------------
-    # Satellite vision — accessibility description of aerial imagery
-    # ------------------------------------------------------------------
-
-    def describe_satellite_image(self, image_bytes: bytes, cache_key: str = "") -> str:
-        """Return a rich plain-English description of a satellite image.
-
-        Uses Gemini vision (no grounding needed — image is the source).
-        Cached 90 days.  Returns a string, or "" on failure.
+        Consults the centre's own directory via web search. Returns an empty
+        string when the page text does not clearly state the floor. Never
+        guesses. Cached per (centre, store) for 30 days regardless of outcome.
         """
         if not self.is_configured:
             return ""
+        cache_key = f"floor_{centre_name}_{store_name}".lower().replace(" ", "_")
+        cached = self._get_cache(cache_key, text=True)
+        if cached is not None:
+            print(f"[Mistral] Floor cache hit for {store_name}: {cached!r}")
+            return cached
+        print(f"[Mistral] Floor lookup start: {store_name} at {centre_name}")
+        snippets, links = self._search_web_grounding(
+            [
+                f"{centre_name} store directory {store_name} level",
+                f"{centre_name} stores {store_name} floor",
+                f"\"{store_name}\" \"{centre_name}\" level floor",
+            ],
+            label="Floor",
+        )
+        if not snippets:
+            self._set_cache(cache_key, "", text=True)
+            return ""
+        prompt = (
+            f"You are reading web page text that may describe where '{store_name}' is located "
+            f"inside '{centre_name}' shopping centre. From the PAGE TEXT below, "
+            f"state ONLY what the page actually says about the floor or level of this store, "
+            f"and any zone or section if mentioned in the page text. "
+            f"One short sentence, no more than 15 words.\n\n"
+            f"STRICT RULES — read carefully:\n"
+            f"- If the page text does NOT clearly state the floor or level of this specific store, "
+            f"respond with EXACTLY the word: NONE\n"
+            f"- Do NOT guess.\n"
+            f"- Do NOT infer from category, anchor stores, or typical layouts.\n"
+            f"- Do NOT say 'likely', 'probably', 'usually', 'typically', or similar.\n"
+            f"- Do NOT mention any store other than '{store_name}'.\n\n"
+            f"PAGE TEXT:\n{snippets[:18000]}"
+        )
+        try:
+            text = (self._chat(prompt) or "").strip()
+        except Exception as exc:
+            print(f"[Mistral] Floor query failed: {exc}")
+            return ""
+        # Reject hedge words and the explicit NONE signal.
+        cleaned = text.strip().rstrip(".")
+        upper = cleaned.upper()
+        if (not cleaned
+                or upper == "NONE"
+                or upper.startswith("NONE")
+                or any(w in cleaned.lower() for w in
+                       ("likely", "probably", "usually", "typically",
+                        "not certain", "uncertain", "cannot determine",
+                        "does not state", "does not mention", "unclear",
+                        "i don't know", "i do not know", "could not find",
+                        "couldn't find", "not enough information"))):
+            print(f"[Mistral] Floor: not stated for {store_name} (raw={text!r})")
+            self._set_cache(cache_key, "", text=True)
+            return ""
+        print(f"[Mistral] Floor for {store_name}: {text!r}")
+        self._set_cache(cache_key, text, text=True)
+        return text
 
+    def describe_satellite_image(self, image_bytes: bytes, cache_key: str = "") -> str:
+        if not self.is_configured:
+            return ""
         if cache_key:
             cached = self._get_cache(cache_key, text=True)
             if cached:
-                print(f"[Gemini] Satellite cache hit for {cache_key}.")
                 return cached
-
         prompt = (
-            "You are describing a satellite or aerial image for a blind person "
-            "who cannot see it. Describe the landscape in rich, practical detail: "
-            "terrain type, land use, vegetation, water bodies, roads, settlements, "
-            "and any notable features. Be specific and vivid. "
-            "Two to four sentences."
+            "You are describing a satellite or aerial image for a blind person who cannot see it. "
+            "Describe terrain, land use, buildings, roads, water, and vegetation in 2 to 4 sentences."
         )
+        try:
+            text = self._chat(prompt, image_bytes=image_bytes, model=MISTRAL_VISION_MODEL)
+            if cache_key and text:
+                self._set_cache(cache_key, text, text=True)
+            return text
+        except Exception as exc:
+            print(f"[Mistral] Satellite description failed: {exc}")
+            return ""
 
-        from google.genai import types
-        print(f"[Gemini] Describing satellite image ({len(image_bytes)} bytes)…")
-        last_exc = None
-        for attempt in range(4):
-            if attempt:
-                wait = 2 ** attempt   # 2, 4, 8 seconds
-                print(f"[Gemini] Satellite retry {attempt} in {wait}s…")
-                time.sleep(wait)
-            try:
-                resp = self._client.models.generate_content(
-                    model=GEMINI_MODEL,
-                    contents=[
-                        types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
-                        types.Part.from_text(text=prompt),
-                    ],
-                    config=types.GenerateContentConfig(
-                        thinking_config=types.ThinkingConfig(
-                            thinking_budget=GEMINI_THINKING_BUDGET
-                        )
-                    ),
-                )
-                text = self._extract_text(resp)
-                if text:
-                    return text
-            except Exception as exc:
-                last_exc = exc
-                msg = str(exc)
-                if "503" in msg or "UNAVAILABLE" in msg or "429" in msg or "quota" in msg.lower():
-                    print(f"[Gemini] Satellite description failed (attempt {attempt+1}): {exc}")
-                    continue   # retryable
-                break          # non-retryable — don't wait
-        print(f"[Gemini] Satellite description gave up after retries: {last_exc}")
-        return ""
-
-    def describe_streetview_images(
-        self,
-        image_bytes_list: list,
-        headings: list,
-    ) -> str:
-        """Return a plain-English description of one or two Street View images.
-
-        image_bytes_list: 1 or 2 JPEG byte strings.
-        headings: matching list of compass bearings (degrees) for each image.
-        Caching handled by caller (streetview.py). Returns a string, or "" on failure.
-        """
+    def describe_streetview_images(self, image_bytes_list: list, headings: list,
+                                   mode: str = "explore") -> str:
         if not self.is_configured:
             return ""
 
-
-        from google.genai import types
-
-        def _cardinal(h: float) -> str:
-            dirs = [
-                "north", "north-east", "east", "south-east",
-                "south", "south-west", "west", "north-west",
+        if mode == "navigation":
+            # Images are fetched travel-direction first, then the reverse, so we
+            # can label them body-relative instead of by compass bearing.
+            labels = ["the direction you are walking", "the view behind you"]
+            heading_bits = [
+                f"image {idx + 1} shows {labels[idx]}"
+                for idx in range(min(len(headings or []), 2))
             ]
-            return dirs[round(h / 45) % 8]
-
-        if len(image_bytes_list) == 2:
-            dir_a = _cardinal(headings[0])
-            dir_b = _cardinal(headings[1])
+            heading_note = (" " + "; ".join(heading_bits) + ".") if heading_bits else ""
             prompt = (
-                f"You are helping a blind person understand what is around them using two Google Street View images. "
-                f"The first image faces {dir_a}; the second faces {dir_b}. "
-                f"Your job is to describe the scene. list named businesses, services, or landmarks visible in each image, "
-                f"in left-to-right order as seen in the image. "
-                f"For each one state: its name (read from signage), what type of place it is, and which side of the street it is on. "
-                f"Note any visible entrance features such as steps, ramps, or automatic doors. "
-                f"If a residential front, describe parked vehicles. "
-                f"10 sentences maximum. Be specific and factual. Do not exclude information."
+                "You are describing Google Street View images to orient a blind "
+                "traveller during turn-by-turn walking navigation — a spoken "
+                "equivalent of an augmented-reality walking view."
+                f"{heading_note}"
+                " First decide whether the images show an outdoor street scene, "
+                "an indoor/place preview, or a mixed entrance area. If the images "
+                "are indoor, say 'Indoor preview:' and describe the indoor access "
+                "cues that would help after arrival; do not apologise for the lack "
+                "of outdoor traffic details. Report ONLY what matters to cross "
+                "safely, stay on route, enter, or orient indoors, and only what is "
+                "clearly visible:\n"
+                "- for outdoor images: the intersection or junction ahead, and "
+                "its shape if clear "
+                "(T-junction, four-way, roundabout);\n"
+                "- for outdoor images: whether there is a pedestrian crossing and its type: traffic "
+                "signals with a push button, a marked or zebra crossing, a refuge "
+                "island, or none;\n"
+                "- for outdoor images: kerb ramps, dropped kerbs, or steps at the kerb;\n"
+                "- for outdoor images: which side traffic in the nearest lane comes from;\n"
+                "- for outdoor images: whether the walker must cross a road to continue, and which side "
+                "the footpath continues on.\n"
+                "- for indoor/place previews: stairs, ramps, lifts, escalators, "
+                "handrails, doors, corridors, reception desks, keypads, intercoms, "
+                "light switches, tactile or Braille signs, obstacles, narrow spaces, "
+                "floor surface or texture if visible (for example carpet, tile, "
+                "concrete, timber, matting, polished floor, uneven surface, or a "
+                "threshold), and whether the likely path continues left, right, "
+                "ahead, upstairs, or downstairs.\n"
+                "- for indoor/place previews: the useful spatial layout or place "
+                "type, such as an open courtyard, atrium, arcade, covered passage, "
+                "stairwell, lobby, reception area, shopping-centre concourse, or "
+                "enclosed corridor. Prefer these wayfinding facts over generic "
+                "decor such as ceiling, colours, or wall finishes. Do mention "
+                "floor material or texture when visible, because it can help a "
+                "blind traveller orient by sound, cane feel, slope, or threshold.\n"
+                "- When repeated route landmarks are clearly visible, give an "
+                "approximate count: houses or townhouses in a row, entrances, "
+                "doors, gates, mailboxes, stairs, bollards, pillars, driveways, "
+                "or other repeated features. Use cautious wording such as "
+                "'about three' or 'at least two' when the full count is partly "
+                "hidden.\n"
+                "- Named landmarks the traveller could use as an audible waypoint: "
+                "if a shop, cafe, restaurant, pub, bank, pharmacy, or other business "
+                "has clearly readable signage, or a notable building (church, "
+                "school, library, station entrance, and similar) is obviously "
+                "identifiable, name it briefly and say which side it's on — for "
+                "example 'a cafe on the left' or 'the entrance to Glenferrie "
+                "Station ahead'. Only report ones you can actually read or clearly "
+                "identify; do not guess at a business type from a generic "
+                "storefront.\n"
+                "Use ONLY body-relative directions: left, right, ahead, behind. "
+                "NEVER use compass directions. Do NOT describe decorative building "
+                "appearance, colours, general scenery, or people, and do not "
+                "describe vehicles beyond which side traffic flows. If something is "
+                "not clearly visible, say so briefly rather than guessing. Keep it "
+                "to two or three short factual sentences, adding a fourth only if "
+                "naming a landmark."
             )
-            contents = [
-                types.Part.from_bytes(data=image_bytes_list[0], mime_type="image/jpeg"),
-                types.Part.from_bytes(data=image_bytes_list[1], mime_type="image/jpeg"),
-                types.Part.from_text(text=prompt),
-            ]
         else:
-            dir_a = _cardinal(headings[0]) if headings else "north"
-            prompt = (
-                f"You are describing a Google Street View image for a blind person. "
-                f"The image faces {dir_a}. "
-                f"Describe what businesses, buildings, or landmarks are visible, "
-                f"reading from left to right as seen in the image. "
-                f"Note signage, shop types, and any access features such as steps or ramps. "
-                f"Do not comment on how busy the street looks. "
-                f"Two to four sentences."
-            )
-            contents = [
-                types.Part.from_bytes(data=image_bytes_list[0], mime_type="image/jpeg"),
-                types.Part.from_text(text=prompt),
-            ]
+            def _cardinal(heading: float) -> str:
+                dirs = [
+                    "north", "north-east", "east", "south-east",
+                    "south", "south-west", "west", "north-west",
+                ]
+                return dirs[round(heading / 45) % 8]
 
-        print(f"[Gemini] Describing Street View ({len(image_bytes_list)} image(s))...")
-        last_exc = None
-        for attempt in range(4):
-            if attempt:
-                wait = 2 ** attempt
-                print(f"[Gemini] Street View retry {attempt} in {wait}s...")
-                time.sleep(wait)
-            try:
-                resp = self._client.models.generate_content(
-                    model=GEMINI_MODEL,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        thinking_config=types.ThinkingConfig(
-                            thinking_budget=GEMINI_THINKING_BUDGET
-                        )
-                    ),
-                )
-                text = self._extract_text(resp)
-                if text:
-                    return text
-            except Exception as exc:
-                last_exc = exc
-                msg = str(exc)
-                if "503" in msg or "UNAVAILABLE" in msg or "429" in msg or "quota" in msg.lower():
-                    print(f"[Gemini] Street View description failed (attempt {attempt+1}): {exc}")
+            heading_bits = []
+            for idx, heading in enumerate((headings or [])[:2], start=1):
+                try:
+                    heading_bits.append(f"image {idx} faces {heading:.0f} degrees ({_cardinal(float(heading))})")
+                except Exception:
                     continue
-                break
-        print(f"[Gemini] Street View description gave up after retries: {last_exc}")
-        return ""
+            heading_note = ""
+            if heading_bits:
+                heading_note = " " + " ".join(heading_bits) + "."
+            prompt = (
+                "You are describing Google Street View images for a blind traveler as part of an accessible route planner."
+                f"{heading_note}"
+                " First decide whether the images show an outdoor street scene, an indoor/place preview, or a mixed entrance area."
+                " Extract only facts that are clearly visible: the useful spatial layout or place type such as an open courtyard, atrium, arcade, covered passage, stairwell, lobby, reception area, shopping-centre concourse, or enclosed corridor; approximate counts of repeated route landmarks such as houses or townhouses in a row, entrances, doors, gates, mailboxes, stairs, bollards, pillars, or driveways; floor material or texture such as carpet, tile, concrete, timber, matting, polished floor, uneven surface, or thresholds; pedestrian crossings, kerb cuts, tactile paving, steps, ramps, lifts, escalators, handrails, barriers, sidewalk width, "
+                "obstructions, covered walkways, readable stop or platform signs, entrance locations, doors, corridors, reception desks, keypads, intercoms, light switches, "
+                "and whether the destination or route appears to be left, right, ahead, behind, upstairs, or downstairs. "
+                "If the images are indoor, start with 'Indoor preview:' and describe access/orientation cues rather than saying outdoor traffic details are unavailable. "
+                "Prefer spatial layout, floor surface, and wayfinding facts over generic decor such as ceiling, colours, or wall finishes. "
+                "Don't mention cars or their models, but the side on which the traffic moves would be useful to note for outdoor images. "
+                "Do NOT guess, infer, or fill gaps. If a sign is unreadable or a detail is uncertain, let the user know. "
+                "Keep it concise and factual."
+            )
+        try:
+            content = [{"type": "text", "text": prompt}]
+            for b in image_bytes_list[:2]:
+                b64 = base64.b64encode(b).decode("ascii")
+                content.append({"type": "image_url", "image_url": f"data:image/jpeg;base64,{b64}"})
+            return self._chat(contents=content, model=MISTRAL_VISION_MODEL)
+        except Exception as exc:
+            print(f"[Mistral] Street View description failed: {exc}")
+            return ""
 
-    def _extract_text(self, resp) -> str:
-        """Extract text from a Gemini response, checking candidates fallback."""
-        direct = getattr(resp, "text", "") or ""
-        if direct:
-            return direct.strip()
-        candidates = getattr(resp, "candidates", None) or []
-        parts = []
-        for cand in candidates:
-            content = getattr(cand, "content", None)
-            for part in (getattr(content, "parts", None) or []):
-                text = getattr(part, "text", "") or ""
-                if text:
-                    parts.append(text)
-        return "".join(parts).strip()
+    def query_text(self, prompt: str, cache_key: str) -> str:
+        if not self.is_configured:
+            return ""
+        cached = self._get_cache(cache_key, text=True)
+        if cached:
+            return cached
+        try:
+            result = self._chat(prompt, model=MISTRAL_TEXT_MODEL)
+            if result:
+                self._set_cache(cache_key, result, text=True)
+            return result
+        except Exception as exc:
+            print(f"[Mistral] query_text failed: {exc}")
+            return ""
 
-    def _grounded_query(self, prompt: str, label: str = "") -> str:
-        """Run a grounded Gemini query and return the raw text."""
-        from google.genai import types
-        resp = self._client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                thinking_config=types.ThinkingConfig(
-                    thinking_budget=GEMINI_THINKING_BUDGET
-                ),
-                tools=[types.Tool(google_search=types.GoogleSearch())],
-            ),
+    def narrative_directions(self, digest: dict) -> str:
+        """Turn a route digest from NavigationEngine into pedestrian prose.
+
+        Returns "" if Mistral is not configured, the digest is malformed, or
+        the post-check finds an invented street name. Callers should fall back
+        to the deterministic step list on empty return.
+        """
+        if not self.is_configured:
+            return ""
+        if not isinstance(digest, dict) or not digest.get("legs"):
+            return ""
+
+        # Build the allow-list of street/place names the model may use.
+        allowed = set()
+        for leg in digest["legs"]:
+            if leg.get("street"):
+                allowed.add(leg["street"])
+            for cs in leg.get("cross_streets_passed", []) or []:
+                # cross_streets_passed entries are {"name", "side"} dicts;
+                # tolerate the legacy bare-string form too.
+                if isinstance(cs, dict):
+                    if cs.get("name"):
+                        allowed.add(cs["name"])
+                elif isinstance(cs, str):
+                    allowed.add(cs)
+            onto = (leg.get("end_action") or {}).get("onto")
+            if onto:
+                allowed.add(onto)
+        for highlight in digest.get("route_highlights", []) or []:
+            if isinstance(highlight, dict) and highlight.get("name"):
+                allowed.add(highlight["name"])
+        for feat in digest.get("pedestrian_features", []) or []:
+            # Feature strings look like "Pedestrian crossing at X and Y: traffic signals."
+            # Extract any road names so the post-check doesn't flag them as invented.
+            m = re.search(r"crossing at ([^:]+):", feat or "")
+            if m:
+                for part in re.split(r"\s+and\s+", m.group(1)):
+                    part = part.strip().rstrip(".")
+                    if part:
+                        allowed.add(part)
+        origin_label = (digest.get("origin") or {}).get("label", "")
+        dest_label   = (digest.get("destination") or {}).get("label", "")
+        if origin_label: allowed.add(origin_label)
+        if dest_label:   allowed.add(dest_label)
+
+        cache_key = "narrative_" + hex(abs(hash(json.dumps(
+            digest, sort_keys=True, default=str))))[2:]
+        cached = self._get_cache(cache_key, text=True)
+        if cached:
+            return cached
+
+        system = (
+            "You write pedestrian walking directions for a blind user who relies "
+            "on a screen reader.  You are given a JSON route digest produced from "
+            "OpenStreetMap data.  STRICT RULES:\n"
+            "- Use ONLY street, place and address names that appear in the digest. "
+            "Never invent or guess a street name.  If a fact is not in the digest, "
+            "do not state it.\n"
+            "- NEVER use compass directions (north, south, east, west, "
+            "north-east, etc.) or cardinal footpath names (\"the eastern "
+            "footpath\").  A blind walker cannot sense compass bearings, so they "
+            "are useless and must be omitted entirely, even if the digest "
+            "contains a `compass` or `bearing_deg` field.  Orient the walker "
+            "ONLY with body-relative cues: left, right, ahead, behind, and which "
+            "side the road is on.\n"
+            "- Every numbered step must end with an orientation tag describing "
+            "where the road is and which way traffic moves, because a blind "
+            "walker re-establishes their bearings at each step.  The walker "
+            "stays on the same relative footpath through turns, so these "
+            "values from `origin` apply to EVERY leg, not just leg 0.  Use "
+            "the digest fields in this exact priority order, omitting any "
+            "that are null:\n"
+            "  * `origin.road_side` — say \"the road is on your left\" or \"the "
+            "road is on your right\".  This is the single most important cue and "
+            "must appear on every step when it is known.\n"
+            "  * `origin.traffic_nearest_lane` — \"with_you\" → say "
+            "\"traffic in the nearest lane moves in the same direction as "
+            "you\"; \"toward_you\" → say \"traffic in the nearest lane comes "
+            "toward you\".\n"
+            "- Describe turns only as left, right, slight left, slight right, "
+            "sharp left, sharp right, or continue straight — taken from the "
+            "leg's `end_action.turn`.  Never attach a compass heading to a turn.\n"
+            "- For the destination, read `destination.crossing_needed`:\n"
+            "  * true  → say the destination is on the far side of the road and the walker must cross to reach it (you may name the final leg's street).\n"
+            "  * false → say the destination is on the same side as the walker, so no crossing is needed.\n"
+            "  * null  → the crossing relationship is UNKNOWN.  Say NOTHING about crossing — do not claim a crossing is needed and do not claim one is not.  Inventing or denying a crossing here is a serious error.  Instead state the arrival using `destination.side`: \"left\"/\"right\" → \"the destination is on your left/right as you approach\"; \"ahead\" → \"the destination is a short distance ahead\"; \"behind\" → \"the destination is slightly behind you\"; null → simply say you arrive at the destination on the named street.\n"
+            "  Never say \"on the road side\" — it is ambiguous.  Never introduce a road crossing that `crossing_needed` does not explicitly set to true.\n"
+            "- When `country.drives_on` is not null and `origin.road_side` is null, "
+            "state the driving convention once in step 1: \"traffic drives on the "
+            "{drives_on}\" (e.g. \"traffic drives on the left\").  This gives the "
+            "walker essential context even when the exact road side is unknown.\n"
+            "- Do not describe traffic flow when `country.drives_on` is null.\n"
+            "- Use the distances (in metres) from the digest verbatim.  Never convert them to a compass direction.\n"
+            "- A leg's `cross_streets_passed` lists side streets meeting the road as the walker continues along it, in order, each with a `side` and a `crossed` flag. "
+            "Mention them passively, as features of the road, never as turns the walker makes, and only call something a crossing when the walker truly crosses it:\n"
+            "  * `crossed` true  → the side street opens onto the walker's own footpath; say e.g. \"the mouth of {Name} opens on your {side}\" or \"you cross {Name} on your {side}\".\n"
+            "  * `crossed` false → the side street meets the road on the far side; the walker does NOT cross it.  Say e.g. \"{Name} joins from the {side}, across the road\", and never imply the walker crosses it.\n"
+            "  * `crossed` null  → make no claim either way: \"{Name} meets the road\" (add the side only if it is left or right).\n"
+            "  * `side` \"ahead\" / \"behind\" → treat as the road continuing or forking, not a cross street.\n"
+            "  Name every entry in the order given; never merge them into a single \"cross X and Y\".\n"
+            "- `route_highlights` lists real points of interest along the route, each with a `name`, `kind` and `route_index`. "
+            "Mention the landmark on the step whose position matches its `route_index`, so the walker hears it as they pass it, for example \"you'll pass the library on this stretch\". "
+            "Name several of them across the route — they are valuable orientation anchors for a blind walker — but keep each mention to a few words and do not bunch them all into one step. "
+            "Use only the exact names from the digest.  A landmark may be on either side, so do not use it to imply which side of the road the walker is on, and never let a landmark replace an explicit crossing instruction.\n"
+            "- If `pedestrian_features` is present it lists real pedestrian features in route order — crossings, steps, and landmarks — "
+            "fetched live from OpenStreetMap.  Weave each feature into the numbered step nearest to it.  Rules:\n"
+            "  * 'traffic signals' → tell the user to press the crossing button and wait for the audible signal or beep.\n"
+            "  * 'zebra crossing' → say it is a marked give-way crossing and to listen before stepping out.\n"
+            "  * 'uncontrolled crossing' → warn explicitly that there is no signal and to listen and proceed when clear.\n"
+            "  * 'pedestrian crossing' with no further qualifier → treat as uncontrolled.\n"
+            "  * 'tactile paving present' → mention it as a locating cue ('the crossing has tactile paving').\n"
+            "  * 'no tactile paving tagged in OSM' → mention this as a caution.\n"
+            "  * 'audible signals tagged' → mention the crossing has an audible signal.\n"
+            "  * 'Steps on the route' → warn: 'Warning — steps ahead. No ramp is recorded in OpenStreetMap.'\n"
+            "  * 'Landmark: X' → mention briefly as an orientation cue.\n"
+            "  Do not skip any feature.  A blind walker who does not know about steps or an uncontrolled crossing faces a safety risk.\n"
+            "- Output numbered steps in plain prose.  No markdown, no bullet points, "
+            "no preamble, no closing summary.  Each numbered step on its own line."
         )
-        return self._extract_text(resp)
+        user = (
+            "Route digest:\n"
+            + json.dumps(digest, indent=2, default=str)
+        )
+
+        try:
+            text = self._chat_with_system(system, user, model="mistral-large-latest")
+        except Exception as exc:
+            print(f"[Mistral] narrative_directions large failed: {exc} — retrying small")
+            try:
+                text = self._chat_with_system(system, user, model=MISTRAL_TEXT_MODEL)
+            except Exception as exc2:
+                print(f"[Mistral] narrative_directions small failed: {exc2}")
+                return ""
+        if not text:
+            return ""
+
+        # Post-check: blank out every allowed name, then look for any
+        # Capitalised-word + street-suffix that remains. Anything that
+        # survives is an invented street name.
+        SUFFIXES = (
+            "Road", "Street", "Avenue", "Drive", "Court", "Place", "Crescent",
+            "Close", "Boulevard", "Highway", "Terrace", "Parade", "Esplanade",
+            "Lane", "Grove", "Way", "Circuit", "Rise", "Row", "Mews", "Track",
+            "St", "Rd", "Ave", "Dr", "Ct", "Pl", "Cres", "Cl", "Blvd", "Hwy",
+            "Tce", "Pde", "Esp", "Ln", "Gr", "Cct",
+        )
+        sanitized = text
+        for name in sorted(allowed, key=len, reverse=True):
+            if name:
+                sanitized = sanitized.replace(name, "<NAME>")
+        leftover = re.search(
+            r"\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){0,3}\s+(?:"
+            + "|".join(SUFFIXES) + r")\b",
+            sanitized,
+        )
+        if leftover:
+            print(f"[Mistral] narrative_directions rejected — invented name: "
+                  f"{leftover.group(0)!r}")
+            return ""
+
+        self._set_cache(cache_key, text, text=True)
+        return text
+
+    def _chat_with_system(self, system: str, user: str, model: str) -> str:
+        """Mistral chat with a system message and a single user turn."""
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user",   "content": user},
+        ]
+        req_body = json.dumps({"model": model, "messages": messages}).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.mistral.ai/v1/chat/completions",
+            data=req_body,
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type":  "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        choices = payload.get("choices") or []
+        if not choices:
+            return ""
+        content = (choices[0].get("message") or {}).get("content", "")
+        if isinstance(content, list):
+            return "".join(
+                part.get("text", "")
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            ).strip()
+        return str(content or "").strip()
+
+    def _chat(self, prompt: str = "", contents=None, model: str = MISTRAL_TEXT_MODEL, image_bytes: bytes = None) -> str:
+        messages = []
+        if contents is not None:
+            messages.append({"role": "user", "content": contents})
+        elif image_bytes is not None:
+            b64 = base64.b64encode(image_bytes).decode("ascii")
+            messages.append({"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": f"data:image/jpeg;base64,{b64}"},
+            ]})
+        else:
+            messages.append({"role": "user", "content": prompt})
+
+        req_body = json.dumps({"model": model, "messages": messages}).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.mistral.ai/v1/chat/completions",
+            data=req_body,
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        choices = payload.get("choices") or []
+        if not choices:
+            return ""
+        message = choices[0].get("message") or {}
+        content = message.get("content", "")
+        if isinstance(content, list):
+            return "".join((part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text")).strip()
+        return str(content or "").strip()
+
+    def _search_web_grounding(self, queries: list[str], label: str = "") -> tuple[str, list[str]]:
+        snippets = []
+        candidate_links: list[tuple[int, str]] = []
+        seen_links = set()
+        search_urls = [
+            lambda q: f"https://www.bing.com/search?q={q}",
+            lambda q: f"https://html.duckduckgo.com/html/?q={q}",
+        ]
+        for phrase in queries:
+            print(f"[Mistral] {label} search phrase: {phrase!r}")
+            query = urllib.parse.quote(phrase)
+            for build_search_url in search_urls:
+                search_url = build_search_url(query)
+                try:
+                    req = urllib.request.Request(search_url, headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req, timeout=20) as resp:
+                        html = resp.read().decode("utf-8", "ignore")
+                except Exception as exc:
+                    print(f"[Mistral] {label} search fetch failed for {search_url}: {exc}")
+                    continue
+
+                found_snippets = re.findall(
+                    r'(?:result__snippet|result__body|b_caption|b_snippet)[^>]*>(.*?)</',
+                    html,
+                    flags=re.S | re.I,
+                )
+                snippets.extend(
+                    re.sub(r"<[^>]+>", " ", s).strip()
+                    for s in found_snippets
+                    if s
+                )
+
+                raw_links = self._extract_search_links(html, search_url)
+                found_links = []
+                for raw in raw_links:
+                    link = self._normalize_search_link(raw)
+                    if not link:
+                        continue
+                    lower = link.lower()
+                    if any(block in lower for block in ("duckduckgo.com", "google.com", "bing.com", "microsoft.com")):
+                        continue
+                    if link in seen_links:
+                        continue
+                    score = self._score_candidate_link(link, phrase)
+                    candidate_links.append((score, link))
+                    found_links.append(link)
+                    seen_links.add(link)
+
+                print(
+                    f"[Mistral] {label} search via {urllib.parse.urlparse(search_url).netloc} "
+                    f"found {len(found_snippets)} snippets and {len(found_links)} candidate URLs"
+                )
+        candidate_links.sort(key=lambda item: (-item[0], item[1]))
+        links = [link for _, link in candidate_links[:10]]
+        page_text_parts = []
+        for link in links[:6]:
+            try:
+                req = urllib.request.Request(link, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    body = resp.read().decode("utf-8", "ignore")
+                text = re.sub(r"<script.*?</script>|<style.*?</style>", " ", body, flags=re.S | re.I)
+                text = re.sub(r"<[^>]+>", " ", text)
+                text = re.sub(r"\s+", " ", text).strip()
+                if text:
+                    page_text_parts.append(f"SOURCE: {link}\n{text[:12000]}")
+                    print(f"[Mistral] {label} page text collected: {len(page_text_parts[-1])} chars from {link}")
+            except Exception as exc:
+                print(f"[Mistral] {label} page fetch failed for {link}: {exc}")
+                continue
+        combined = "\n\n".join(page_text_parts).strip()
+        if not combined:
+            if label in {"Shopping", "StoreDetail", "Floor"}:
+                combined = ""
+            else:
+                combined = "\n".join(snippets).strip()
+        print(f"[Mistral] {label} combined grounding length: {len(combined)} (links={len(links)}, pages={len(page_text_parts)})")
+        return (combined, links[:10])
 
     @staticmethod
-    def _parse_url_list(text: str) -> list[str]:
-        """Parse a JSON URL array, or fall back to URL regex extraction."""
+    def _normalize_search_link(raw: str) -> str:
+        raw = str(raw or "").strip()
+        if not raw:
+            return ""
+        parsed = urllib.parse.urlparse(raw)
+        if parsed.scheme in ("http", "https"):
+            host = parsed.netloc.lower()
+            if "bing.com" in host or "microsoft.com" in host:
+                query = urllib.parse.parse_qs(parsed.query)
+                for key in ("u", "url", "ru", "r", "target", "dest"):
+                    if key in query and query[key]:
+                        candidate = urllib.parse.unquote(query[key][0]).strip()
+                        decoded = MistralClient._decode_bing_destination(candidate)
+                        if decoded:
+                            return decoded
+                        if candidate.startswith(("http://", "https://")):
+                            return candidate
+                if parsed.path.lower().startswith("/ck/a"):
+                    decoded = MistralClient._decode_bing_destination(raw)
+                    if decoded:
+                        return decoded
+            if "duckduckgo.com" not in host:
+                return raw
+            query = urllib.parse.parse_qs(parsed.query)
+            for key in ("uddg", "u", "url"):
+                if key in query and query[key]:
+                    candidate = urllib.parse.unquote(query[key][0])
+                    if candidate.startswith(("http://", "https://")):
+                        return candidate
+            return ""
+        if raw.startswith("//"):
+            raw = "https:" + raw
+        if raw.startswith("/"):
+            return ""
+        return raw if raw.startswith(("http://", "https://")) else ""
+
+    @staticmethod
+    def _decode_bing_destination(raw: str) -> str:
+        """Best-effort unwrap for Bing redirect URLs."""
+        raw = str(raw or "").strip()
+        if not raw:
+            return ""
+        parsed = urllib.parse.urlparse(raw)
+        query = urllib.parse.parse_qs(parsed.query)
+        candidates = []
+        for key in ("u", "url", "ru", "r", "target", "dest"):
+            candidates.extend(query.get(key) or [])
+        candidates.append(raw)
+        for candidate in candidates:
+            candidate = urllib.parse.unquote(str(candidate or "").strip())
+            if candidate.startswith(("http://", "https://")):
+                return candidate
+            if candidate.startswith(("a1", "a2", "a3", "a4")) and len(candidate) > 2:
+                encoded = candidate[2:]
+                pad = "=" * (-len(encoded) % 4)
+                try:
+                    import base64
+                    decoded = base64.b64decode(encoded + pad).decode("utf-8", "ignore").strip()
+                    if decoded.startswith(("http://", "https://")):
+                        return decoded
+                except Exception:
+                    pass
+            if candidate.startswith(("http%3A%2F%2F", "https%3A%2F%2F")):
+                decoded = urllib.parse.unquote(candidate)
+                if decoded.startswith(("http://", "https://")):
+                    return decoded
+        return ""
+
+    def _extract_search_links(self, html: str, search_url: str) -> list[str]:
+        host = urllib.parse.urlparse(search_url).netloc.lower()
+        patterns: list[str]
+        if "bing.com" in host:
+            patterns = [
+                r'<li[^>]+class="[^"]*\bb_algo\b[^"]*"[\s\S]*?<h2>\s*<a[^>]+href="([^"]+)"',
+                r'<h2>\s*<a[^>]+href="([^"]+)"',
+            ]
+        elif "duckduckgo.com" in host:
+            patterns = [
+                r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"',
+                r'<a[^>]+rel="nofollow"[^>]+href="([^"]+)"',
+                r'<a[^>]+href="([^"]+)"',
+            ]
+        else:
+            patterns = [r'href="(https?://[^"]+)"']
+
+        for pattern in patterns:
+            raw_links = re.findall(pattern, html, flags=re.S | re.I)
+            if raw_links:
+                return raw_links
+        return []
+
+    @staticmethod
+    def _score_candidate_link(url: str, phrase: str = "") -> int:
+        lower = (url or "").lower()
+        score = 0
+        good_terms = (
+            "directory", "tenant", "tenants", "store", "stores", "shop", "shops",
+            "mall", "centre", "center", "food", "dining", "restaurant", "cafe",
+            "takeaway", "eat", "eatery", "map", "pdf",
+        )
+        bad_terms = (
+            "facebook.com", "instagram.com", "linkedin.com", "youtube.com",
+            "maps.google.com", "google.com", "bing.com", "duckduckgo.com",
+            "login", "account", "signin", "search", "share",
+        )
+        for term in good_terms:
+            if term in lower:
+                score += 1
+        for term in bad_terms:
+            if term in lower:
+                score -= 4
+        bits = [b for b in re.findall(r"[a-z0-9]+", (phrase or "").lower()) if len(b) >= 4]
+        hits = sum(1 for bit in bits if bit in lower)
+        score += min(hits, 3)
+        return score
+
+    @staticmethod
+    def _retain_evidenced_store_names(
+        names: list,
+        evidence_text: str,
+        existing_names: list[str] | None = None,
+    ) -> list[str]:
+        evidence = re.sub(r"[^a-z0-9]+", " ", (evidence_text or "").lower())
+        existing = {
+            re.sub(r"[^a-z0-9]+", "", (name or "").lower())
+            for name in (existing_names or [])
+            if name
+        }
+        clean = []
+        seen = set()
+        for name in names or []:
+            raw = str(name or "").strip()
+            if not raw:
+                continue
+            key = re.sub(r"[^a-z0-9]+", "", raw.lower())
+            if not key or key in seen:
+                continue
+            if key in existing:
+                continue
+            compact = re.sub(r"[^a-z0-9]+", " ", raw.lower()).strip()
+            if compact and compact in evidence:
+                clean.append(raw)
+                seen.add(key)
+        return clean
+
+    @staticmethod
+    def _clean_store_names(names: list, centre_name: str) -> list[str]:
+        centre = str(centre_name or "").strip().lower()
+        bad_exact = {
+            "shopping centre",
+            "shopping center",
+            "store directory",
+            "stores",
+            "directory",
+            "tenants",
+            "home",
+            "westfield",
+        }
+        clean = []
+        seen = set()
+        for name in names or []:
+            raw = str(name or "").strip()
+            if not raw:
+                continue
+            low = raw.lower()
+            if low == centre:
+                continue
+            if low in bad_exact:
+                continue
+            if centre and MistralClient._looks_like_centre_heading(low, centre):
+                continue
+            if any(token in low for token in ("directory", "shopping centre", "shopping center", "tenant list")):
+                continue
+            if len(raw) < 2:
+                continue
+            key = low.rstrip(".")
+            if key in seen:
+                continue
+            seen.add(key)
+            clean.append(raw)
+        return sorted(clean, key=str.lower)
+
+    @staticmethod
+    def _looks_like_centre_heading(text: str, centre: str) -> bool:
+        """Return True for centre-level labels, not tenant names."""
+        text = (text or "").strip()
+        centre = (centre or "").strip()
+        if not text or not centre:
+            return False
+        if text == centre:
+            return True
+        if text.startswith(centre):
+            tail = text[len(centre):].strip(" -—:,.")
+            if not tail:
+                return True
+            if any(token in tail for token in ("directory", "tenant", "tenants", "store", "stores", "official")):
+                return True
+        if text.endswith(centre):
+            head = text[:-len(centre)].strip(" -—:,.")
+            if not head:
+                return True
+            if any(token in head for token in ("directory", "tenant", "tenants", "store", "stores", "official")):
+                return True
+        return False
+
+    def _parse_url_list(self, text: str) -> list[str]:
         text = str(text or "").strip()
         if not text:
             return []
-
-        # Strip markdown fences if Gemini ignores the instruction.
-        if "```" in text:
-            parts = text.split("```")
-            for part in parts:
-                p = part.strip()
-                if p.startswith("json"):
-                    p = p[4:].strip()
-                if p.startswith("["):
-                    text = p
-                    break
-
-        values = []
-        start = text.find("[")
-        if start != -1:
-            depth = 0
-            end = -1
-            for i in range(start, len(text)):
-                if text[i] == "[":
-                    depth += 1
-                elif text[i] == "]":
-                    depth -= 1
-                    if depth == 0:
-                        end = i + 1
-                        break
-            if end != -1:
-                try:
-                    parsed = json.loads(text[start:end])
-                    if isinstance(parsed, list):
-                        for item in parsed:
-                            if isinstance(item, str):
-                                values.append(item)
-                            elif isinstance(item, dict):
-                                u = item.get("url") or item.get("uri") or item.get("link")
-                                if u:
-                                    values.append(str(u))
-                except Exception:
-                    pass
-
-        if not values:
-            import re
-            values = re.findall(r"https?://[^\s\]>)\"']+", text)
-        return values
-
-    @staticmethod
-    def _is_bad_menu_url(url: str) -> bool:
-        """Reject opaque redirect/search URLs that are not real menu destinations."""
-        try:
-            import urllib.parse
-            parsed = urllib.parse.urlparse(str(url or ""))
-            host = (parsed.netloc or "").lower()
-            path = (parsed.path or "").lower()
-            query = (parsed.query or "").lower()
-            full = str(url or "").lower()
-        except Exception:
-            return True
-
-        if not host:
-            return True
-
-        blocked_hosts = (
-            "vertexaisearch.cloud.google.com",
-            "googleapis.com",
-            "googleusercontent.com",
-            "gstatic.com",
-        )
-        if any(host == h or host.endswith("." + h) for h in blocked_hosts):
-            return True
-
-        if "grounding-api-redirect" in full:
-            return True
-
-        # Google/Bing/etc result pages are not menu destinations.
-        if host in {"google.com", "www.google.com", "bing.com", "www.bing.com", "duckduckgo.com", "www.duckduckgo.com"}:
-            if path.startswith(("/url", "/search", "/aclk")) or "q=" in query or "url=" in query:
-                return True
-
-        # Generic redirect/tracking wrappers with an encoded destination are not safe to show.
-        if any(part in path for part in ("/redirect", "/redir", "/url")) and any(k in query for k in ("url=", "u=", "target=")):
-            return True
-
-        # Bare homepages (no meaningful path) are not menu destinations.
-        if path in ("", "/") and not query:
-            return True
-
-        return False
+        return re.findall(r"https?://[^\s\]\)\"']+", text)
 
     @staticmethod
     def _clean_url_list(urls: list) -> list[str]:
-        """Normalise, dedupe, and filter returned URLs. Exclude pre-2024 dates."""
-        import re
         clean = []
         seen = set()
         for url in urls or []:
             url = str(url or "").strip().strip(".,;:)}]\"'")
             if not url.lower().startswith(("http://", "https://")):
                 continue
-
-            # Reject URLs with obvious old dates (pre-2024)
-            old_date_pattern = r'/(19\d{2}|20(?:0[0-9]|1[0-9]|2[0-3]))[/-]'
-            if re.search(old_date_pattern, url):
-                print(f"[Gemini] Rejected pre-2024 menu URL: {url}")
-                continue
-
-            # Drop common tracking fragments/UTMs while preserving useful query args.
-            try:
-                import urllib.parse
-                parsed = urllib.parse.urlparse(url)
-                query_items = [
-                    (k, v) for k, v in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
-                    if not k.lower().startswith("utm_")
-                ]
-                url = urllib.parse.urlunparse(parsed._replace(
-                    query=urllib.parse.urlencode(query_items, doseq=True),
-                    fragment="",
-                ))
-            except Exception:
-                pass
-            if GeminiClient._is_bad_menu_url(url):
-                print(f"[Gemini] Rejected non-destination menu URL: {url}")
-                continue
             key = url.lower().rstrip("/")
             if key in seen:
                 continue
             seen.add(key)
             clean.append(url)
-            if len(clean) >= 8:
-                break
         return clean
 
     @staticmethod
-    def _extract_grounding_urls(resp) -> list[str]:
-        """Best-effort extraction of URLs from Gemini grounding metadata."""
-        urls = []
-        seen_objs = set()
+    def _clean_walk_instruction(text: str) -> str:
+        """Strip sighted-navigation geometry; keep street name + turn direction.
 
-        def visit(obj, depth=0):
-            if obj is None or depth > 8:
-                return
-            oid = id(obj)
-            if oid in seen_objs:
-                return
-            seen_objs.add(oid)
+        Returns the cleaned string, or "" if the instruction has nothing useful
+        for a blind pedestrian (e.g. pure visual landmark references).
+        """
+        import re as _re
+        text = text.strip()
+        if not text:
+            return ""
 
-            if isinstance(obj, str):
-                if obj.startswith(("http://", "https://")):
-                    urls.append(obj)
-                return
-            if isinstance(obj, dict):
-                for key, value in obj.items():
-                    if key in ("url", "uri", "link") and isinstance(value, str):
-                        urls.append(value)
-                    else:
-                        visit(value, depth + 1)
-                return
-            if isinstance(obj, (list, tuple, set)):
-                for item in obj:
-                    visit(item, depth + 1)
-                return
+        # "At the roundabout, take the Nth exit onto X" → "Continue onto X"
+        m = _re.match(r"at the roundabout[^,]*,?\s*take[^o]*onto (.+)", text, _re.I)
+        if m:
+            return f"Continue onto {m.group(1)}"
 
-            if hasattr(obj, "model_dump"):
-                try:
-                    visit(obj.model_dump(), depth + 1)
-                    return
-                except Exception:
-                    pass
-            for attr in ("candidates", "grounding_metadata", "grounding_chunks", "web", "uri", "url"):
-                try:
-                    visit(getattr(obj, attr), depth + 1)
-                except Exception:
-                    pass
+        # "Head north/south/east/west on X toward Y" → "Along X"
+        # Strip cardinal direction and any trailing "toward [landmark]" — the landmark
+        # is a visual waypoint, not a turn the pedestrian makes, and passing it to the
+        # AI causes it to hallucinate a turn onto that street.
+        m = _re.match(r"head (?:north|south|east|west){1,2}(?:east|west)?\s+on (.+)", text, _re.I)
+        if m:
+            street = _re.sub(r"\s+toward\s+.+$", "", m.group(1), flags=_re.I).strip()
+            return f"Along {street}"
 
-        visit(resp)
-        return urls
+        # "Walk toward/to [landmark]" with no street suffix → drop
+        # Use full words or suffixes that only appear after a street name,
+        # not abbreviations like "St" which could mean Saint.
+        if _re.match(r"walk (toward|to)\b", text, _re.I):
+            if not _re.search(
+                r"\b(street|road|avenue|drive|lane|way|crescent|boulevard|highway|terrace|place|close|parade|court|grove|circuit|mews)\b"
+                r"|(?<=[a-z])\s+(rd|ave|dr|ln|cres|blvd|hwy|tce|pde|pl|cl)\b",
+                text, _re.I,
+            ):
+                return ""
+
+        return text
 
     @staticmethod
     def _parse_json_list(text: str) -> list:
-        """Extract and parse the first balanced JSON array from *text*.
-
-        Uses bracket counting so trailing citation text like [1] or [2]
-        doesn't cause rfind to grab the wrong closing bracket.
-        """
-        # Strip markdown fences
         if "```" in text:
             parts = text.split("```")
             for part in parts:
@@ -891,15 +1029,11 @@ class GeminiClient:
                 if p.startswith("["):
                     text = p
                     break
-
         start = text.find("[")
         if start == -1:
-            print("[Gemini] No JSON array found in response.")
             return []
-
-        # Walk forward counting brackets to find the matching close
         depth = 0
-        end   = -1
+        end = -1
         for i in range(start, len(text)):
             if text[i] == "[":
                 depth += 1
@@ -908,22 +1042,13 @@ class GeminiClient:
                 if depth == 0:
                     end = i + 1
                     break
-
         if end == -1:
-            print("[Gemini] Unmatched '[' in response — JSON truncated?")
             return []
-
         try:
-            result = json.loads(text[start:end])
-            return result if isinstance(result, list) else []
-        except Exception as exc:
-            print(f"[Gemini] JSON parse failed: {exc}")
-            print(f"[Gemini] Attempted to parse: {text[start:end][:200]}")
+            parsed = json.loads(text[start:end])
+            return parsed if isinstance(parsed, list) else []
+        except Exception:
             return []
-
-    # ------------------------------------------------------------------
-    # Cache
-    # ------------------------------------------------------------------
 
     def _cache_path(self) -> str:
         return os.path.join(self._base, "search_cache.json")
@@ -934,45 +1059,17 @@ class GeminiClient:
             if os.path.exists(p):
                 with open(p, encoding="utf-8") as f:
                     self._cache = json.load(f)
-                print(f"[Gemini] Loaded cache: {len(self._cache)} entries.")
-        except Exception as exc:
-            print(f"[Gemini] Cache load failed: {exc}")
+        except Exception:
             self._cache = {}
 
     def _save_cache(self) -> None:
         try:
             with open(self._cache_path(), "w", encoding="utf-8") as f:
                 json.dump(self._cache, f, ensure_ascii=False, indent=2)
-        except Exception as exc:
-            print(f"[Gemini] Cache save failed: {exc}")
-
-    def query_text(self, prompt: str, cache_key: str) -> str:
-        if not self.is_configured:
-            return ""
-        cached = self._get_cache(cache_key, text=True)
-        if cached:
-            return cached
-        try:
-            from google.genai import types
-            resp = self._client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    thinking_config=types.ThinkingConfig(
-                        thinking_budget=GEMINI_THINKING_BUDGET
-                    )
-                ),
-            )
-            result = (resp.text or "").strip()
-            if result:
-                self._set_cache(cache_key, result, text=True)
-            return result
-        except Exception as exc:
-            print(f"[Gemini] query_text failed: {exc}")
-            return ""
+        except Exception:
+            pass
 
     def _get_cache(self, key: str, text: bool = False):
-        """Return cached value if fresh, else None."""
         entry = self._cache.get(key)
         if not isinstance(entry, dict):
             return None

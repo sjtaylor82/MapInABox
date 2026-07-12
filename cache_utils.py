@@ -38,3 +38,18 @@ def _get_cached(cache: dict, key: str, ttl_days: int) -> str | None:
 def _set_cached(cache: dict, key: str, value: str) -> None:
     """Store cached text with a timestamp."""
     cache[key] = {"text": value, "ts": time.time()}
+
+
+def _get_cached_data(cache: dict, key: str, ttl_days: int):
+    """Return cached structured data (list/dict) if still fresh."""
+    entry = cache.get(key)
+    if not isinstance(entry, dict):
+        return None
+    if (time.time() - entry.get("ts", 0)) / 86400 > ttl_days:
+        return None
+    return entry.get("data")
+
+
+def _set_cached_data(cache: dict, key: str, value) -> None:
+    """Store cached structured data with a timestamp."""
+    cache[key] = {"data": value, "ts": time.time()}

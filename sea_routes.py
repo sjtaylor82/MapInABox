@@ -4,7 +4,7 @@ Hardcoded ports, waypoints and routes for educational maritime routing.
 No API required — all distances calculated via haversine.
 """
 
-import math
+from geo import dist_km
 
 # ---------------------------------------------------------------------------
 # Major ports: name → (lat, lon)
@@ -210,22 +210,13 @@ US_WEST_CITIES = {"Los Angeles", "San Francisco", "Seattle", "Portland",
                   "San Diego", "Vancouver", "Victoria"}
 
 
-def _haversine(lat1, lon1, lat2, lon2):
-    R = 6371.0
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlam = math.radians(lon2 - lon1)
-    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlam/2)**2
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-
-
 def nearest_port(lat, lon):
     """Return (port_name, port_lat, port_lon, dist_km) for the nearest port."""
     best_dist = float('inf')
     best_name = None
     best_lat = best_lon = 0.0
     for name, (plat, plon) in PORTS.items():
-        d = _haversine(lat, lon, plat, plon)
+        d = dist_km(lat, lon, plat, plon)
         if d < best_dist:
             best_dist, best_name = d, name
             best_lat, best_lon = plat, plon
@@ -261,7 +252,7 @@ def get_sea_route(o_country, o_city, o_lat, o_lon, d_country, d_city, d_lat, d_l
     # Calculate total distance
     total_km = 0.0
     for i in range(len(waypoints) - 1):
-        total_km += _haversine(
+        total_km += dist_km(
             waypoints[i][0], waypoints[i][1],
             waypoints[i+1][0], waypoints[i+1][1])
 

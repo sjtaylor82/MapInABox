@@ -42,6 +42,21 @@ def dist_metres(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return math.hypot(dx, dy)
 
 
+def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in metres using the Haversine formula.
+
+    Accurate globally — use this when distances must be expressed in metres.
+    """
+    R = 6_371_000.0  # mean Earth radius in metres
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lon2 - lon1)
+    a = (math.sin(dphi / 2.0) ** 2
+         + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2.0) ** 2)
+    return R * 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
+
+
 def dist_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Great-circle distance in kilometres using the Haversine formula.
 
@@ -51,14 +66,7 @@ def dist_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     Examples:
         dist_km(-27.47, 153.02, 51.51, -0.13)  # Brisbane → London ≈ 16330 km
     """
-    R = 6_371.0  # mean Earth radius in km
-    phi1 = math.radians(lat1)
-    phi2 = math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlam = math.radians(lon2 - lon1)
-    a = (math.sin(dphi / 2.0) ** 2
-         + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2.0) ** 2)
-    return R * 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
+    return haversine_m(lat1, lon1, lat2, lon2) / 1000.0
 
 
 # ---------------------------------------------------------------------------

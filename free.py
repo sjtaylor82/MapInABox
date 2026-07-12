@@ -1220,7 +1220,7 @@ class FreeMixin:
         if getattr(self, '_free_mode', False):
             self._free_mode = False
             self._free_engine.debug = False
-            self.update_ui("Free mode off.")
+            self.update_ui("Free mode off.", force=True)
             return
         if not getattr(self, '_road_segments', []):
             self._status_update("Street data is still loading.", force=True)
@@ -1334,7 +1334,7 @@ class FreeMixin:
                 out = ", ".join(parts)
                 if not out.endswith("."):
                     out += "."
-                self.update_ui(out)
+                self.update_ui(out, force=True)
             # Remember last announced address for next iteration
             self._free_last_addr = addr
             # Debug: emit diagnostic information about the step
@@ -1408,16 +1408,16 @@ class FreeMixin:
     def _free_heading(self):
         if getattr(self, '_free_mode', False):
             heading = compass_name(getattr(self._free_engine.state, 'heading_deg', 0.0))
-            self.update_ui(f"Heading {heading}.")
+            self.update_ui(f"Heading {heading}.", force=True)
 
     def _free_describe_intersection(self):
         if getattr(self, '_free_mode', False):
-            self.update_ui(self._free_engine.describe_nearest_intersection())
+            self.update_ui(self._free_engine.describe_nearest_intersection(), force=True)
 
     def _free_turnaround(self):
         if getattr(self, '_free_mode', False):
             self._free_last_poi_sig = None
-            self.update_ui(self._free_engine.reverse())
+            self.update_ui(self._free_engine.reverse(), force=True)
 
     def _free_poi_action(self, key):
         """Delete or F2 in free mode — pick from last side's POI list then act."""
@@ -1472,4 +1472,4 @@ class FreeMixin:
             self._free_last_side      = ""
             wx.CallAfter(self.map_panel.set_position,
                          self.lat, self.lon, True, self.street_label)
-            self.update_ui(msg)
+            self.update_ui(msg, force=True)

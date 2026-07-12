@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import urllib.parse
 import urllib.error
 import urllib.request
@@ -22,8 +23,25 @@ def _safe_read_response(resp):
     return json.loads(raw.decode("utf-8", errors="ignore"))
 
 
+# Priceline lists unbookable/unnamed "mystery" hotels as e.g.
+# "A 4.5-Star Hotel - Sydney", "A 5-Star Luxury Hotel - ...",
+# "A 4.5-Star Casino Hotel - Sydney, Australia". Allow any descriptor
+# word(s) (Luxury, Casino, Boutique, Beach…) between the star and "Hotel".
+_MYSTERY_HOTEL_RE = re.compile(
+    r"^A\s+\d+(?:\.\d+)?-Star(?:\s+[A-Za-z]+)*\s+Hotel(?:\s*-\s*.+)?$",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_mystery_hotel(name: str) -> bool:
+    text = " ".join(str(name or "").split()).strip()
+    text = text.replace("–", "-").replace("—", "-")
+    return bool(_MYSTERY_HOTEL_RE.match(text))
+
+
 class PricelineClient:
 
+    _HOTEL_CACHE_VERSION = 3
     _HOTEL_CACHE_DAYS = 365
 
     def __init__(self, api_key: str, cache_file: str = "location_cache.json"):
@@ -156,7 +174,7 @@ class PricelineClient:
         import time as _time
         cache_key = f"{location_id}_{date_checkin}_{date_checkout}"
         cache_entry = self._hotel_cache.get(cache_key)
-        if cache_entry:
+        if cache_entry and cache_entry.get("version") == self._HOTEL_CACHE_VERSION:
             age_days = (_time.time() - cache_entry.get("ts", 0)) / 86400
             if age_days < self._HOTEL_CACHE_DAYS:
                 print(f"[Priceline] Hotel cache hit for {cache_key}")
@@ -217,7 +235,11 @@ class PricelineClient:
             # --- save to cache (only if results found) ---
             import time as _time
             if filtered:
-                self._hotel_cache[cache_key] = {"hotels": filtered, "ts": _time.time()}
+                self._hotel_cache[cache_key] = {
+                    "version": self._HOTEL_CACHE_VERSION,
+                    "hotels": filtered,
+                    "ts": _time.time(),
+                }
                 self._save_hotel_cache()
 
             return filtered
@@ -238,6 +260,8 @@ def _parse_hotels(data):
             name = item.get("name") or item.get("hotelName")
             if not name:
                 continue
+            if _looks_like_mystery_hotel(name):
+                continue
 
             # --- price ---
             price_data = item.get("ratesSummary", {}) or item.get("price", {})
@@ -253,19 +277,69 @@ def _parse_hotels(data):
 
             # --- safe address handling ---
             loc = item.get("location", {}) or item.get("address", {})
-
+            if not isinstance(loc, dict):
+                loc = {}
+            # Priceline responses vary a little across endpoints and pages, so
+            # we gather the common address variants rather than relying on one
+            # exact schema.
             def _safe_str(v):
                 if isinstance(v, dict):
                     return ""
-                return str(v) if v else ""
+                if isinstance(v, (list, tuple)):
+                    return ", ".join(
+                        str(x).strip() for x in v
+                        if x and not isinstance(x, dict) and str(x).strip()
+                    )
+                return str(v).strip() if v else ""
 
-            address_parts = [
-                _safe_str(loc.get("address")),
-                _safe_str(loc.get("cityName")),
-                _safe_str(loc.get("province")),
-            ]
+            address_parts = []
+            seen_parts = set()
 
-            address = ", ".join([p for p in address_parts if p])
+            def _add_part(value):
+                if not value:
+                    return
+                if isinstance(value, dict):
+                    for key in (
+                        "label", "formattedAddress", "fullAddress",
+                        "streetAddress", "addressLine1", "addressLine2",
+                        "line1", "line2", "displayLine1", "displayLine2",
+                        "address1", "address2", "cityName", "province",
+                        "postalCode", "countryName",
+                    ):
+                        _add_part(value.get(key))
+                    return
+                if isinstance(value, (list, tuple)):
+                    for entry in value:
+                        _add_part(entry)
+                    return
+
+                text = _safe_str(value)
+                if not text:
+                    return
+                key = text.lower()
+                if key in seen_parts:
+                    return
+                seen_parts.add(key)
+                address_parts.append(text)
+
+            for source in (
+                item.get("location", {}) or {},
+                item.get("address", {}) or {},
+                item,
+            ):
+                if isinstance(source, dict):
+                    for key in (
+                        "streetAddress", "addressLine1", "addressLine2",
+                        "line1", "line2", "displayLine1", "displayLine2",
+                        "address", "address1", "address2",
+                        "formattedAddress", "fullAddress", "label",
+                        "cityName", "province", "postalCode", "countryName",
+                    ):
+                        _add_part(source.get(key))
+                else:
+                    _add_part(source)
+
+            address = ", ".join(address_parts)
 
             # --- lat/lon ---
             lat = loc.get("latitude")

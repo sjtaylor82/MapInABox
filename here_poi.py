@@ -1,13 +1,12 @@
-"""here_poi.py — HERE POI detail and ratings lookup for Map in a Box.
+"""here_poi.py — HERE POI detail lookup for Map in a Box.
 
-Provides address, phone, opening hours and ratings for points of interest
-via the HERE Discover and Lookup APIs.  Street data comes from OSM/Overpass.
+Provides address, phone and opening hours for points of interest via the
+HERE Discover and Lookup APIs.  Street data comes from OSM/Overpass.
 
 Classes
 -------
 HereClient
     fetch_poi_detail(name, lat, lon) → dict
-    fetch_poi_rating(here_id, name)  → (rating, count)
 """
 
 from __future__ import annotations
@@ -19,10 +18,8 @@ import threading
 import time
 import urllib.parse
 import urllib.request
-from typing import Optional
 
 _POI_CACHE_DAYS  = 30
-_RATE_CACHE_DAYS = 90
 
 
 class HereClient:
@@ -30,39 +27,8 @@ class HereClient:
         self._key             = api_key
         self._cache_dir       = cache_dir
         self._poi_cache_path  = os.path.join(cache_dir, "here_poi_cache.json")
-        self._rate_cache_path = os.path.join(cache_dir, "here_rating_cache.json")
         self._poi_cache:  dict = self._load_json(self._poi_cache_path)
-        self._rate_cache: dict = self._load_json(self._rate_cache_path)
         self._lock = threading.Lock()
-
-    def fetch_poi_rating(
-        self, here_id: str, name: str
-    ) -> tuple[Optional[float], Optional[int]]:
-        """Return (average_rating, review_count) for a HERE POI id."""
-        with self._lock:
-            cached = self._rate_cache.get(here_id)
-        if cached and (time.time() - cached.get("ts", 0)) < _RATE_CACHE_DAYS * 86400:
-            return cached.get("rating"), cached.get("count")
-        try:
-            params = urllib.parse.urlencode({"id": here_id, "apiKey": self._key})
-            req = urllib.request.Request(
-                f"https://lookup.search.hereapi.com/v1/lookup?{params}",
-                headers={"User-Agent": "MapInABox/1.0"},
-            )
-            with urllib.request.urlopen(req, timeout=10) as r:
-                data = json.loads(r.read().decode())
-            rating = data.get("averageRating")
-            count  = data.get("ratingCount")
-            if rating is not None:
-                rating = round(float(rating), 1)
-            with self._lock:
-                self._rate_cache[here_id] = {
-                    "rating": rating, "count": count, "ts": time.time()}
-                self._save_json(self._rate_cache_path, self._rate_cache)
-            return rating, count
-        except Exception as exc:
-            print(f"[HERE] fetch_poi_rating failed for {name}: {exc}")
-            return None, None
 
     @staticmethod
     def _name_similarity(query: str, result: str) -> float:

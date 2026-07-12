@@ -6,13 +6,20 @@ journey planner, departure board) as a mixin class.
 
 import json
 import math
+import os
 import re
+import sys
 import threading
+import time
 import urllib.parse
 import urllib.request
 
 import wx
+import airport_directory
 from logging_utils import miab_log
+from geo import (
+    GENERIC_STREET_TYPES, bearing_deg, dist_metres, nearest_point_on_segment,
+)
 
 try:
     from route_tools import RouteTools
@@ -20,9 +27,6 @@ except ImportError:
     RouteTools = None
 
 # Dialogs imported lazily to avoid circular imports
-def _get_tools_menu_dialog():
-    from dialogs import ToolsMenuDialog
-    return ToolsMenuDialog
 
 def _get_dialogs():
     from dialogs import (
@@ -39,6 +43,382 @@ def _key_required(parent, title, message, link_label, link_url):
     show_api_key_required(parent, title, message, link_label, link_url)
 
 
+def _osm_walk_features(
+    pts: list,
+    overpass_client,
+    road_segments: list | None = None,
+    walk_leg_index: int | None = None,
+) -> list:
+    """Query Overpass for real pedestrian features along a walking leg.
+
+    pts: list of {"lat", "lon", "instruction"} walk-point dicts (in route order).
+    Returns list of {"instruction": str, "sv_desc": str} context items sorted by
+    position along the route.
+    """
+
+    def _hav(lat1, lon1, lat2, lon2):
+        R = 6_371_000
+        p1, p2 = math.radians(lat1), math.radians(lat2)
+        dp, dl = p2 - p1, math.radians(lon2 - lon1)
+        a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    lats = [p["lat"] for p in pts]
+    lons = [p["lon"] for p in pts]
+    pad = 0.0007  # ~80 m padding around route bbox
+    S, N = min(lats) - pad, max(lats) + pad
+    W, E = min(lons) - pad, max(lons) + pad
+
+    query = (
+        f"[out:json][timeout:20];\n"
+        f"(\n"
+        f'  node["highway"="crossing"]({S:.6f},{W:.6f},{N:.6f},{E:.6f});\n'
+        f'  node["highway"="traffic_signals"]({S:.6f},{W:.6f},{N:.6f},{E:.6f});\n'
+        f'  way["highway"="steps"]({S:.6f},{W:.6f},{N:.6f},{E:.6f});\n'
+        f'  nwr["amenity"]({S:.6f},{W:.6f},{N:.6f},{E:.6f});\n'
+        f'  nwr["shop"]({S:.6f},{W:.6f},{N:.6f},{E:.6f});\n'
+        f'  nwr["tourism"]({S:.6f},{W:.6f},{N:.6f},{E:.6f});\n'
+        f'  nwr["office"]({S:.6f},{W:.6f},{N:.6f},{E:.6f});\n'
+        f'  nwr["public_transport"]({S:.6f},{W:.6f},{N:.6f},{E:.6f});\n'
+        f'  nwr["railway"]({S:.6f},{W:.6f},{N:.6f},{E:.6f});\n'
+        f'  nwr["leisure"]({S:.6f},{W:.6f},{N:.6f},{E:.6f});\n'
+        f'  nwr["historic"]({S:.6f},{W:.6f},{N:.6f},{E:.6f});\n'
+        f'  nwr["healthcare"]({S:.6f},{W:.6f},{N:.6f},{E:.6f});\n'
+        f'  nwr["craft"]({S:.6f},{W:.6f},{N:.6f},{E:.6f});\n'
+        f'  nwr["man_made"]({S:.6f},{W:.6f},{N:.6f},{E:.6f});\n'
+        f");\n"
+        f"out tags center geom;\n"
+    ).encode()
+
+    result = overpass_client.request(query, timeout=20)
+    if not result:
+        return []
+
+    FEATURE_MAX_OFF_ROUTE_M = 12.0
+    CROSSING_MAX_OFF_ROUTE_M = 20.0
+    STEPS_MAX_OFF_ROUTE_M = 4.0
+    items = []
+
+    def _nearest_route_projection(lat: float, lon: float) -> tuple[float, int]:
+        """Distance from a feature to the walked polyline and its route index."""
+        if len(pts) < 2:
+            return float("inf"), 0
+        best_d = float("inf")
+        best_idx = 0
+        for i in range(len(pts) - 1):
+            a = pts[i]
+            b = pts[i + 1]
+            snap_lat, snap_lon = nearest_point_on_segment(
+                lat, lon, a["lat"], a["lon"], b["lat"], b["lon"])
+            d = _hav(lat, lon, snap_lat, snap_lon)
+            if d < best_d:
+                best_d = d
+                # Attach route features to the block being walked toward.
+                best_idx = i + 1
+        return best_d, best_idx
+
+    def _feature_locations(el: dict) -> list[tuple[float, float]]:
+        locs = []
+        lat = el.get("lat") or (el.get("center") or {}).get("lat")
+        lon = el.get("lon") or (el.get("center") or {}).get("lon")
+        if lat is not None and lon is not None:
+            locs.append((lat, lon))
+        for pt in el.get("geometry") or []:
+            glat = pt.get("lat")
+            glon = pt.get("lon")
+            if glat is not None and glon is not None:
+                locs.append((glat, glon))
+        return locs
+
+
+    for el in result.get("elements", []):
+        tags = el.get("tags", {})
+        elat = el.get("lat") or (el.get("center") or {}).get("lat")
+        elon = el.get("lon") or (el.get("center") or {}).get("lon")
+        if elat is None or elon is None:
+            continue
+
+        projections = [
+            _nearest_route_projection(flat, flon)
+            for flat, flon in _feature_locations(el)
+        ]
+        if not projections:
+            continue
+        route_dist_m, nearest_idx = min(projections, key=lambda item: item[0])
+
+        highway = tags.get("highway", "")
+        name = tags.get("name", "")
+        feature_kind = (
+            tags.get("amenity", "")
+            or tags.get("shop", "")
+            or tags.get("tourism", "")
+            or tags.get("office", "")
+            or tags.get("public_transport", "")
+            or tags.get("railway", "")
+            or tags.get("leisure", "")
+            or tags.get("historic", "")
+            or tags.get("healthcare", "")
+            or tags.get("craft", "")
+            or tags.get("man_made", "")
+        )
+        desc = None
+        is_crossing = False
+
+        if highway in ("crossing", "traffic_signals"):
+            is_crossing = True
+            crossing_type = tags.get("crossing", "")
+            tactile = tags.get("tactile_paving", "")
+            sound = (tags.get("traffic_signals:sound")
+                     or tags.get("crossing:bell")
+                     or tags.get("acoustic_signals", ""))
+
+            # The type only when it adds something beyond "pedestrian crossing";
+            # the generic case is carried by the "Pedestrian crossing" prefix, so
+            # we don't repeat it (no more "Pedestrian crossing: pedestrian crossing").
+            parts = []
+            if crossing_type == "traffic_signals" or highway == "traffic_signals":
+                parts.append("traffic signals")
+            elif crossing_type == "zebra":
+                parts.append("zebra crossing, give way")
+            elif crossing_type == "uncontrolled":
+                parts.append("uncontrolled, no signals")
+
+            if tactile == "yes":
+                parts.append("tactile paving present")
+            elif tactile == "no":
+                parts.append("no tactile paving tagged in OSM")
+
+            if sound == "yes":
+                parts.append("audible signals tagged")
+            elif sound == "no":
+                parts.append("no audible signals tagged")
+
+            street_a, street_b = _nearest_road_names(elat, elon, road_segments or [], limit_m=45.0)
+            street_bits = [s for s in (street_a, street_b) if s]
+            head = ("Pedestrian crossing at " + " and ".join(street_bits[:2])
+                    if street_bits else "Pedestrian crossing")
+            desc = head + (": " + ", ".join(parts) + "." if parts else ".")
+
+        elif highway == "steps":
+            desc = "Steps on the route here — no ramp mentioned in OSM."
+
+        elif name and feature_kind:
+            desc = f"Landmark: {name} ({feature_kind}) near the path."
+        elif feature_kind in {"platform", "stop_position", "station", "tram_stop", "bus_stop"}:
+            desc = f"Transit feature: {feature_kind} near the path."
+
+        if desc:
+            if is_crossing:
+                # Only crossings essentially ON the walked path — in a dense
+                # precinct, nearby side-street crossings can sit just one
+                # route node away from the path the walker never uses.
+                if route_dist_m > CROSSING_MAX_OFF_ROUTE_M:
+                    continue
+                items.append({
+                    "nearest_idx": nearest_idx,
+                    "instruction": pts[nearest_idx]["instruction"],
+                    "desc": desc,
+                    "lat": elat,
+                    "lon": elon,
+                    "walk_leg_index": walk_leg_index,
+                    "is_crossing": True,
+                })
+            else:
+                max_off_route_m = (STEPS_MAX_OFF_ROUTE_M if highway == "steps"
+                                   else FEATURE_MAX_OFF_ROUTE_M)
+                if route_dist_m > max_off_route_m:
+                    continue
+                items.append({
+                    "nearest_idx": nearest_idx,
+                    "instruction": pts[nearest_idx]["instruction"],
+                    "desc": desc,
+                    "lat": elat,
+                    "lon": elon,
+                    "walk_leg_index": walk_leg_index,
+                    "is_crossing": False,
+                })
+
+    # Sort by position along route
+    items.sort(key=lambda x: x["nearest_idx"])
+    return [
+        {"instruction": item["instruction"], "sv_desc": item["desc"],
+         "route_index": item["nearest_idx"]}
+        for item in items
+    ]
+
+
+def _road_name_bare(name: str) -> str:
+    """Normalize a road label for comparison."""
+    return re.sub(r"\s*\(.*?\)", "", name or "").strip().lower()
+
+
+# POI kinds worth announcing for orientation on a walking route.  Excludes the
+# clutter that floods commercial strips — hair/beauty/tattoo/cosmetic, individual
+# doctors/dentists/clinics, lawyers/real-estate/offices ("services"), and minor
+# specialty shops — while keeping food, major stores, schools, transport, civic
+# buildings, pharmacies/hospitals, places of worship, parks and landmarks.
+_NOTABLE_POI_KINDS = frozenset({
+    "restaurant", "cafe", "bakery", "fast food", "pub", "bar", "food court",
+    "ice cream", "supermarket", "convenience", "greengrocer", "butcher",
+    "mall", "department store", "shopping centre", "marketplace", "chemist",
+    "pharmacy", "hardware", "electronics", "books", "toys", "sports shop",
+    "furniture", "music",
+    "station", "bus station", "ferry terminal", "tram stop", "airport",
+    "school", "university", "college", "library", "post office", "bank",
+    "place of worship", "community centre", "police", "fire station",
+    "hospital",
+    "museum", "gallery", "theatre", "cinema", "arts centre", "events venue",
+    "stadium", "park", "garden", "zoo", "theme park", "attraction", "hotel",
+    "fuel",
+})
+
+_STREET_SUFFIXES = frozenset({
+    "road", "rd", "street", "st", "avenue", "ave", "av", "drive", "dr",
+    "lane", "ln", "crescent", "cres", "close", "cl", "boulevard", "blvd",
+    "highway", "hwy", "terrace", "tce", "parade", "pde", "place", "pl",
+    "court", "ct", "grove", "gr", "circuit", "cct", "way", "esplanade",
+    "esp", "row", "mews", "track", "walk",
+})
+
+
+def _street_key(name: str) -> str:
+    """Comparison key for a street name, tolerant of suffix abbreviations
+    (so 'Old Cleveland Rd' matches 'Old Cleveland Road')."""
+    s = re.sub(r"\s*\(.*?\)", "", (name or "").strip().lower())
+    s = re.sub(r"[^a-z0-9 ]+", " ", s)
+    words = s.split()
+    if words and words[-1] in _STREET_SUFFIXES:
+        words = words[:-1]
+    return " ".join(words)
+
+
+def _join_names(names: list) -> str:
+    """Join names into a readable 'A, B and C' phrase."""
+    names = [n for n in names if n]
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0]
+    return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def _side_phrase(side: str) -> str:
+    """Parenthetical for which way a cross street runs, relative to travel."""
+    if side == "left-right":
+        return " (on both sides)"
+    if side == "left":
+        return " (on the left)"
+    if side == "right":
+        return " (on the right)"
+    return ""
+
+
+# Compact crossing attributes (keyed by the post-comma-split tokens that
+# _osm_walk_features emits).  Negatives ("no tactile paving tagged…") are
+# omitted — absence of a tag is not useful and adds noise.
+_CROSSING_ATTR = {
+    "traffic signals": "signals",
+    "tactile paving present": "tactile",
+    "audible signals tagged": "audible",
+    "zebra crossing": "zebra",
+    "uncontrolled": "uncontrolled",
+}
+
+
+def _clean_crossings(descs: list, allowed_bares: set, seen: set = None) -> list:
+    """Condense a block's crossings into a single line, plus any steps.
+
+    A short block ends at one intersection, so its crossing nodes are merged
+    into one summary ("Pedestrian crossing: signals, tactile") rather than a
+    line per arm.  Only crossings involving a street the walker is on/passing
+    are kept; *seen* suppresses a named crossing already reported in an earlier
+    block; the road being walked is not repeated (the block label names the
+    intersection).
+    """
+    attrs, steps, keys_here, any_crossing = [], [], [], False
+    for d in descs:
+        d = (d or "").strip()
+        if d.startswith("Steps"):
+            if d not in steps:
+                steps.append(d)
+            continue
+        if not d.startswith("Pedestrian crossing"):
+            continue
+        m = re.match(r"Pedestrian crossing(?: at (.+?))?(?::\s*(.*?))?\.?$", d)
+        if not m:
+            continue
+        streets = [s.strip() for s in (m.group(1) or "").split(" and ") if s.strip()]
+        bares = {_road_name_bare(s) for s in streets if s}
+        if allowed_bares and bares and not (bares & allowed_bares):
+            continue
+        key = frozenset(bares) if bares else None
+        if key is not None and seen is not None and key in seen:
+            continue
+        any_crossing = True
+        if key is not None:
+            keys_here.append(key)
+        for p in (m.group(2) or "").split(","):
+            short = _CROSSING_ATTR.get(p.strip())
+            if short and short not in attrs:
+                attrs.append(short)
+    if seen is not None:
+        seen.update(keys_here)
+    lines = []
+    if any_crossing:
+        lines.append("Pedestrian crossing" + (": " + ", ".join(attrs) + "." if attrs else "."))
+    return lines + steps
+
+
+
+
+def _nearest_road_names(lat: float, lon: float, road_segments: list, limit_m: float = 35.0) -> tuple[str, str]:
+    """Return the two closest named roads near a point, if available.
+
+    This is a best-effort helper for crossing names. It relies on the local
+    loaded street cache, so it only produces names when that data is already
+    available.
+    """
+    scores: dict[str, float] = {}
+    for seg in road_segments or []:
+        raw = seg.get("name", "")
+        name = re.sub(r"\s*\(.*?\)", "", raw).strip()
+        if not name:
+            continue
+        if name.lower() in GENERIC_STREET_TYPES:
+            continue
+        coords = seg.get("coords", [])
+        if len(coords) < 2:
+            continue
+        best = None
+        for i in range(len(coords) - 1):
+            alat, alon = coords[i]
+            blat, blon = coords[i + 1]
+            snap_lat, snap_lon = nearest_point_on_segment(lat, lon, alat, alon, blat, blon)
+            d = dist_metres(lat, lon, snap_lat, snap_lon)
+            if best is None or d < best:
+                best = d
+        if best is None:
+            continue
+        prev = scores.get(name)
+        if prev is None or best < prev:
+            scores[name] = best
+
+    if not scores:
+        return "", ""
+
+    ranked = sorted(scores.items(), key=lambda item: item[1])
+    if ranked[0][1] > limit_m:
+        return "", ""
+
+    first = ranked[0][0]
+    second = ""
+    for name, d in ranked[1:]:
+        if d <= limit_m and _road_name_bare(name) != _road_name_bare(first):
+            second = name
+            break
+    return first, second
+
+
 class ToolsMixin:
     def _tool_trace(self, msg: str) -> None:
         """Write a verbose trace when diagnostics are enabled."""
@@ -50,11 +430,12 @@ class ToolsMixin:
             pass
 
     def _announce_thinking(self) -> None:
-        """Emit the lightweight busy cue through AO2."""
+        """Play a brief working sound while a tool runs, instead of speaking a
+        'Thinking...' message that would interrupt the screen reader."""
+        if not getattr(self, "_thinking_beep_active", False):
+            return
         try:
-            from core import _speak, _braille
-            _speak("Thinking...", interrupt=True)
-            _braille("Thinking...")
+            self._play_system_sound("balloon")
         except Exception:
             pass
 
@@ -105,7 +486,8 @@ class ToolsMixin:
                 return None
             entries = sorted(entries, key=lambda e: str(e.get("name", "")).lower())
             labels = [favourite_label(entry, self.lat, self.lon) for entry in entries]
-            dlg = wx.SingleChoiceDialog(self, prompt, "Choose a favourite", labels)
+            from dialogs import ChoiceDialog
+            dlg = ChoiceDialog(self, prompt, "Choose a favourite", labels)
             if dlg.ShowModal() != wx.ID_OK:
                 dlg.Destroy()
                 return None
@@ -122,7 +504,8 @@ class ToolsMixin:
 
         choices, choice_actions, mark_list = self._location_picker_choices()
 
-        dlg = wx.SingleChoiceDialog(self, prompt, purpose.title(), choices)
+        from dialogs import ChoiceDialog
+        dlg = ChoiceDialog(self, prompt, purpose.title(), choices)
         if dlg.ShowModal() != wx.ID_OK:
             dlg.Destroy()
             return None
@@ -160,21 +543,42 @@ class ToolsMixin:
             self._status_update(f"Could not find '{text}': {exc}", force=True)
             return None
 
-    def _thinking(self, msg: str = "Thinking...") -> None:
+    def _thinking(self, msg: str = "Thinking...", play_busy_sound: bool = True) -> None:
         """Announce that a longer tool action is still running."""
         self._thinking_active = True
-        self._thinking_beep_active = True
+        self._thinking_beep_active = bool(play_busy_sound)
         self._suppress_location_restore = True
+        suppress = getattr(self, "_suppress_map_focus_repeat", None)
+        if callable(suppress):
+            suppress(5000)
+        if not play_busy_sound:
+            return
         try:
             wx.CallLater(75, self._announce_thinking)
         except Exception:
             self._announce_thinking()
+
+    def _begin_tools_workflow(self) -> None:
+        """Mark the Tools UI as active so focus returns stay quiet."""
+        self._tools_workflow_active = True
+        suppress = getattr(self, "_suppress_map_focus_repeat", None)
+        if callable(suppress):
+            suppress(5000)
+
+    def _end_tools_workflow(self) -> None:
+        """Clear the Tools UI guard after controls have settled."""
+        self._tools_workflow_active = False
+        suppress = getattr(self, "_suppress_map_focus_repeat", None)
+        if callable(suppress):
+            suppress(800)
 
     def _finish_thinking(self) -> None:
         """Clear the thinking state and resume the normal location sound."""
         self._thinking_active = False
         self._thinking_beep_active = False
         self._suppress_location_restore = False
+        if getattr(self, "_tools_workflow_active", False):
+            self._end_tools_workflow()
         if getattr(self, "_tools_sound_was_on", True):
             self._resume_location_sound()
         self._tools_sound_was_on = False
@@ -195,33 +599,38 @@ class ToolsMixin:
 
     def _open_tools_menu(self):
         """F12 — open the tools menu dialog."""
+        self._begin_tools_workflow()
         self._tools_sound_was_on = bool(getattr(self.sound, "_current", None))
         self.sound.stop()
         if self._dlgs is None:
+            self._end_tools_workflow()
             return
+        selected_tool = ""
         try:
             ToolsMenuDialog = self._dlgs[0]
             dlg = ToolsMenuDialog(self)
             if dlg.ShowModal() == wx.ID_OK:
-                tool = dlg.selected_tool
+                selected_tool = dlg.selected_tool
                 dlg.Destroy()
-                if tool == "detour_calculator":
+                if selected_tool == "detour_calculator":
                     self._tool_detour_calculator()
-                elif tool == "route_explorer":
+                elif selected_tool == "route_explorer":
                     self._tool_route_explorer()
-                elif tool == "rendezvous_point":
+                elif selected_tool == "rendezvous_point":
                     self._tool_rendezvous_point()
-                elif tool == "toll_compare":
+                elif selected_tool == "toll_compare":
                     self._tool_toll_compare()
-                elif tool == "journey_planner":
+                elif selected_tool == "journey_planner":
                     self._tool_journey_planner()
-                elif tool == "departure_board":
+                elif selected_tool == "airport_amenity_guide":
+                    self._tool_airport_amenity_guide()
+                elif selected_tool == "departure_board":
                     self._tool_departure_board()
-                elif tool == "flight_search":
+                elif selected_tool == "flight_search":
                     self._tool_flight_search()
-                elif tool == "hotel_search":
+                elif selected_tool == "hotel_search":
                     self._tool_hotel_search()
-                elif tool == "find_food":
+                elif selected_tool == "find_food":
                     self._tool_find_food()
                 else:
                     self._restore_tools_sound()
@@ -232,11 +641,27 @@ class ToolsMixin:
             import wx as _wx
             _wx.MessageBox(f"Tools menu error:\n\n{exc}", "Error", _wx.OK | _wx.ICON_ERROR)
             self._restore_tools_sound()
-        self.listbox.SetFocus()
+        finally:
+            if not (getattr(self, "_thinking_active", False)
+                    or getattr(self, "_find_food_populating", False)):
+                self._end_tools_workflow()
+                if not selected_tool:
+                    # Cancelled with no tool chosen: re-announce the current
+                    # location like F2. Clear the quiet-window _end_tools_workflow
+                    # just set, otherwise the repeat would be suppressed.
+                    self._suppress_focus_repeat_until = 0.0
+                    self._return_focus_to_map(repeat=True, delay_ms=250)
+                else:
+                    focus_map = getattr(self, "_focus_map_window_silently", None)
+                    if callable(focus_map):
+                        wx.CallAfter(focus_map)
+                    else:
+                        wx.CallAfter(self.listbox.SetFocus)
 
     def _restore_tools_sound(self):
         """Restore the pre-F12 sound state after leaving the tools menu."""
         self._finish_thinking()
+        self._end_tools_workflow()
 
     def _get_route_tools(self) -> "RouteTools | None":
         """Return a configured RouteTools instance, or None."""
@@ -279,8 +704,19 @@ class ToolsMixin:
         dlg.Destroy()
         return self._country_name_to_code(country_name)
 
-    def _resolve_geocode(self, rt, value: str, country_code: str, purpose: str = "location"):
-        """Resolve an address and let the user choose when multiple matches exist."""
+    def _resolve_geocode(self, rt, value: str, country_code: str, purpose: str = "location",
+                          require_confirmation: bool = True):
+        """Resolve an address and require the user to confirm the match —
+        same pattern as the "Online Jump Results" dialog: geocoding can
+        return a loose/best-guess match even for nonsense input, so the
+        resolved place name is always shown back for explicit confirmation
+        rather than silently accepted.
+
+        require_confirmation=False skips the dialog and auto-accepts a
+        single candidate — for internal/background lookups (e.g. picking a
+        GTFS feed by destination proximity) where there's no interactive
+        user prompt to confirm against and showing a dialog would be
+        either a threading violation or an unwanted interruption."""
         try:
             candidates = rt.geocode_candidates(value, country_code, limit=8)
         except Exception as exc:
@@ -289,7 +725,8 @@ class ToolsMixin:
 
         if not candidates:
             raise RuntimeError(f"Could not find '{value}'.")
-        if len(candidates) == 1:
+
+        if not require_confirmation and len(candidates) == 1:
             return candidates[0]
 
         labels = []
@@ -303,24 +740,20 @@ class ToolsMixin:
             labels.append(label)
 
         self._tool_trace(
-            f"Ambiguous geocode for {value!r}: offering {len(labels)} choices."
+            f"Geocode for {value!r}: offering {len(labels)} choice(s) for confirmation."
         )
-        dlg = wx.SingleChoiceDialog(
-            self,
-            "",
-            f"Select {purpose}",
-            labels,
-        )
-        dlg.SetSelection(0)
-        try:
-            if dlg.ShowModal() != wx.ID_OK:
-                return None
-            sel = dlg.GetSelection()
-            if sel == wx.NOT_FOUND or sel >= len(candidates):
-                return None
-            return candidates[sel]
-        finally:
+        from dialogs import ChoiceDialog
+        prompt = ("Confirm this is the right place:" if len(labels) == 1
+                  else "Multiple matches — choose the right one:")
+        dlg = ChoiceDialog(self, prompt, f"Confirm {purpose}", labels)
+        if dlg.ShowModal() != wx.ID_OK:
             dlg.Destroy()
+            return None
+        sel = dlg.GetSelection()
+        dlg.Destroy()
+        if sel == wx.NOT_FOUND or sel >= len(candidates):
+            return None
+        return candidates[sel]
 
     def _tool_detour_calculator(self):
         """Detour Calculator — compare a trip with stop-offs vs going direct."""
@@ -546,7 +979,7 @@ class ToolsMixin:
             self._finish_thinking()
             return
 
-        self._thinking()
+        self._thinking(play_busy_sound=False)
 
         def _route_candidates(points):
             if len(points) < 2:
@@ -758,8 +1191,6 @@ class ToolsMixin:
                     label = _label_point(lat, lon)
                     if label == f"{lat:.5f}, {lon:.5f}":
                         label = f"{label} on the route"
-                    source_name = item.get("source", "shared")
-                    rank_score = _score(item)
                     summary = f"{idx}. {label}"
                     if mode == "meeting":
                         from_friend_m = progress_m
@@ -791,12 +1222,18 @@ class ToolsMixin:
                             key=lambda s: _haversine_m(lat, lon, s["lat"], s["lon"]),
                         )
                         friend_progress_m = nearest_friend["progress_m"]
+                        friend_total_m = max(total_m, friend_samples[-1]["progress_m"])
+                        friend_remaining_m = max(friend_total_m - friend_progress_m, 0.0)
                         on_friend_route = friend_detour_m < 500
-                        detour_line = "This is still on your friend's route." if on_friend_route else f"~{_fmt_distance(int(round(friend_detour_m)))} out of your friend's way."
+                        detour_line = (
+                            "No detour for your friend."
+                            if on_friend_route
+                            else f"Detour for your friend: ~{_fmt_distance(int(round(friend_detour_m)))}."
+                        )
                         detail = "\n".join([
                             f"Friend carries you ~{_fmt_distance(int(round(carried_m)))} of your journey.",
                             f"~{_fmt_distance(int(round(remaining_user_m)))} still to your destination.",
-                            f"{_fmt_distance(int(round(friend_progress_m)))} along your friend's route.",
+                            f"Your friend has ~{_fmt_distance(int(round(friend_remaining_m)))} left after dropoff.",
                             detour_line,
                         ])
                     else:
@@ -1005,19 +1442,15 @@ class ToolsMixin:
             self._resume_location_sound()
             return
 
-        self._thinking()
-
         country_code = self._ask_country_code()
         if not country_code:
             self._status_update("Journey planner cancelled.", force=True)
-            self._finish_thinking()
             return
 
         origin = self._pick_location(
             "Leaving from? (address, stop or suburb):", "starting point", rt, country_code)
         if origin is None:
             self._status_update("Journey planner cancelled.", force=True)
-            self._finish_thinking()
             return
         o_lat, o_lon, o_name = origin
 
@@ -1025,58 +1458,67 @@ class ToolsMixin:
             "Going to? (address, stop or suburb):", "destination", rt, country_code)
         if dest is None:
             self._status_update("Journey planner cancelled.", force=True)
-            self._finish_thinking()
             return
         d_lat, d_lon, d_name = dest
 
-        # Timing mode
-        timing_choices = ["Leave now", "Leave at a specific time",
-                          "Arrive by a specific time"]
-        dlg = wx.SingleChoiceDialog(
-            self, "When?", "Timing", timing_choices)
-        dlg.SetSelection(0)
+        from dialogs import ChoiceDialog
+        trip_choices = ["Walking directions", "Transit directions"]
+        dlg = ChoiceDialog(self, "What kind of journey?", "Journey Type", trip_choices)
         if dlg.ShowModal() != wx.ID_OK:
             dlg.Destroy()
             self._status_update("Journey planner cancelled.", force=True)
-            self._finish_thinking()
             return
-        timing_sel = dlg.GetSelection()
+        trip_sel = dlg.GetSelection()
         dlg.Destroy()
 
-        timing_mode = ["now", "depart", "arrive"][timing_sel]
+        travel_mode = "walking" if trip_sel == 0 else "transit"
+        timing_mode = "now"
         timestamp = None
 
-        if timing_mode in ("depart", "arrive"):
-            label = "Depart at:" if timing_mode == "depart" else "Arrive by:"
-            dt_dlg = self._dlgs[2](self, title=label)
-            if dt_dlg.ShowModal() != wx.ID_OK:
-                dt_dlg.Destroy()
+        transit_filter = "all"
+
+        if travel_mode == "transit":
+            # Timing mode
+            timing_choices = ["Leave now", "Leave at a specific time",
+                              "Arrive by a specific time"]
+            dlg = ChoiceDialog(self, "When?", "Timing", timing_choices)
+            if dlg.ShowModal() != wx.ID_OK:
+                dlg.Destroy()
                 self._status_update("Journey planner cancelled.", force=True)
-                self._finish_thinking()
                 return
-            chosen_dt = dt_dlg.get_datetime()
-            dt_dlg.Destroy()
-            if not chosen_dt:
-                self._status_update("Invalid date/time. Journey planner cancelled.", force=True)
-                self._finish_thinking()
-                return
-            timestamp = int(chosen_dt.timestamp())
-
-        # Transit filter
-        filter_choices = ["All transport types", "Buses and coaches only",
-                          "Trains only", "Ferries only"]
-        dlg = wx.SingleChoiceDialog(
-            self, "Show routes using:", "Transport Type", filter_choices)
-        dlg.SetSelection(0)
-        if dlg.ShowModal() != wx.ID_OK:
+            timing_sel = dlg.GetSelection()
             dlg.Destroy()
-            self._status_update("Journey planner cancelled.", force=True)
-            self._finish_thinking()
-            return
-        filter_sel = dlg.GetSelection()
-        dlg.Destroy()
 
-        transit_filter = ["all", "bus", "train", "ferry"][filter_sel]
+            timing_mode = ["now", "depart", "arrive"][timing_sel]
+
+            if timing_mode in ("depart", "arrive"):
+                label = "Depart at:" if timing_mode == "depart" else "Arrive by:"
+                dt_dlg = self._dlgs[2](self, title=label)
+                if dt_dlg.ShowModal() != wx.ID_OK:
+                    dt_dlg.Destroy()
+                    self._status_update("Journey planner cancelled.", force=True)
+                    return
+                chosen_dt = dt_dlg.get_datetime()
+                dt_dlg.Destroy()
+                if not chosen_dt:
+                    self._status_update("Invalid date/time. Journey planner cancelled.", force=True)
+                    return
+                timestamp = int(chosen_dt.timestamp())
+
+            # Transit filter
+            filter_choices = ["All transport types", "Buses and coaches only",
+                              "Trains only", "Ferries only"]
+            dlg = ChoiceDialog(self, "Show routes using:", "Transport Type", filter_choices)
+            if dlg.ShowModal() != wx.ID_OK:
+                dlg.Destroy()
+                self._status_update("Journey planner cancelled.", force=True)
+                return
+            filter_sel = dlg.GetSelection()
+            dlg.Destroy()
+
+            transit_filter = ["all", "bus", "train", "ferry"][filter_sel]
+
+        self._thinking()
 
         def _status(msg):
             wx.CallAfter(self._status_update, msg)
@@ -1085,30 +1527,1048 @@ class ToolsMixin:
             try:
                 routes = rt.journey_plan(
                     o_name, d_name, country_code,
+                    origin_coords=(o_lat, o_lon),
+                    dest_coords=(d_lat, d_lon),
+                    origin_place_id=getattr(origin, "place_id", ""),
+                    dest_place_id=getattr(dest, "place_id", ""),
                     timing_mode=timing_mode,
                     timestamp=timestamp,
                     transit_filter=transit_filter,
                     status_cb=_status,
+                    travel_mode=travel_mode,
                 )
+                for route in routes:
+                    route["_journey_origin"] = {
+                        "lat": o_lat,
+                        "lon": o_lon,
+                        "name": o_name,
+                        "place_id": getattr(origin, "place_id", ""),
+                    }
+                    route["_journey_destination"] = {
+                        "lat": d_lat,
+                        "lon": d_lon,
+                        "name": d_name,
+                        "place_id": getattr(dest, "place_id", ""),
+                    }
                 wx.CallAfter(self._show_journey_results, routes)
             except Exception as e:
+                import traceback
+                miab_log("errors", f"Journey planner failed: {traceback.format_exc()}",
+                         self.settings)
                 wx.CallAfter(self._status_update, f"Journey planner failed: {e}", True)
                 wx.CallAfter(self._finish_thinking)
 
         threading.Thread(target=_calc, daemon=True).start()
 
+    def _tool_airport_amenity_guide(self):
+        """Airport Amenity Guide — official-source shops, food and facilities."""
+        if self._dlgs is None:
+            self._restore_tools_sound()
+            return
+        dlg = self._dlgs[1](
+            self,
+            "Airport, terminal, or official airport URL:",
+            title="Airport Amenity Guide",
+        )
+        if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
+            dlg.Destroy()
+            self._status_update("Airport amenity guide cancelled.", force=True)
+            self._restore_tools_sound()
+            return
+        query = dlg.GetValue()
+        dlg.Destroy()
+        self._show_airport_amenity_guide(query, restore_on_cancel=True)
+
+    def _choose_airport_amenity_focus(self) -> str:
+        from dialogs import ChoiceDialog
+        choices = [
+            "All amenities",
+            "Food and coffee",
+            "Shops",
+            "Toilets, water, charging and services",
+            "Accessibility and calmer spaces",
+        ]
+        keys = ["all", "food", "shopping", "facilities", "accessibility"]
+        dlg = ChoiceDialog(self, "What do you want to focus on?", "Airport Amenity Guide", choices)
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy()
+            return ""
+        sel = dlg.GetSelection()
+        dlg.Destroy()
+        if sel == wx.NOT_FOUND or sel < 0 or sel >= len(keys):
+            return ""
+        return keys[sel]
+
+    def _show_airport_amenity_guide(
+        self,
+        query: str,
+        focus_key: str = "",
+        source_hint: str = "",
+        airport_name: str = "",
+        restore_on_cancel: bool = False,
+    ) -> None:
+        """Fetch and display an official-source airport amenity guide."""
+        query = (query or airport_name or "").strip()
+        source_hint = (source_hint or "").strip()
+        if not query and not source_hint:
+            self._status_update("Airport amenity guide needs an airport or terminal name.", force=True)
+            if restore_on_cancel:
+                self._restore_tools_sound()
+            return
+
+        if not focus_key:
+            focus_key = self._choose_airport_amenity_focus()
+            if not focus_key:
+                self._status_update("Airport amenity guide cancelled.", force=True)
+                if restore_on_cancel:
+                    self._restore_tools_sound()
+                return
+
+        title_name = airport_name or query
+        self._status_update(f"Fetching airport amenities for {title_name}...", force=True)
+        self._thinking(play_busy_sound=False)
+        alarm_on = False
+        try:
+            self.sound.play_file(r"c:\windows\media\alarm09.wav", loops=-1)
+            alarm_on = True
+        except Exception:
+            pass
+
+        def _calc():
+            try:
+                text = self._airport_amenity_guide_text(query, focus_key, source_hint)
+                if alarm_on:
+                    try:
+                        self.sound.stop()
+                    except Exception:
+                        pass
+                wx.CallAfter(self._show_route_results, "Airport Amenity Guide", text)
+            except Exception as exc:
+                if alarm_on:
+                    try:
+                        self.sound.stop()
+                    except Exception:
+                        pass
+                wx.CallAfter(self._status_update, f"Airport amenity guide failed: {exc}", True)
+                wx.CallAfter(self._finish_thinking)
+
+        threading.Thread(target=_calc, daemon=True).start()
+
+    def _airport_amenity_guide_text(self, query: str, focus_key: str, source_hint: str = "") -> str:
+        """Build the amenity guide: OSM primary, optional official enrichment.
+
+        1. Geocode the airport, then read its indoor shops/food/facilities from
+           OpenStreetMap (consistent and global).
+        2. Optionally enrich with before/after-security and assistance details
+           extracted from an official airport page — every model-supplied field
+           is discarded unless it is evidenced in the fetched page text.
+        """
+        osm_records: list[dict] = []
+        airport_name = ""
+        terminal_gates: list[dict] = []
+        lat, lon = self._geocode_airport(query, source_hint)
+        if lat is not None:
+            try:
+                raw_records, airport_name, terminal_gates = self._poi_fetcher.fetch_airport_amenities(
+                    lat, lon, focus_key=focus_key,
+                )
+                osm_records = airport_directory.clean_osm_records(raw_records, focus_key=focus_key)
+            except Exception as exc:
+                self._tool_trace(f"Airport OSM amenity fetch failed: {exc}")
+
+        # If the user typed a bare IATA code, the OSM aerodrome name is a
+        # better search/identity anchor for optional official-page enrichment.
+        enrichment_query = airport_name or query
+        official_records, official_airline_hints, source_links = self._airport_official_enrichment(
+            enrichment_query, focus_key, source_hint, osm_have=len(osm_records),
+        )
+
+        clean = airport_directory.merge_records(osm_records + official_records)
+        airline_hints = airport_directory.combine_airline_hints(
+            airport_directory.extract_airline_gate_hints(clean),
+            official_airline_hints,
+        )
+        return airport_directory.summarise_records(
+            clean,
+            airport_name or query,
+            source_links,
+            airline_hints=airline_hints,
+            terminal_gates=terminal_gates,
+            priority_query=query,
+        )
+
+    def _geocode_airport(self, query: str, source_hint: str = ""):
+        """Resolve an airport query to (lat, lon), or (None, None)."""
+        rt = self._get_route_tools()
+        if rt is None:
+            return None, None
+        text = (query or "").strip()
+        if not text:
+            return None, None
+        # Help the geocoder when the user typed a bare name or IATA code.
+        low = text.lower()
+        if re.fullmatch(r"[a-z]{3}", low):
+            geocode_query = f"{text} airport"
+        elif not any(w in low for w in ("airport", "terminal", "aeroport",
+                                        "aeropuerto", "aeroporto", "flughafen")):
+            geocode_query = f"{text} airport"
+        else:
+            geocode_query = text
+        try:
+            result = rt.geocode(geocode_query)
+            return result.lat, result.lon
+        except Exception as exc:
+            self._tool_trace(f"Airport geocode failed for {geocode_query!r}: {exc}")
+            return None, None
+
+    def _airport_official_enrichment(
+        self, query: str, focus_key: str, source_hint: str, osm_have: int,
+    ) -> tuple[list[dict], list[dict], list[str]]:
+        """Optional, evidence-gated enrichment from official airport pages.
+
+        Runs only when Mistral is configured and a source is reachable (the
+        user pasted a URL, or Serper found the official site).  Returns
+        (amenity_records, airline_hints, source_links).  Amenity records are
+        only extracted when OSM was thin; the airline gate-range extraction
+        runs for the comprehensive "all" view, since that data (per-airline
+        gate ranges, before/after security) is exactly what OSM lacks.
+        """
+        mistral = getattr(self, "_mistral", None)
+        if not (mistral and getattr(mistral, "is_configured", False)):
+            return [], [], []
+
+        want_amenities = osm_have < 12
+        want_airlines = focus_key == "all"
+        if not (want_amenities or want_airlines):
+            return [], [], []
+
+        search_client = getattr(self, "_serper", None)
+        source_urls = airport_directory.discover_source_urls(
+            query, search_client=search_client, source_hint=source_hint,
+        )
+        source_text, source_links = airport_directory.fetch_official_source_text(source_urls)
+        if not source_text:
+            return [], [], source_links
+
+        official: list[dict] = []
+        airline_hints: list[dict] = []
+        if want_amenities:
+            try:
+                prompt = airport_directory.build_extraction_prompt(query, focus_key, source_text)
+                ckey = airport_directory.cache_key(query, focus_key, source_text)
+                raw_text = mistral.query_text(prompt, ckey)
+                records = mistral._parse_json_list(raw_text)
+                official = airport_directory.clean_directory_records(
+                    records, source_text, focus_key=focus_key,
+                )
+            except Exception as exc:
+                self._tool_trace(f"Airport amenity enrichment failed: {exc}")
+        if want_airlines:
+            try:
+                prompt = airport_directory.build_airline_gate_prompt(query, source_text)
+                ckey = airport_directory.cache_key("airline_gates " + query, "all", source_text)
+                raw_text = mistral.query_text(prompt, ckey)
+                records = mistral._parse_json_list(raw_text)
+                airline_hints = airport_directory.clean_airline_gate_records(records, source_text)
+            except Exception as exc:
+                self._tool_trace(f"Airport airline-gate enrichment failed: {exc}")
+        return official, airline_hints, source_links
+
+    def _fetch_journey_platforms(self, routes, done_cb):
+        """Enrich transit legs with GTFS platform numbers then call done_cb(routes)."""
+        rt = self._get_route_tools()
+        n_transit_legs = sum(
+            1 for route in routes for leg in route.get("legs", [])
+            if leg.get("type") == "transit"
+        )
+        miab_log("navigation",
+                 f"Platform fetch started: {len(routes)} route(s), "
+                 f"{n_transit_legs} transit leg(s).", self.settings)
+
+        def _fetch():
+            for route in routes:
+                for leg in route.get("legs", []):
+                    if leg.get("type") != "transit":
+                        continue
+                    lat = leg.get("departure_stop_lat")
+                    lon = leg.get("departure_stop_lon")
+                    name = leg.get("departure_stop", "")
+                    if lat is None or lon is None:
+                        continue
+                    try:
+                        _, stops = self._transit.find_stops_by_name(name, lat, lon)
+                        if stops:
+                            top = stops[0]
+                            leg["departure_platform"] = top.get("platform", "")
+                            # Always log what was matched and what platform value
+                            # (if any) came back — this is the only way to tell
+                            # apart "GTFS genuinely has no platform for this stop"
+                            # from "matched the wrong stop" or "field is empty".
+                            miab_log("navigation",
+                                     f"Platform lookup for {name!r}: matched "
+                                     f"{top.get('name', '')!r} (feed {top.get('_feed_id', '')}, "
+                                     f"stop_id {top.get('stop_id', '')}, "
+                                     f"{top.get('distance', '?')}m away) "
+                                     f"platform={top.get('platform', '') or '(none)'}",
+                                     self.settings)
+                        else:
+                            miab_log("errors",
+                                     f"Platform lookup: no stops found for "
+                                     f"{name!r} near ({lat}, {lon})", self.settings)
+                    except Exception:
+                        import traceback
+                        miab_log("errors",
+                                 f"Platform lookup failed for {name!r}: {traceback.format_exc()}",
+                                 self.settings)
+                route["detail_text"] = rt._build_detail_text(route)
+            miab_log("navigation", "Platform fetch finished.", self.settings)
+            wx.CallAfter(done_cb, routes)
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
     def _show_journey_results(self, routes):
         """Display journey results in the two-level dialog."""
+        miab_log("navigation",
+                 f"Journey planner returned {len(routes)} route(s).", self.settings)
         if not routes:
             self._status_update("No transit options found.", force=True)
             self._finish_thinking()
             return
         self._status_update(f"Found {len(routes)} option{'s' if len(routes) != 1 else ''}.", force=True)
-        dlg = self._dlgs[3](self, routes)
-        dlg.ShowModal()
-        dlg.Destroy()
-        self._finish_thinking()
+        try:
+            dlg = self._dlgs[3](self, routes)
+            dlg.ShowModal()
+            dlg.Destroy()
+        except Exception as e:
+            import traceback
+            miab_log("errors", f"Journey planner results display failed: {traceback.format_exc()}",
+                     self.settings)
+            self._status_update(f"Journey planner: could not display results ({e}).", force=True)
+        finally:
+            self._finish_thinking()
+            self.listbox.SetFocus()
         self.listbox.SetFocus()
+
+
+    @staticmethod
+    def _is_destination_poi(name: str, kind: str = "") -> bool:
+        """Keep real destinations; drop lanes, road fragments and stop labels.
+
+        On a shopping strip the POI fetch sweeps in bus-stop labels ("Burwood Rd
+        at Livingstone St"), intersection names ("Clarence St Near Burwood Rd")
+        and lanes ("Sym Ln") — noise for a traveller wanting places to go.
+        """
+        low = (name or "").strip().lower()
+        if not low:
+            return False
+        k = (kind or "").strip().lower()
+        if k in {"bus stop", "bus_stop", "stop position", "stop_position", "platform"}:
+            return False
+        if re.search(r"\b(at|near)\b", low) and re.search(
+                r"\b(st|street|rd|road|ln|lane|ave|avenue|pde|parade|cres|crescent|hwy|highway)\b", low):
+            return False
+        if re.search(r"\b(ln|lane)$", low):
+            return False
+        return True
+
+    @staticmethod
+    def _project_pois_to_route(route_coords: list, pois: list,
+                               max_off_m: float = 12.0) -> list:
+        """Place POIs actually encountered on the route.
+
+        Side is relative to the direction of travel (reliable geometry, unlike
+        the footpath-absolute road side).  POIs further than *max_off_m* from the
+        walked polyline, and non-destinations (lanes, stops), are dropped. Returns
+        [{name, kind, node_index, side}], deduped by name, in route order.
+        """
+        n = len(route_coords)
+        if n < 2:
+            return []
+
+        cumulative = [0.0] * n
+        for i in range(1, n):
+            cumulative[i] = cumulative[i - 1] + dist_metres(
+                route_coords[i - 1][0], route_coords[i - 1][1],
+                route_coords[i][0], route_coords[i][1])
+
+        def _xy(lat: float, lon: float, ref_lat: float) -> tuple[float, float]:
+            return (
+                lon * 111000.0 * math.cos(math.radians(ref_lat)),
+                lat * 111000.0,
+            )
+
+        def _nearest_segment(plat: float, plon: float) -> tuple[float, int, str, float]:
+            best = (float("inf"), 0, "right", 0.0)
+            for i in range(n - 1):
+                alat, alon = route_coords[i]
+                blat, blon = route_coords[i + 1]
+                snap_lat, snap_lon = nearest_point_on_segment(
+                    plat, plon, alat, alon, blat, blon)
+                d = dist_metres(plat, plon, snap_lat, snap_lon)
+                if d >= best[0]:
+                    continue
+
+                ref_lat = (alat + blat + plat) / 3.0
+                ax, ay = _xy(alat, alon, ref_lat)
+                bx, by = _xy(blat, blon, ref_lat)
+                px, py = _xy(plat, plon, ref_lat)
+                vx, vy = bx - ax, by - ay
+                wx, wy = px - ax, py - ay
+                seg_len_sq = vx * vx + vy * vy
+                frac = 0.0
+                if seg_len_sq:
+                    frac = max(0.0, min(1.0, (wx * vx + wy * vy) / seg_len_sq))
+                cross = vx * wy - vy * wx
+                along = cumulative[i] + frac * math.sqrt(seg_len_sq)
+                best = (d, i + 1, "left" if cross > 0 else "right", along)
+            return best
+
+        out, seen = [], set()
+        for poi in pois or []:
+            plat = poi.get("lat")
+            plon = poi.get("lon")
+            if plat is None or plon is None:
+                continue
+            name = (poi.get("label") or poi.get("name") or "").split(",")[0].strip()
+            if not name:
+                continue
+            kind = (poi.get("kind") or "").strip().lower()
+            if kind not in _NOTABLE_POI_KINDS:
+                continue
+            if not ToolsMixin._is_destination_poi(name, kind):
+                continue
+            key = name.lower()
+            if key in seen:
+                continue
+            best_d, best_k, side, route_pos_m = _nearest_segment(plat, plon)
+            if best_d > max_off_m:
+                continue
+            seen.add(key)
+            out.append({
+                "name": name,
+                "kind": (poi.get("kind") or "").strip(),
+                "number": (poi.get("number") or "").strip(),
+                "street": (poi.get("street") or "").strip(),
+                "node_index": best_k,
+                "side": side,
+                "off_route_m": round(best_d, 1),
+                "route_pos_m": route_pos_m,
+            })
+        out.sort(key=lambda p: (p.get("route_pos_m", 0.0), p["node_index"]))
+        return out
+
+
+
+    @staticmethod
+    def _build_route_blocks(digest: dict, pois: list | None = None,
+                            route_coords: list | None = None,
+                            features: list | None = None) -> list:
+        """Block-by-block list items: one short stretch per item, position-anchored.
+
+        Each item covers the route up to the next intersection, carrying its
+        places (by side), the crossing/steps at that intersection, and a real
+        Street View waypoint (the intersection ahead).  Keeps the list trackable
+        and makes "Street View here" mean a specific point.
+        """
+        pois = pois or []
+        features = features or []
+        route_coords = route_coords or []
+        legs = digest.get("legs") or []
+
+        cum = []
+        if len(route_coords) >= 2:
+            cum = [0.0] * len(route_coords)
+            for k in range(1, len(route_coords)):
+                cum[k] = cum[k - 1] + dist_metres(
+                    route_coords[k - 1][0], route_coords[k - 1][1],
+                    route_coords[k][0], route_coords[k][1])
+
+        def _coord(idx):
+            if route_coords and 0 <= idx < len(route_coords):
+                return route_coords[idx]
+            return (None, None)
+
+        def _heading(idx):
+            if not route_coords or len(route_coords) < 2:
+                return None
+            if idx < len(route_coords) - 1:
+                a, b = route_coords[idx], route_coords[idx + 1]
+            else:
+                a, b = route_coords[idx - 1], route_coords[idx]
+            return bearing_deg(a[0], a[1], b[0], b[1])
+
+        # Coalesce legs into per-street stretches.
+        stretches = []
+        for leg in legs:
+            st = leg.get("street") or "an unnamed road"
+            if stretches and stretches[-1]["street"] == st:
+                s = stretches[-1]
+            else:
+                s = {"street": st, "node_start": leg.get("node_start"),
+                     "node_end": leg.get("node_end"), "cross": [], "end_action": {}}
+                stretches.append(s)
+            s["cross"].extend(leg.get("cross_streets_passed") or [])
+            s["end_action"] = leg.get("end_action") or {}
+            if leg.get("node_end") is not None:
+                s["node_end"] = leg.get("node_end")
+
+        items = []
+        seen_crossings = set()
+        for s in stretches:
+            ns, ne = s.get("node_start"), s.get("node_end")
+            if ns is None or ne is None or ne <= ns:
+                continue
+            street = s["street"]
+            # Cross-street name(s) at each interior node; when a node carries
+            # several, prefer one not already used as a boundary so a bend
+            # spanning two nodes (both tagged the same street) doesn't read
+            # "Church Street to Church Street".
+            by_idx = {}
+            for c in s["cross"]:
+                ci = c.get("node_index")
+                if ci is not None and ns < ci < ne and c.get("name"):
+                    by_idx.setdefault(ci, []).append((c["name"], c.get("side")))
+            name_at, used = {}, set()   # node_index -> (name, side)
+            for ci in sorted(by_idx):
+                pick = next((t for t in by_idx[ci] if t[0] not in used), by_idx[ci][0])
+                name_at[ci] = pick
+                used.add(pick[0])
+            # Drop a boundary that repeats the previous name (same street, two nodes).
+            boundary_idxs, prev_name = [], None
+            for ci in sorted(name_at):
+                nm = name_at[ci][0]
+                if nm == prev_name:
+                    continue
+                boundary_idxs.append(ci)
+                prev_name = nm
+            boundaries = [ns] + boundary_idxs + [ne]
+            onto = (s["end_action"] or {}).get("onto")
+            turn = (s["end_action"] or {}).get("turn")
+            # Streets a crossing may legitimately involve on this stretch.
+            allowed_bares = {_road_name_bare(street)}
+            allowed_bares.update(_road_name_bare(t[0]) for t in name_at.values())
+            if onto:
+                allowed_bares.add(_road_name_bare(onto))
+            allowed_bares.discard("")
+
+            for bi in range(len(boundaries) - 1):
+                a, b = boundaries[bi], boundaries[bi + 1]
+                if b <= a:
+                    continue
+                # Features at a boundary node belong to the block that ENDS
+                # there, so the next block starts strictly after it (no double
+                # counting across blocks/stretches).  Only the route's very
+                # first node is included in the opening block.
+                lo = a - 1 if a == 0 else a
+                is_last = (bi == len(boundaries) - 2)
+                to_entry = name_at.get(b)
+
+                dist = None
+                if cum and a < len(cum) and b < len(cum):
+                    dist = int(round(cum[b] - cum[a]))
+                dist_phrase = f" for about {dist} metres" if dist else ""
+
+                # Name each block only by where it leads — the previous block
+                # already named the intersection it started from.
+                if is_last and onto:
+                    label = f"Along {street}{dist_phrase}"
+                    if turn and turn not in ("arrive", "straight", "continue"):
+                        label += f", then turn {turn} into {onto}."
+                    else:
+                        label += f", then continue onto {onto}."
+                elif is_last:
+                    label = f"Along {street}{dist_phrase}."
+                else:
+                    to = (to_entry[0] + _side_phrase(to_entry[1])
+                          if to_entry else "the next intersection")
+                    label = f"Along {street} to {to}"
+                    label += f", about {dist} metres." if dist else "."
+
+                blk = [p for p in pois if lo < p["node_index"] <= b]
+
+                def _disp(p, _wkey=_street_key(street)):
+                    # Announce the house number only when it is definitely on
+                    # the street being walked (suffix-tolerant match).
+                    num = (p.get("number") or "").strip()
+                    if num and _wkey and _street_key(p.get("street") or "") == _wkey:
+                        return f"{p['name']} at {num}"
+                    return p["name"]
+
+                # A few notable places per side, in walking order — not a list.
+                MAX_PER_SIDE = 3
+                left = [_disp(p) for p in blk if p["side"] == "left"][:MAX_PER_SIDE]
+                right = [_disp(p) for p in blk if p["side"] == "right"][:MAX_PER_SIDE]
+
+                blk_feat_descs = [
+                    f.get("desc") for f in features
+                    if f.get("route_index") is not None and lo < f["route_index"] <= b
+                ]
+
+                detail = []
+                if left:
+                    detail.append("On the left: " + _join_names(left) + ".")
+                if right:
+                    detail.append("On the right: " + _join_names(right) + ".")
+                detail.extend(_clean_crossings(
+                    blk_feat_descs, allowed_bares, seen_crossings))
+
+                wlat, wlon = _coord(b)
+                text = label + ("  " + "  ".join(detail) if detail else "")
+                items.append({"text": text, "lat": wlat, "lon": wlon, "heading": _heading(b)})
+
+        # Overview prepended, destination appended.
+        origin = (digest.get("origin") or {}).get("label") or "the start"
+        dest = digest.get("destination") or {}
+        dname = dest.get("label") or "the destination"
+        total = digest.get("total_distance_m", 0)
+        drives = (digest.get("country") or {}).get("drives_on")
+        streets = []
+        for s in stretches:
+            if s["street"] != "an unnamed road" and s["street"] not in streets:
+                streets.append(s["street"])
+        overview = f"Route from {origin} to {dname}"
+        if total:
+            overview += f", about {total} metres"
+        overview += "."
+        if drives:
+            overview += f" Traffic drives on the {drives}."
+        if streets:
+            overview += " The route follows " + _join_names(streets) + "."
+        items.insert(0, {"text": overview, "lat": None, "lon": None, "heading": None})
+
+        side = dest.get("side")
+        if side in ("left", "right"):
+            dtext = f"{dname} is on your {side} as you arrive."
+        elif side == "ahead":
+            dtext = f"{dname} is a short distance ahead at the end of the route."
+        elif side == "behind":
+            dtext = f"{dname} is slightly behind the final point, so you may pass it."
+        else:
+            dtext = f"You arrive at {dname}."
+        items.append({"text": dtext, "lat": dest.get("lat"), "lon": dest.get("lon"),
+                      "heading": None})
+        return items
+
+
+    def _journey_pois_for_route(self, route_coords: list) -> list:
+        """Fetch POIs near the route and project them onto it (side of travel)."""
+        fetcher = getattr(self, "_poi_fetcher", None)
+        if not fetcher or len(route_coords) < 2:
+            return []
+        lats = [c[0] for c in route_coords]
+        lons = [c[1] for c in route_coords]
+        mid_lat = (min(lats) + max(lats)) / 2.0
+        mid_lon = (min(lons) + max(lons)) / 2.0
+        span = max((dist_metres(mid_lat, mid_lon, la, lo) for la, lo in route_coords),
+                   default=0.0)
+        radius = int(min(3000, max(400, span + 150)))
+        try:
+            pois, _ = fetcher.fetch_pois(
+                mid_lat, mid_lon, "all", radius,
+                address_points=getattr(self, "_address_points", None),
+            )
+        except Exception as exc:
+            self._tool_trace(f"Journey POI fetch failed: {exc}")
+            return []
+        return self._project_pois_to_route(route_coords, pois or [])
+
+
+    def _journey_google_walk_items(self, route: dict, country_code: str = "",
+                                   reason: str = "") -> tuple[str, list] | None:
+        """Google walking-directions fallback, as accessible-route list items."""
+        origin = route.get("_journey_origin") or {}
+        dest = route.get("_journey_destination") or {}
+        o_lat, o_lon = origin.get("lat"), origin.get("lon")
+        d_lat, d_lon = dest.get("lat"), dest.get("lon")
+        on = (origin.get("name") or "origin").strip()
+        dn = (dest.get("name") or "destination").strip()
+        if o_lat is None or o_lon is None or d_lat is None or d_lon is None:
+            return None
+        rt = self._get_route_tools()
+        if not rt or not getattr(rt, "is_configured", False):
+            return None
+        try:
+            groutes = rt.journey_plan(
+                on, dn, country_code, travel_mode="walking",
+                origin_coords=(float(o_lat), float(o_lon)),
+                dest_coords=(float(d_lat), float(d_lon)),
+                origin_place_id=str(origin.get("place_id") or ""),
+                dest_place_id=str(dest.get("place_id") or ""),
+            )
+        except Exception as exc:
+            self._tool_trace(f"Google walking fallback failed: {exc}")
+            return None
+        if not groutes:
+            return None
+
+        gr = groutes[0]
+        leg = (gr.get("legs") or [{}])[0]
+        title = "Journey Planner - Accessible directions"
+        head = f"Walking directions from {on} to {dn}."
+        dur, dist = gr.get("duration_text", ""), gr.get("distance_text", "")
+        if dist and dur:
+            head += f" About {dist}, {dur}."
+        if reason:
+            head += " " + reason
+        items = [{"text": head, "lat": None, "lon": None, "heading": None}]
+
+        steps = leg.get("steps") or []
+        if steps:
+            for s in steps:
+                instr = (s.get("instruction") or "").strip()
+                if not instr:
+                    continue
+                dtxt = s.get("distance") or ""
+                heading = None
+                if s.get("lat") is not None and s.get("end_lat") is not None:
+                    heading = bearing_deg(s["lat"], s["lon"], s["end_lat"], s["end_lon"])
+                items.append({
+                    "text": instr + (f" ({dtxt})" if dtxt else ""),
+                    "lat": s.get("lat"), "lon": s.get("lon"), "heading": heading,
+                })
+        else:
+            for instr in (leg.get("instructions") or []):
+                if instr and instr.strip():
+                    items.append({"text": instr.strip(), "lat": None, "lon": None, "heading": None})
+
+        path = [
+            (p["lat"], p["lon"])
+            for p in (leg.get("_walk_path_points") or [])
+            if p.get("lat") is not None and p.get("lon") is not None
+        ]
+        pois = self._journey_pois_for_route(path) if path else []
+        if pois:
+            pl = [p["name"] for p in pois if p["side"] == "left"]
+            pr = [p["name"] for p in pois if p["side"] == "right"]
+            if pl:
+                items.append({"text": "Places on the left: " + _join_names(pl) + ".",
+                              "lat": None, "lon": None, "heading": None})
+            if pr:
+                items.append({"text": "Places on the right: " + _join_names(pr) + ".",
+                              "lat": None, "lon": None, "heading": None})
+        return title, items
+
+    def _journey_transit_accessible_items(self, route: dict) -> tuple[str, list]:
+        """Build accessible-directions items for a route that includes transit
+        legs, using the leg data journey_plan() already computed instead of
+        re-routing a fresh walk between the overall origin and destination.
+
+        The whole-route OSM/Google walk in _journey_accessible_items is only
+        correct when the entire journey is on foot — for a route that boards
+        a train partway through, walking the straight-line origin-to-
+        destination distance can be tens of kilometres of irrelevant road
+        (e.g. a train journey ending up as a 50km rural walking route),
+        because it ignores that most of the distance is meant to be covered
+        by transit. Instead, describe each leg on its own terms: transit
+        legs as board/ride/alight text (same fields as the detail text,
+        including platform), walking legs using the short, already-correct
+        turn-by-turn instructions Google returned for just that leg.
+        """
+        title = "Journey Planner - Accessible directions"
+        origin = route.get("_journey_origin") or {}
+        dest = route.get("_journey_destination") or {}
+        on = (origin.get("name") or "origin").strip()
+        dn = (dest.get("name") or "destination").strip()
+        items = [{"text": f"Route from {on} to {dn}.", "lat": None, "lon": None, "heading": None}]
+
+        for leg in route.get("legs", []):
+            if leg.get("type") == "transit":
+                line_desc = leg.get("line_name") or leg.get("vehicle_type") or "service"
+                if leg.get("headsign"):
+                    line_desc += f" toward {leg['headsign']}"
+                if leg.get("agency"):
+                    line_desc += f" ({leg['agency']})"
+                plat = leg.get("departure_platform", "")
+                plat_str = f", platform {plat}" if plat else ""
+                items.append({
+                    "text": f"Board {line_desc}. From {leg.get('departure_stop', '')}{plat_str} "
+                            f"at {leg.get('departure_time', '')}.",
+                    "lat": leg.get("departure_stop_lat"), "lon": leg.get("departure_stop_lon"),
+                    "heading": None,
+                })
+                stops_text = (f"{leg['num_stops']} stops, {leg.get('duration', '')}."
+                              if leg.get("num_stops") else "")
+                items.append({
+                    "text": f"To {leg.get('arrival_stop', '')} at {leg.get('arrival_time', '')}."
+                            + (f" {stops_text}" if stops_text else ""),
+                    "lat": leg.get("arrival_stop_lat"), "lon": leg.get("arrival_stop_lon"),
+                    "heading": None,
+                })
+            elif leg.get("type") == "walking":
+                dur, dist = leg.get("duration", ""), leg.get("distance", "")
+                head = f"Walk {dur}, {dist}." if dur and dist else "Walk."
+                items.append({"text": head, "lat": None, "lon": None, "heading": None})
+                points = leg.get("_walk_points") or []
+                for i, instr in enumerate(leg.get("instructions") or []):
+                    wp = points[i] if i < len(points) else None
+                    heading = None
+                    if wp and i + 1 < len(points):
+                        nxt = points[i + 1]
+                        heading = bearing_deg(wp["lat"], wp["lon"], nxt["lat"], nxt["lon"])
+                    items.append({
+                        "text": instr,
+                        "lat": wp["lat"] if wp else None,
+                        "lon": wp["lon"] if wp else None,
+                        "heading": heading,
+                    })
+
+        return title, items
+
+    def _journey_accessible_items(self, route: dict, country_code: str = "") -> tuple[str, list]:
+        """Produce the accessible route as list items: OSM first, Google fallback."""
+        title = "Journey Planner - Accessible directions"
+        if any(leg.get("type") == "transit" for leg in route.get("legs", [])):
+            # Not a pure walking journey — describe each leg on its own terms
+            # rather than routing a fresh walk across the whole origin-to-
+            # destination distance (see _journey_transit_accessible_items).
+            return self._journey_transit_accessible_items(route)
+        origin = route.get("_journey_origin") or {}
+        dest = route.get("_journey_destination") or {}
+        on = (origin.get("name") or "origin").strip()
+        dn = (dest.get("name") or "destination").strip()
+        o_lat, o_lon = origin.get("lat"), origin.get("lon")
+        d_lat, d_lon = dest.get("lat"), dest.get("lon")
+        if o_lat is None or o_lon is None or d_lat is None or d_lon is None:
+            return title, [{"text": "Accessible directions need origin and destination coordinates.",
+                            "lat": None, "lon": None, "heading": None}]
+
+        err = ""
+        graph, gerr = self._journey_accessible_osm_graph(route, country_code)
+        if graph:
+            from nav import NavigationEngine
+            engine = NavigationEngine(graph, self.settings)
+            msg = ""
+            # Prefer to FOLLOW the chosen Google walking route by threading the
+            # OSM graph through its turn points, so the description matches the
+            # path the user picked (e.g. one that avoids a particular street).
+            gturns = []
+            for leg in route.get("legs", []):
+                if leg.get("type") != "walking":
+                    continue
+                for wp in leg.get("_walk_points") or []:
+                    if wp.get("lat") is not None and wp.get("lon") is not None:
+                        gturns.append((float(wp["lat"]), float(wp["lon"])))
+            ok = False
+            if gturns:
+                waypoints = ([(float(o_lat), float(o_lon))] + gturns
+                             + [(float(d_lat), float(d_lon))])
+                path = engine.route_via_waypoints(waypoints)
+                if path:
+                    engine.active = True
+                    engine.google_mode = False
+                    engine.route = path
+                    engine.dest_lat = float(d_lat)
+                    engine.dest_lon = float(d_lon)
+                    engine.dest_name = dn
+                    ok = True
+            if not ok:
+                # No chosen-route turn points (or matching failed) — fall back
+                # to a shortest-path OSM walking route.
+                msg, ok = engine.find_route_osm(
+                    float(o_lat), float(o_lon), float(d_lat), float(d_lon), dn, travel_mode="walking")
+            if ok:
+                digest = engine.build_route_digest(
+                    origin_label=on, origin_lat=None, origin_lon=None, country_code=country_code)
+                if digest:
+                    dest_blk = digest.get("destination", {})
+                    miab_log(
+                        "navigation",
+                        (f"Journey OSM digest: legs={len(digest.get('legs', []))} "
+                         f"dest_side={dest_blk.get('side')} "
+                         f"crossing_needed={dest_blk.get('crossing_needed')}"),
+                        self.settings,
+                    )
+                    feature_items = []
+                    try:
+                        fetcher = getattr(self, "_poi_fetcher", None)
+                        overpass = getattr(fetcher, "_overpass", None)
+                        road_segs = getattr(self, "_road_segments", None)
+                        nav_route = list(engine.route or [])
+                        nav_nodes = (engine._graph or {}).get("nodes", {})
+                        if overpass and nav_route and nav_nodes:
+                            walk_pts = [
+                                {"lat": nav_nodes[nid][0], "lon": nav_nodes[nid][1], "instruction": ""}
+                                for nid in nav_route if nid in nav_nodes
+                            ]
+                            if walk_pts:
+                                feats = _osm_walk_features(walk_pts, overpass, road_segments=road_segs)
+                                # Only crossings and steps — places come from the
+                                # projected POI list, so skip "Landmark:" entries.
+                                feature_items = [
+                                    {"desc": f.get("sv_desc"), "route_index": f.get("route_index")}
+                                    for f in feats
+                                    if str(f.get("sv_desc", "")).startswith(
+                                        ("Pedestrian crossing", "Steps"))
+                                ]
+                    except Exception as exc:
+                        self._tool_trace(f"Journey feature lookup failed: {exc}")
+                    route_coords = [
+                        engine._graph["nodes"][nid]
+                        for nid in (engine.route or [])
+                        if nid in (engine._graph or {}).get("nodes", {})
+                    ]
+                    pois = self._journey_pois_for_route(route_coords)
+                    return title, self._build_route_blocks(
+                        digest, pois, route_coords, feature_items)
+            err = msg
+        else:
+            err = gerr
+
+        fb = self._journey_google_walk_items(
+            route, country_code,
+            "OpenStreetMap could not produce a walking route here, so these are "
+            "Google's walking directions.")
+        if fb:
+            return fb
+        return title, [{"text": err or "Could not produce accessible directions.",
+                        "lat": None, "lon": None, "heading": None}]
+
+    def _fetch_segment_streetview(self, lat, lon, heading, show_cb):
+        """Fetch and describe Street View at one route waypoint (on demand)."""
+        google_key = self.settings.get("google_api_key", "").strip()
+        mistral = getattr(self, "_mistral", None)
+        if not google_key:
+            show_cb("Street View needs a Google API key. Add one in settings.")
+            return
+        if not mistral or not getattr(mistral, "is_configured", False):
+            show_cb("Street View descriptions need a Mistral API key. Add one in settings.")
+            return
+        if lat is None or lon is None:
+            show_cb("There is no map point for this item to look at.")
+            return
+
+        def _calc():
+            base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+            cache_path = os.path.join(base, "streetview_cache.json")
+            from streetview import lookup_streetview_description
+            desc = ""
+            try:
+                result = lookup_streetview_description(
+                    float(lat), float(lon),
+                    google_api_key=google_key, mistral_client=mistral,
+                    street_heading=heading, cache_path=cache_path,
+                    include_images=False, mode="navigation",
+                )
+                if result:
+                    desc = result[1]
+            except Exception as exc:
+                self._tool_trace(f"Segment Street View failed: {exc}")
+            wx.CallAfter(show_cb, desc or "No Street View coverage at this point.")
+
+        threading.Thread(target=_calc, daemon=True).start()
+
+    def _journey_accessible_osm_graph(self, route: dict, country_code: str = "") -> tuple[dict | None, str]:
+        """Fetch a temporary walk graph centered on the journey itself."""
+        origin = route.get("_journey_origin") or {}
+        dest = route.get("_journey_destination") or {}
+        o_lat = origin.get("lat")
+        o_lon = origin.get("lon")
+        d_lat = dest.get("lat")
+        d_lon = dest.get("lon")
+        if o_lat is None or o_lon is None or d_lat is None or d_lon is None:
+            return None, "Accessible OSM directions need origin and destination coordinates."
+
+        try:
+            from street_data import geocode_location
+        except Exception as exc:
+            return None, f"Accessible OSM directions are unavailable: {exc}"
+
+        straight_m = dist_metres(float(o_lat), float(o_lon), float(d_lat), float(d_lon))
+        # Center the fetch on the route itself, not on the current GPS point.
+        fetch_lat = (float(o_lat) + float(d_lat)) / 2.0
+        fetch_lon = (float(o_lon) + float(d_lon)) / 2.0
+        radius = int(max(2500, min(8000, (straight_m / 2.0) + 2500)))
+
+        geo = None
+        try:
+            geo = geocode_location(fetch_lat, fetch_lon)
+        except Exception:
+            geo = None
+
+        fetch_country = (country_code or (geo.get("country_code", "") if geo else "") or "").strip()
+
+        if not getattr(self, "_street_fetcher", None):
+            return None, "Street fetcher is not available."
+
+        try:
+            # Fetch by RADIUS around the route, not by suburb boundary.  A
+            # point-to-point walk can span suburbs, and the reverse-geocoded
+            # suburb name is unreliable (e.g. resolving Burwood to "Sydney"),
+            # which sends Overpass a whole-city boundary query that returns
+            # nothing and then retries — wasting calls and tripping 429s.  A
+            # bounded radius around the route is both correct and far lighter.
+            segs, addrs, from_cache, snap_lat, snap_lon, skip_stage2, natural_features, interpolations = (
+                self._street_fetcher.fetch_road_data(
+                    float(o_lat),
+                    float(o_lon),
+                    radius=radius,
+                    fetch_lat=fetch_lat,
+                    fetch_lon=fetch_lon,
+                    suburb_name=None,
+                    country_code=fetch_country or None,
+                )
+            )
+        except Exception as exc:
+            return None, f"Could not load streets for this route: {exc}"
+
+        if not segs:
+            return None, "Loaded street data was empty for this route."
+
+        try:
+            from types import SimpleNamespace
+            scratch = SimpleNamespace(_road_segments=segs)
+            graph = self._build_walk_graph.__func__(scratch)
+        except Exception as exc:
+            return None, f"Could not build a walk graph for this route: {exc}"
+
+        if not graph:
+            return None, "Could not build a walk graph for this route."
+
+        return graph, ""
+
+    def _fetch_journey_accessible_osm(self, routes, selected_index, show_cb):
+        """Compute accessible walking directions (OSM, Google fallback) as a
+        list of self-describing segment items for the route dialog."""
+        if not routes:
+            return
+        if selected_index == wx.NOT_FOUND or selected_index < 0 or selected_index >= len(routes):
+            selected_index = 0
+        route = routes[selected_index]
+        country_code = (getattr(self, "_current_country_code", "") or "").strip()
+        title = "Journey Planner - Accessible directions"
+
+        def _calc():
+            # This can take ~30s (street fetch, routing, POIs, crossings).  Play
+            # the looping working alarm so the wait isn't silent; stop it the
+            # moment results are ready.
+            alarm_on = False
+            try:
+                wx.CallAfter(self._status_update,
+                             "Building accessible directions — this can take a moment...", True)
+                try:
+                    self.sound.play_file(r"c:\windows\media\alarm09.wav", loops=-1)
+                    alarm_on = True
+                except Exception:
+                    pass
+                used_title, items = self._journey_accessible_items(route, country_code)
+                if alarm_on:
+                    try:
+                        self.sound.stop()
+                    except Exception:
+                        pass
+                wx.CallAfter(show_cb, used_title or title, items)
+            except Exception as exc:
+                if alarm_on:
+                    try:
+                        self.sound.stop()
+                    except Exception:
+                        pass
+                wx.CallAfter(show_cb, title, [{
+                    "text": f"Accessible directions failed: {exc}",
+                    "lat": None, "lon": None, "heading": None,
+                }])
+
+        threading.Thread(target=_calc, daemon=True).start()
 
     def _tool_departure_board(self):
         """Departure Board — find stops and departure boards via HERE, GTFS, or Google Places."""
@@ -1482,23 +2942,6 @@ class ToolsMixin:
                       f"but no variant has headsign matching '{headsign}'")
             return None
 
-        def _keyword_search_feed(feed_id, keywords):
-            """Search a feed's route long_names for routes containing ALL keywords.
-
-            Returns list of (route_id, label) tuples for matching routes.
-            """
-            data = self._transit._feeds.get(feed_id, {})
-            routes = data.get("routes", {})
-            matches = []
-            for rid, rinfo in routes.items():
-                long = (rinfo.get("long") or "").strip().lower()
-                short = (rinfo.get("short") or "").strip()
-                if long and all(kw in long for kw in keywords):
-                    label = short or rinfo.get("long", "")
-                    rtype = rinfo.get("type", "")
-                    matches.append((rid, f"{label} ({rtype}): {rinfo.get('long', '')}"))
-            return matches
-
         # ── Step 1: Search local feeds (by station coordinates) ──────
         try:
             feed_ids = self._transit._ensure_feeds_for_location(lat, lon)
@@ -1729,27 +3172,50 @@ class ToolsMixin:
                 rt_obj = None
             if rt_obj and rt_obj.is_configured:
                 try:
-                    resolved = self._resolve_geocode(rt_obj, _dest_query, "", "destination")
+                    resolved = self._resolve_geocode(
+                        rt_obj, _dest_query, "", "destination",
+                        require_confirmation=False)
                     if resolved is None:
-                        print(f"[GTFS] Destination selection cancelled for '{_dest_query}'.")
+                        miab_log(
+                            "errors",
+                            f"GTFS destination selection cancelled for {_dest_query!r}.",
+                            getattr(self, "settings", None),
+                        )
                         return [f"No timetable data found for this service."]
                     d_lat, d_lon, d_fmt = resolved
                     d_km = ((lat - d_lat)**2 * 111**2
                             + (lon - d_lon)**2 * (111 * math.cos(
                                 math.radians(lat)))**2) ** 0.5
-                    print(f"[GTFS] Destination geocode '{_dest_query}' → "
-                          f"({d_lat:.3f},{d_lon:.3f}) {d_fmt}  dist={d_km:.0f}km")
+                    miab_log(
+                        "navigation",
+                        f"GTFS destination geocode {_dest_query!r} -> "
+                        f"({d_lat:.3f},{d_lon:.3f}) {d_fmt} dist={d_km:.0f}km",
+                        getattr(self, "settings", None),
+                    )
                     if d_km <= 800:
                         _dest_feed_ids = self._transit._ensure_feeds_for_location(
                             d_lat, d_lon)
-                        print(f"[GTFS] Destination feeds: {_dest_feed_ids}")
+                        miab_log(
+                            "navigation",
+                            f"GTFS destination feeds for {_dest_query!r}: {_dest_feed_ids}",
+                            getattr(self, "settings", None),
+                        )
                         _collect_last_stop_candidates(_dest_feed_ids)
                         _collect_longname_candidates(_dest_feed_ids)
                     else:
-                        print(f"[GTFS] Destination too far ({d_km:.0f}km) — "
-                              f"skipping feed download")
+                        miab_log(
+                            "navigation",
+                            f"GTFS destination {_dest_query!r} too far ({d_km:.0f}km); "
+                            "skipping feed download.",
+                            getattr(self, "settings", None),
+                        )
                 except Exception as exc:
-                    print(f"[GTFS] Destination geocode failed: {exc}")
+                    miab_log(
+                        "errors",
+                        f"GTFS destination geocode failed for {_dest_query!r}: {exc}",
+                        getattr(self, "settings", None),
+                    )
+                    return [f"No timetable data found for this service."]
 
         candidates.sort(key=lambda c: -c["score"])
         print(f"[GTFS] Candidate scan: {len(candidates)} direction(s) "
@@ -1775,33 +3241,6 @@ class ToolsMixin:
             here_info += f"  Operator: {operator}."
         return [here_info]
 
-    def _operator_map_path(self):
-        """Path to the operator → feed_id mapping file."""
-        return os.path.join(self._transit._cache_dir(), "gtfs_operator_map.json")
-
-    def _load_operator_map(self) -> dict:
-        """Load the operator → feed_id mapping from JSON."""
-        p = self._operator_map_path()
-        if not os.path.exists(p):
-            return {}
-        try:
-            with open(p, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-
-    def _save_operator_map(self, operator_key: str, feed_id: str):
-        """Save an operator → feed_id mapping to JSON."""
-        op_map = self._load_operator_map()
-        op_map[operator_key] = feed_id
-        p = self._operator_map_path()
-        try:
-            with open(p, "w", encoding="utf-8") as f:
-                json.dump(op_map, f, indent=2)
-            print(f"[GTFS] Saved operator map: '{operator_key}' → feed {feed_id}")
-        except Exception as exc:
-            print(f"[GTFS] Failed to save operator map: {exc}")
-
     def _resume_location_sound(self):
         """Re-start the country/region ambient sound and refresh the UI label."""
         if getattr(self, "_thinking_active", False) or getattr(self, "_suppress_location_restore", False):
@@ -1822,11 +3261,19 @@ class ToolsMixin:
     def _show_route_results(self, title: str, text: str):
         """Display route results in a read-only dialog."""
         self._tool_trace(f"{title}: results dialog shown.")
+        self._begin_tools_workflow()
         dlg = self._dlgs[5](self, title, text)
-        dlg.ShowModal()
-        dlg.Destroy()
-        self._finish_thinking()
-        self.listbox.SetFocus()
+        try:
+            dlg.ShowModal()
+        finally:
+            dlg.Destroy()
+            self._finish_thinking()
+            self._end_tools_workflow()
+            focus_map = getattr(self, "_focus_map_window_silently", None)
+            if callable(focus_map):
+                wx.CallAfter(focus_map)
+            else:
+                wx.CallAfter(self.listbox.SetFocus)
 
     def _show_rendezvous_results(
         self,
@@ -1867,217 +3314,22 @@ class ToolsMixin:
             header += f" Your location: {dest_a_name}."
             header += f" Route: {route_duration_text}, {route_distance_text}."
 
-        self._accessible_status("Rendezvous results ready. Use the list to browse options.")
+        self._status_update("Rendezvous results ready. Use the list to browse options.", force=True)
         self._tool_trace(f"Rendezvous Point: results dialog shown with {len(candidates)} candidates.")
+        self._begin_tools_workflow()
         dlg = self._dlgs[6](self, "Rendezvous Point", f"{header} {intro}", candidates)
-        dlg.ShowModal()
-        dlg.Destroy()
-        self._finish_thinking()
-        self.listbox.SetFocus()
+        try:
+            dlg.ShowModal()
+        finally:
+            dlg.Destroy()
+            self._finish_thinking()
+            self._end_tools_workflow()
+            focus_map = getattr(self, "_focus_map_window_silently", None)
+            if callable(focus_map):
+                wx.CallAfter(focus_map)
+            else:
+                wx.CallAfter(self.listbox.SetFocus)
 
-
-    def _route_from_mark(self, origin_coords, origin_name, dest_coords, dest_name):
-        """Shift+D — driving directions from M-marked origin to current position.
-        Detects cross-water routes and describes them using airports data."""
-        o_lat, o_lon = origin_coords
-        d_lat, d_lon = dest_coords
-
-        self._status_update(f"Getting directions from {origin_name} to {dest_name}...")
-
-        def _calc():
-            try:
-                # Check if same country — extract from names (last comma-separated part)
-                o_country = origin_name.split(",")[-1].strip()
-                d_country = dest_name.split(",")[-1].strip()
-
-                if o_country != d_country:
-                    text = self._cross_water_description(
-                        o_lat, o_lon, origin_name,
-                        d_lat, d_lon, dest_name)
-                else:
-                    text = self._driving_directions(
-                        o_lat, o_lon, origin_name,
-                        d_lat, d_lon, dest_name)
-
-                wx.CallAfter(self._show_route_results,
-                             f"{origin_name} → {dest_name}", text)
-            except Exception as e:
-                wx.CallAfter(self._status_update, f"Directions failed: {e}", True)
-
-        threading.Thread(target=_calc, daemon=True).start()
-
-    def _cross_water_description(self, o_lat, o_lon, o_name, d_lat, d_lon, d_name):
-        """Describe a cross-country/water route — flight info and sea route."""
-        import csv, math
-        from geo import dist_metres
-        from sea_routes import get_sea_route
-
-        straight_km = dist_metres(o_lat, o_lon, d_lat, d_lon) / 1000.0
-
-        def _nearest_airport(lat, lon):
-            path = self._ensure_airports_csv()
-            if not path:
-                return None
-            best_dist = float('inf')
-            best = None
-            with open(path, encoding='utf-8') as f:
-                for row in csv.DictReader(f):
-                    if row.get('type','') not in ('large_airport','medium_airport'):
-                        continue
-                    try:
-                        alat = float(row['latitude_deg'])
-                        alon = float(row['longitude_deg'])
-                    except (ValueError, KeyError):
-                        continue
-                    dlat = (alat - lat) * 111.0
-                    dlon = (alon - lon) * 111.0 * math.cos(math.radians(lat))
-                    d = math.sqrt(dlat*dlat + dlon*dlon)
-                    if d < best_dist:
-                        best_dist = d
-                        best = (row.get('name',''), row.get('iata_code','').strip(),
-                                alat, alon, best_dist)
-            return best
-
-        o_airport = _nearest_airport(o_lat, o_lon)
-        d_airport = _nearest_airport(d_lat, d_lon)
-
-        mid_lat = (o_lat + d_lat) / 2
-        mid_lon = (o_lon + d_lon) / 2
-        water = self._ocean_name(mid_lat, mid_lon) or \
-                self._ocean_name(o_lat, o_lon) or "open water"
-
-        # Extract country and city from names (last / first comma-separated parts)
-        o_parts  = [p.strip() for p in o_name.split(",")]
-        d_parts  = [p.strip() for p in d_name.split(",")]
-        o_country = o_parts[-1] if o_parts else ""
-        d_country = d_parts[-1] if d_parts else ""
-        o_city    = o_parts[0]  if o_parts else ""
-        d_city    = d_parts[0]  if d_parts else ""
-
-        lines = [
-            f"Route: {o_name} → {d_name}",
-            "",
-            f"These locations are in different countries separated by {water}.",
-            "No direct driving route exists.",
-            "",
-            f"Straight-line distance: {straight_km:,.0f}km",
-            "",
-            "── By Air ──────────────────────────────",
-        ]
-
-        if o_airport:
-            lines.append(f"Nearest departure airport: {o_airport[0]}"
-                         + (f" ({o_airport[1]})" if o_airport[1] else "")
-                         + f" — {o_airport[4]:.0f}km from {o_city}")
-        if d_airport:
-            lines.append(f"Nearest arrival airport:   {d_airport[0]}"
-                         + (f" ({d_airport[1]})" if d_airport[1] else "")
-                         + f" — {d_airport[4]:.0f}km from {d_city}")
-
-        if o_airport and d_airport:
-            flight_km  = dist_metres(o_airport[2], o_airport[3],
-                                     d_airport[2], d_airport[3]) / 1000.0
-            flight_min = int(flight_km / 900 * 60)
-            lines += [
-                f"Flight distance: {flight_km:,.0f}km",
-                f"Estimated flight time: {flight_min // 60}h {flight_min % 60}min"
-                f" (at 900km/h cruising speed)",
-            ]
-
-        # Sea route
-        sea = get_sea_route(o_country, o_city, o_lat, o_lon,
-                            d_country, d_city, d_lat, d_lon)
-        if sea:
-            lines += ["", sea]
-        else:
-            lines += ["", "── By Sea ──────────────────────────────",
-                      "No sea route data available for this corridor."]
-
-        return "\n".join(lines)
-
-    def _driving_directions(self, o_lat, o_lon, o_name, d_lat, d_lon, d_name):
-        """Fetch driving directions. Google first, OSRM fallback."""
-        api_key = self.settings.get("google_api_key", "").strip()
-
-        if api_key:
-            return self._google_driving(o_lat, o_lon, o_name, d_lat, d_lon, d_name, api_key)
-        else:
-            return self._osrm_driving(o_lat, o_lon, o_name, d_lat, d_lon, d_name)
-
-    def _google_driving(self, o_lat, o_lon, o_name, d_lat, d_lon, d_name, api_key):
-        """Google Maps driving directions."""
-        import urllib.parse, urllib.request, json, re, ssl
-
-        params = urllib.parse.urlencode({
-            "origin":      f"{o_lat},{o_lon}",
-            "destination": f"{d_lat},{d_lon}",
-            "mode":        "driving",
-            "key":         api_key,
-        })
-        url = f"https://maps.googleapis.com/maps/api/directions/json?{params}"
-        req = urllib.request.Request(url, headers={"User-Agent": "MapInABox/1.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode())
-
-        if data.get("status") != "OK":
-            raise RuntimeError(f"Google: {data.get('status')}")
-
-        leg = data["routes"][0]["legs"][0]
-
-        def _strip(s):
-            return re.sub(r'<[^>]+>', ' ', s).replace('&nbsp;', ' ').strip()
-
-        total_m   = leg["distance"]["value"]
-        total_min = leg["duration"]["value"] // 60
-        steps     = leg["steps"]
-
-        lines = [
-            f"Driving directions: {o_name} → {d_name}",
-            f"Distance: {total_m/1000:.1f}km  Estimated time: {total_min} min",
-            "",
-        ]
-        for step in steps:
-            dist = step["distance"]["text"]
-            inst = re.sub(r'\s+', ' ', _strip(step["html_instructions"])).strip()
-            lines.append(f"{inst}  ({dist})")
-
-        return "\n".join(lines)
-
-    def _osrm_driving(self, o_lat, o_lon, o_name, d_lat, d_lon, d_name):
-        """OSRM free driving directions — no API key needed."""
-        import urllib.request, json
-
-        url = (f"http://router.project-osrm.org/route/v1/driving/"
-               f"{o_lon},{o_lat};{d_lon},{d_lat}"
-               f"?steps=true&annotations=false&geometries=geojson&overview=false")
-        req = urllib.request.Request(url, headers={"User-Agent": "MapInABox/1.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode())
-
-        if data.get("code") != "Ok":
-            raise RuntimeError(f"OSRM: {data.get('code','unknown error')}")
-
-        route = data["routes"][0]
-        total_m   = route["distance"]
-        total_min = int(route["duration"] // 60)
-        steps     = [s for leg in route["legs"] for s in leg["steps"]]
-
-        lines = [
-            f"Driving directions: {o_name} → {d_name}",
-            f"Distance: {total_m/1000:.1f}km  Estimated time: {total_min} min",
-            "",
-        ]
-        for step in steps:
-            maneuver = step.get("maneuver", {})
-            inst     = maneuver.get("type", "").replace("_", " ").title()
-            modifier = maneuver.get("modifier", "")
-            name     = step.get("name", "")
-            dist_m   = step.get("distance", 0)
-            dist_str = f"{dist_m/1000:.1f}km" if dist_m >= 1000 else f"{int(dist_m)}m"
-            parts    = [p for p in [inst, modifier, name] if p]
-            lines.append(f"{' '.join(parts)}  ({dist_str})")
-
-        return "\n".join(lines)
 
     def _tool_flight_search(self):
         """Flight Search — find flight itineraries between two airports."""
@@ -2153,6 +3405,7 @@ class ToolsMixin:
         threading.Thread(target=_fetch, daemon=True).start()
 
     def _show_flight_results(self, text: str, origin: str, dest: str):
+        self._begin_tools_workflow()
         dlg = wx.Dialog(self, title=f"Flights {origin} → {dest}",
                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         vs  = wx.BoxSizer(wx.VERTICAL)
@@ -2165,10 +3418,12 @@ class ToolsMixin:
         def _close(evt=None):
             dlg.Destroy()
             self._finish_thinking()
+            self._end_tools_workflow()
 
         btn.Bind(wx.EVT_BUTTON, _close)
         dlg.Bind(wx.EVT_CHAR_HOOK,
-                 lambda e: _close() if e.GetKeyCode() == wx.WXK_ESCAPE else e.Skip())
+                 lambda e: _close()
+                 if e.GetKeyCode() == wx.WXK_ESCAPE else e.Skip())
         dlg.Bind(wx.EVT_CLOSE, lambda e: _close())
         vs.Add(btn, 0, wx.ALIGN_RIGHT | wx.RIGHT | wx.BOTTOM, 8)
         dlg.SetSizer(vs)
@@ -2267,7 +3522,8 @@ class ToolsMixin:
             return
 
         labels = [c["label"] for c in choices]
-        dlg2 = wx.SingleChoiceDialog(self, "Select location", "Location", labels)
+        from dialogs import ChoiceDialog
+        dlg2 = ChoiceDialog(self, "Select location", "Location", labels)
         if dlg2.ShowModal() != wx.ID_OK:
             dlg2.Destroy()
             self._resume_location_sound()
@@ -2316,7 +3572,10 @@ class ToolsMixin:
                 def _show():
                     from dialogs import HotelResultsDialog
 
-                    dlg = HotelResultsDialog(self, results)
+                    dlg = HotelResultsDialog(
+                        self, results,
+                        show_google_reviews=self._google_reviews_available(),
+                        show_tripadvisor_reviews=self._tripadvisor.configured)
                     while dlg.ShowModal() == wx.ID_OK:
                         idx = dlg.selected_index
                         if idx is None:
@@ -2324,27 +3583,30 @@ class ToolsMixin:
 
                         hotel = results[idx]
 
-                        import webbrowser, urllib.parse
-                        website = None
-                        try:
-                            from here_poi import HereClient
-                            here = HereClient(
-                                self.settings.get("here_api_key", ""),
-                                self.settings.get("cache_dir", ".")
-                            )
-                            detail = here.fetch_poi_detail(
-                                hotel.get("name", ""),
-                                hotel.get("lat", 0),
-                                hotel.get("lon", 0)
-                            )
-                            website = detail.get("website")
-                        except Exception:
-                            pass
+                        action = getattr(dlg, "action", "open")
+                        if action == "google_reviews":
+                            self._show_hotel_google_reviews(hotel)
+                            continue
+                        if action == "tripadvisor_reviews":
+                            self._show_hotel_tripadvisor_reviews(hotel)
+                            continue
 
-                        if website:
-                            webbrowser.open(website)
+                        name = (hotel.get("name") or "").strip()
+                        address = (hotel.get("address") or "").strip()
+                        opener = getattr(self, "_open_verified_website_for", None)
+                        if callable(opener):
+                            opener(
+                                hotel,
+                                name=name,
+                                url=(hotel.get("website") or "").strip(),
+                                location_hint=address,
+                            )
                         else:
-                            q = urllib.parse.quote(hotel.get("name", ""))
+                            import webbrowser, urllib.parse
+                            query_parts = [name]
+                            if address:
+                                query_parts.append(address)
+                            q = urllib.parse.quote(" ".join(p for p in query_parts if p).strip())
                             webbrowser.open(f"https://www.google.com/search?q={q}&btnI=1")
 
                     dlg.Destroy()
@@ -2360,6 +3622,58 @@ class ToolsMixin:
  
 
         threading.Thread(target=_fetch, daemon=True).start()
+
+    def _show_hotel_google_reviews(self, hotel: dict) -> None:
+        """Open the Google reviews flow shared with POI Ctrl+Alt+5."""
+        name = (hotel.get("name") or "").strip()
+        address = (hotel.get("address") or "").strip()
+        self._status_update(f"Looking up Google reviews for {name}...", force=True)
+        info = self._lookup_google_review_info(name, address)
+        self._present_reviews(name, address, info)
+
+    def _show_hotel_tripadvisor_reviews(self, hotel: dict) -> None:
+        """Fetch TripAdvisor review text for a hotel."""
+        name = (hotel.get("name") or "").strip()
+        lines = []
+
+        ta_reviews = []
+        if self._tripadvisor.configured:
+            self._status_update(f"Loading TripAdvisor reviews for {name}...")
+            try:
+                ta_reviews = self._tripadvisor.get_hotel_reviews(
+                    name, hotel.get("lat"), hotel.get("lon"))
+            except PermissionError:
+                lines.append("")
+                lines.append("TripAdvisor reviews need a free subscription at "
+                             "rapidapi.com/ntd119/api/tripadvisor-com1.")
+            except Exception as exc:
+                print(f"[HotelReviews] TripAdvisor failed: {exc}")
+
+        if ta_reviews:
+            lines.append(f"TripAdvisor reviews for {name}")
+            lines.append("")
+            for r in ta_reviews:
+                bits = []
+                if r.get("rating"):
+                    bits.append(f"{r['rating']}/5")
+                if r.get("date"):
+                    bits.append(str(r["date"]))
+                if r.get("user"):
+                    bits.append(f"by {r['user']}")
+                header = r.get("title") or "Review"
+                if bits:
+                    header += " — " + ", ".join(bits)
+                lines.append(header)
+                if r.get("text"):
+                    lines.append(r["text"])
+                lines.append("")
+
+        if not lines:
+            self._status_update(f"No TripAdvisor reviews found for {name}.", force=True)
+            return
+
+        lines.insert(0, f"Reviews for {name}")
+        self._show_detail_reader("\n".join(lines).strip())
 
     # ------------------------------------------------------------------
     # Find Food  (F key in map mode)
@@ -2392,7 +3706,11 @@ class ToolsMixin:
         """
         from geo import dist_to_segment_metres, dist_metres
 
-        CORRIDOR_M   = 300   # metres either side of the route
+        # Metres either side of the route a food place may sit and still count
+        # as "on route". Kept tight so places you can't actually pull into
+        # (e.g. a café a block from where a motorway cuts through) are excluded;
+        # food you'd stop at sits on the road frontage. Tune here if needed.
+        CORRIDOR_M   = 100
         BBOX_PAD_DEG = 0.005 # ~500 m padding on the bounding box
 
         # ---- guards -------------------------------------------------------
@@ -2529,6 +3847,10 @@ class ToolsMixin:
                     wx.CallAfter(self._finish_thinking)
                     return
 
+                # Flag the motorway/tunnel stretches so we can drop food you
+                # can't pull off to reach (keyless Overpass; safe to fail).
+                motorway_flags = self._route_motorway_segments(points, s, w, n, e)
+
                 # -- corridor filter + along-route distance ----------------
                 places = []
                 seen   = set()
@@ -2557,6 +3879,7 @@ class ToolsMixin:
                     min_cross = float("inf")
                     along_at_min = 0.0
                     cumulative = 0.0
+                    best_i = -1
 
                     for i in range(len(points) - 1):
                         alat, alon = points[i]
@@ -2568,9 +3891,14 @@ class ToolsMixin:
                             min_cross    = cross
                             along_at_min = cumulative + _haversine_m(
                                 alat, alon, plat, plon)
+                            best_i = i
                         cumulative += _haversine_m(alat, alon, blat, blon)
 
                     if min_cross > CORRIDOR_M:
+                        continue
+                    # Nearest the route on a motorway/tunnel here — unreachable
+                    # without leaving the route, so drop it.
+                    if 0 <= best_i < len(motorway_flags) and motorway_flags[best_i]:
                         continue
 
                     amenity = tags.get("amenity", tags.get("shop", ""))
@@ -2658,6 +3986,83 @@ class ToolsMixin:
                 wx.CallAfter(setattr, self, "_find_food_populating", False)
 
         threading.Thread(target=_search, daemon=True).start()
+
+    def _route_motorway_segments(self, points, s, w, n, e):
+        """Return one bool per route segment: True where the route runs on a
+        genuinely non-stoppable road — a motorway, a motorway ramp, a tunnel, or
+        a road tagged motorroad=yes — i.e. a stretch you can't pull off to reach
+        food.
+
+        Deliberately does NOT include `trunk`/`primary`: in cities those are
+        ordinary arterials (e.g. Old Cleveland Road) lined with shops you stop
+        at, so excluding them would wrongly wipe out the whole route.
+
+        Uses a single keyless Overpass query (works with or without a Google
+        key). On any failure it returns all-False, so Find Food simply degrades
+        to the plain corridor filter rather than breaking.
+        """
+        from geo import dist_to_segment_metres
+
+        flags = [False] * max(0, len(points) - 1)
+        if len(points) < 2:
+            return flags
+
+        try:
+            query = (
+                f"[out:json][timeout:40];\n"
+                f"(\n"
+                f'  way["highway"~"^(motorway|motorway_link)$"]'
+                f"({s:.6f},{w:.6f},{n:.6f},{e:.6f});\n"
+                f'  way["motorroad"="yes"]["highway"]'
+                f"({s:.6f},{w:.6f},{n:.6f},{e:.6f});\n"
+                f'  way["tunnel"="yes"]["highway"]'
+                f"({s:.6f},{w:.6f},{n:.6f},{e:.6f});\n"
+                f");\n"
+                f"out geom;"
+            ).encode()
+            from core import _overpass
+            result = _overpass.poi_request(query, timeout=45)
+        except Exception as exc:
+            print(f"[FindFood] motorway classification query failed: {exc}")
+            return flags
+
+        if not result or not result.get("elements"):
+            return flags
+
+        # Flatten the major-road ways into individual segments.
+        road_segs = []
+        for el in result["elements"]:
+            geom = el.get("geometry") or []
+            for i in range(len(geom) - 1):
+                a, b = geom[i], geom[i + 1]
+                road_segs.append((a["lat"], a["lon"], b["lat"], b["lon"]))
+        if not road_segs:
+            return flags
+
+        THRESHOLD_M = 25.0   # how tightly a route point must hug a major road
+        PAD_DEG     = 0.0006 # ~66 m coarse reject before the exact distance calc
+
+        # A route vertex is "on a motorway" when it hugs any major-road segment.
+        on_motorway = []
+        for plat, plon in points:
+            near = False
+            for (alat, alon, blat, blon) in road_segs:
+                if (min(alat, blat) - plat > PAD_DEG
+                        or plat - max(alat, blat) > PAD_DEG
+                        or min(alon, blon) - plon > PAD_DEG
+                        or plon - max(alon, blon) > PAD_DEG):
+                    continue
+                if dist_to_segment_metres(plat, plon, alat, alon,
+                                          blat, blon) <= THRESHOLD_M:
+                    near = True
+                    break
+            on_motorway.append(near)
+
+        # A segment counts as motorway only when both endpoints hug one, so a
+        # single point near a crossing road doesn't wrongly exclude a stretch.
+        for i in range(len(points) - 1):
+            flags[i] = on_motorway[i] and on_motorway[i + 1]
+        return flags
 
     def _tool_find_food_transit_line(self, active_route: dict) -> None:
         """Ctrl+Alt+F while browsing a GTFS stop sequence.
@@ -2811,304 +4216,10 @@ class ToolsMixin:
 
         threading.Thread(target=_search, daemon=True).start()
 
-    def _tool_find_food_near_city(self, city_label: str, announce_start=True):
-        """Find food near the currently focused city/map position."""
-        from geo import dist_metres
-
-        radius_m = 3500
-        centre_lat = float(self.lat)
-        centre_lon = float(self.lon)
-        self._find_food_populating = True
-        if announce_start:
-            self._status_update(f"Finding food in {city_label}…")
-
-        def _visible_and_accessible_status(msg, delay_ms=150):
-            self.update_ui(msg)
-            wx.CallLater(delay_ms, self._status_update, msg, True)
-
-        def _search():
-            try:
-                query = (
-                    f"[out:json][timeout:40];\n"
-                    f"(\n"
-                    f'  nwr["amenity"~"cafe|restaurant|bar|fast_food|pub|food_court|ice_cream"]'
-                    f"(around:{radius_m},{centre_lat:.6f},{centre_lon:.6f});\n"
-                    f'  nwr["shop"~"bakery|butcher"]'
-                    f"(around:{radius_m},{centre_lat:.6f},{centre_lon:.6f});\n"
-                    f");\n"
-                    f"out center tags;"
-                ).encode()
-
-                from core import _overpass
-                result = _overpass.poi_request(query, timeout=45)
-                if not result or not result.get("elements"):
-                    msg = f"No food places found in {city_label}."
-                    wx.CallAfter(_visible_and_accessible_status, msg)
-                    wx.CallAfter(self._resume_location_sound)
-                    return
-
-                places = []
-                seen = set()
-                for el in result["elements"]:
-                    tags = el.get("tags", {})
-                    name = tags.get("name", "").strip()
-                    if not name:
-                        continue
-                    if "lat" in el and "lon" in el:
-                        plat, plon = el["lat"], el["lon"]
-                    elif "center" in el:
-                        plat = el["center"]["lat"]
-                        plon = el["center"]["lon"]
-                    else:
-                        continue
-
-                    dedup = f"{name.lower()}|{round(plat,4)}|{round(plon,4)}"
-                    if dedup in seen:
-                        continue
-                    seen.add(dedup)
-
-                    amenity = tags.get("amenity", tags.get("shop", ""))
-                    kind_map = {
-                        "cafe": "café", "restaurant": "restaurant",
-                        "fast_food": "fast food", "bar": "bar",
-                        "pub": "pub", "food_court": "food court",
-                        "ice_cream": "ice cream", "bakery": "bakery",
-                        "butcher": "butcher",
-                    }
-                    kind = kind_map.get(amenity, amenity)
-                    address = tags.get("addr:full", "").strip()
-                    if not address:
-                        address_parts = []
-                        house_number = tags.get("addr:housenumber", "").strip()
-                        street = tags.get("addr:street", "").strip()
-                        if house_number or street:
-                            address_parts.append(" ".join(
-                                p for p in [house_number, street] if p))
-                        for key in ("addr:suburb", "addr:city", "addr:postcode"):
-                            value = tags.get(key, "").strip()
-                            if value and value not in address_parts:
-                                address_parts.append(value)
-                        address = ", ".join(address_parts)
-                    if not address:
-                        best_addr = None
-                        best_addr_d = float("inf")
-                        for ap in getattr(self, "_address_points", []):
-                            try:
-                                d = dist_metres(plat, plon, ap["lat"], ap["lon"])
-                            except Exception:
-                                continue
-                            if d < best_addr_d and d < 80:
-                                best_addr = ap
-                                best_addr_d = d
-                        if best_addr:
-                            address = f"{best_addr['number']} {best_addr['street']}"
-                    suburb = ""
-                    for key in ("addr:suburb", "addr:city", "addr:town", "addr:village"):
-                        value = tags.get(key, "").strip()
-                        if value:
-                            suburb = value
-                            break
-                    if not suburb:
-                        suburb = (getattr(self, "last_city_found", "") or "").strip()
-                    if suburb and suburb.lower() != "nan" and suburb not in address:
-                        address = f"{address}, {suburb}" if address else suburb
-
-                    distance = dist_metres(centre_lat, centre_lon, plat, plon)
-                    places.append({
-                        "name": name,
-                        "lat": plat,
-                        "lon": plon,
-                        "kind": kind,
-                        "address": address,
-                        "phone": (
-                            tags.get("phone", "").strip() or
-                            tags.get("contact:phone", "").strip()
-                        ),
-                        "website": (
-                            tags.get("website", "").strip() or
-                            tags.get("contact:website", "").strip() or
-                            tags.get("url", "").strip()
-                        ),
-                        "opening_hours": tags.get("opening_hours", "").strip(),
-                        "along_m": distance,
-                        "distance_label": "from centre",
-                        "cross_street": "",
-                    })
-
-                if not places:
-                    msg = f"No named food places found in {city_label}."
-                    wx.CallAfter(_visible_and_accessible_status, msg)
-                    wx.CallAfter(self._resume_location_sound)
-                    return
-
-                places.sort(key=lambda p: p["along_m"])
-                msg = (
-                    f"Found {len(places)} food place"
-                    f"{'s' if len(places) != 1 else ''} in {city_label}."
-                )
-                wx.CallAfter(_visible_and_accessible_status, msg)
-                wx.CallAfter(lambda: wx.CallLater(650, self._show_find_food_results, places))
-            except Exception as exc:
-                msg = f"Find Food failed: {exc}"
-                wx.CallAfter(_visible_and_accessible_status, msg)
-                wx.CallAfter(self._resume_location_sound)
-            finally:
-                wx.CallAfter(setattr, self, "_find_food_populating", False)
-
-        threading.Thread(target=_search, daemon=True).start()
-
-    def _tool_find_accommodation_near_city(self, city_label: str, announce_start=True):
-        """Find accommodation near the currently focused city/map position."""
-        from geo import dist_metres
-
-        radius_m = 3500
-        centre_lat = float(self.lat)
-        centre_lon = float(self.lon)
-        self._find_food_populating = True
-        if announce_start:
-            self._status_update(f"Finding accommodation in {city_label}...")
-
-        def _visible_and_accessible_status(msg, delay_ms=150):
-            self.update_ui(msg)
-            wx.CallLater(delay_ms, self._status_update, msg, True)
-
-        def _search():
-            try:
-                query = (
-                    f"[out:json][timeout:40];\n"
-                    f"(\n"
-                    f'  nwr["tourism"~"hotel|motel|guest_house|hostel|apartment|chalet|camp_site|caravan_site"]'
-                    f"(around:{radius_m},{centre_lat:.6f},{centre_lon:.6f});\n"
-                    f");\n"
-                    f"out center tags;"
-                ).encode()
-
-                from core import _overpass
-                result = _overpass.poi_request(query, timeout=45)
-                if not result or not result.get("elements"):
-                    msg = f"No accommodation found in {city_label}."
-                    wx.CallAfter(_visible_and_accessible_status, msg)
-                    wx.CallAfter(self._resume_location_sound)
-                    return
-
-                places = []
-                seen = set()
-                kind_map = {
-                    "hotel": "hotel",
-                    "motel": "motel",
-                    "guest_house": "guest house",
-                    "hostel": "hostel",
-                    "apartment": "apartment",
-                    "chalet": "chalet",
-                    "camp_site": "camp site",
-                    "caravan_site": "caravan site",
-                }
-
-                for el in result["elements"]:
-                    tags = el.get("tags", {})
-                    name = tags.get("name", "").strip()
-                    if not name:
-                        continue
-                    if "lat" in el and "lon" in el:
-                        plat, plon = el["lat"], el["lon"]
-                    elif "center" in el:
-                        plat = el["center"]["lat"]
-                        plon = el["center"]["lon"]
-                    else:
-                        continue
-
-                    dedup = f"{name.lower()}|{round(plat,4)}|{round(plon,4)}"
-                    if dedup in seen:
-                        continue
-                    seen.add(dedup)
-
-                    tourism = tags.get("tourism", "")
-                    kind = kind_map.get(tourism, tourism or "accommodation")
-                    address = tags.get("addr:full", "").strip()
-                    if not address:
-                        address_parts = []
-                        house_number = tags.get("addr:housenumber", "").strip()
-                        street = tags.get("addr:street", "").strip()
-                        if house_number or street:
-                            address_parts.append(" ".join(
-                                p for p in [house_number, street] if p))
-                        for key in ("addr:suburb", "addr:city", "addr:postcode"):
-                            value = tags.get(key, "").strip()
-                            if value and value not in address_parts:
-                                address_parts.append(value)
-                        address = ", ".join(address_parts)
-                    if not address:
-                        best_addr = None
-                        best_addr_d = float("inf")
-                        for ap in getattr(self, "_address_points", []):
-                            try:
-                                d = dist_metres(plat, plon, ap["lat"], ap["lon"])
-                            except Exception:
-                                continue
-                            if d < best_addr_d and d < 80:
-                                best_addr = ap
-                                best_addr_d = d
-                        if best_addr:
-                            address = f"{best_addr['number']} {best_addr['street']}"
-                    suburb = ""
-                    for key in ("addr:suburb", "addr:city", "addr:town", "addr:village"):
-                        value = tags.get(key, "").strip()
-                        if value:
-                            suburb = value
-                            break
-                    if not suburb:
-                        suburb = (getattr(self, "last_city_found", "") or "").strip()
-                    if suburb and suburb.lower() != "nan" and suburb not in address:
-                        address = f"{address}, {suburb}" if address else suburb
-
-                    distance = dist_metres(centre_lat, centre_lon, plat, plon)
-                    places.append({
-                        "name": name,
-                        "lat": plat,
-                        "lon": plon,
-                        "kind": kind,
-                        "address": address,
-                        "phone": (
-                            tags.get("phone", "").strip() or
-                            tags.get("contact:phone", "").strip()
-                        ),
-                        "website": (
-                            tags.get("website", "").strip() or
-                            tags.get("contact:website", "").strip() or
-                            tags.get("url", "").strip()
-                        ),
-                        "opening_hours": tags.get("opening_hours", "").strip(),
-                        "along_m": distance,
-                        "distance_label": "from centre",
-                        "cross_street": "",
-                    })
-
-                if not places:
-                    msg = f"No named accommodation found in {city_label}."
-                    wx.CallAfter(_visible_and_accessible_status, msg)
-                    wx.CallAfter(self._resume_location_sound)
-                    return
-
-                places.sort(key=lambda p: p["along_m"])
-                msg = (
-                    f"Found {len(places)} accommodation place"
-                    f"{'s' if len(places) != 1 else ''} in {city_label}."
-                )
-                wx.CallAfter(_visible_and_accessible_status, msg)
-                wx.CallAfter(lambda: wx.CallLater(
-                    650, self._show_find_food_results, places, "Accommodation"))
-            except Exception as exc:
-                msg = f"Accommodation search failed: {exc}"
-                wx.CallAfter(_visible_and_accessible_status, msg)
-                wx.CallAfter(self._resume_location_sound)
-            finally:
-                wx.CallAfter(setattr, self, "_find_food_populating", False)
-
-        threading.Thread(target=_search, daemon=True).start()
-
     def _show_find_food_results(self, places: list, title="Find Food"):
         """Show the FindFoodDialog with results."""
         self._finish_thinking()
+        self._begin_tools_workflow()
         from dialogs import FindFoodDialog
         from core import _load_suppressed, _is_suppressed
 
@@ -3146,6 +4257,13 @@ class ToolsMixin:
 
         route_destination = getattr(self, "_find_food_destination", None) or getattr(self, "_map_destination", None)
         dlg = FindFoodDialog(self, places, _detail_cb, title=title, route_destination=route_destination)
-        dlg.ShowModal()
-        dlg.Destroy()
-        self.listbox.SetFocus()
+        try:
+            dlg.ShowModal()
+        finally:
+            dlg.Destroy()
+            self._end_tools_workflow()
+            focus_map = getattr(self, "_focus_map_window_silently", None)
+            if callable(focus_map):
+                wx.CallAfter(focus_map)
+            else:
+                wx.CallAfter(self.listbox.SetFocus)

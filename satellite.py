@@ -1,6 +1,6 @@
 """satellite.py — Google Maps satellite imagery lookup with vision analysis.
 
-Fetches satellite/aerial imagery at a given coordinate and uses Gemini 2.5 Flash Lite
+Fetches satellite/aerial imagery at a given coordinate and uses Mistral
 to provide a rich, detailed description of the landscape suitable for accessibility.
 """
 
@@ -70,7 +70,7 @@ def lookup_satellite_description(
     lon: float,
     zoom: int = 15,
     google_api_key: str = "",
-    gemini_client = None,
+    mistral_client = None,
     cache_path: str = "satellite_cache.json"
 ) -> Optional[Tuple[bytes, str]]:
     """Fetch satellite image and return image bytes + description.
@@ -80,7 +80,7 @@ def lookup_satellite_description(
         lon: Longitude
         zoom: Zoom level (default 15 for city/neighborhood scale)
         google_api_key: Google Maps API key
-        gemini_client: GeminiClient instance for vision analysis
+        mistral_client: MistralClient instance for vision analysis
         cache_path: Path to cache file
 
     Returns:
@@ -101,23 +101,32 @@ def lookup_satellite_description(
     if not image_bytes:
         return None
 
+    mistral_ready = bool(mistral_client and getattr(mistral_client, "is_configured", False))
+
     # If description is cached, return cached + fresh image
     if cached_desc:
         return (image_bytes, cached_desc)
 
-    if not gemini_client:
+    if not mistral_ready:
         return (
             image_bytes,
-            "Satellite imagery loaded. A Gemini API key is required to fetch a visual description.",
+            "Satellite imagery loaded. A Mistral API key is required to fetch a visual description.",
         )
 
-    # Get description from Gemini
-    description = gemini_client.describe_satellite_image(image_bytes, cache_key)
+    # Get description from Mistral
+    try:
+        description = mistral_client.describe_satellite_image(image_bytes, cache_key)
+    except Exception as exc:
+        print(f"[Satellite] Mistral description failed: {exc}")
+        description = ""
     if not description:
-        return None
+        description = (
+            "Satellite imagery loaded, but Mistral could not generate a description right now."
+        )
 
     # Save description to cache
-    _set_cached(cache, cache_key, description)
-    _save_cache(cache_path, cache)
+    if description and "Mistral could not generate a description" not in description:
+        _set_cached(cache, cache_key, description)
+        _save_cache(cache_path, cache)
 
     return (image_bytes, description)

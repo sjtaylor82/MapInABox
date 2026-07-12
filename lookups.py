@@ -854,7 +854,6 @@ class LookupsMixin:
     def _do_nearest_land_jump(self, lat, lon, msg, found_country=""):
         """Complete the nearest-country jump on the main thread."""
         self._nearest_land_searching = False
-        self._suppress_next_location = True
         self._forced_country_name = found_country
         self._forced_country_lat = lat
         self._forced_country_lon = lon
@@ -947,7 +946,7 @@ class LookupsMixin:
         threading.Thread(target=_fetch, daemon=True).start()
 
     def _announce_currency(self):
-        """$ key — currency of current country."""
+        """$ key — currency of current country. Looks up currency_data.json (static file)."""
         country = getattr(self, 'last_country_found', '')
         if not country or country == 'Open Water':
             self._status_update("No country to look up.", force=True)
@@ -957,33 +956,37 @@ class LookupsMixin:
         if country in self._currency_cache:
             self._status_update(self._currency_cache[country], force=True)
             return
-        self._status_update(f"Looking up currency for {country}...")
-        def _fetch():
+
+        if not hasattr(self, '_currency_table'):
+            import sys
+            base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+            path = os.path.join(base, 'currency_data.json')
             try:
-                COUNTRY_ALIASES = self._country_aliases()
-                query = urllib.parse.quote(COUNTRY_ALIASES.get(country, country))
-                url   = f"https://restcountries.com/v3.1/name/{query}?fields=currencies,name"
-                req   = urllib.request.Request(url, headers={"User-Agent": "MapInABox/1.0"})
-                with urllib.request.urlopen(req, timeout=10) as r:
-                    data = json.loads(r.read().decode())
-                if not data or not isinstance(data, list):
-                    wx.CallAfter(self._status_update, f"No currency data found for {country}.", True)
-                    return
-                currencies = data[0].get("currencies", {})
-                if not currencies:
-                    wx.CallAfter(self._status_update, f"No currency data found for {country}.", True)
-                    return
-                parts = []
-                for code, info in currencies.items():
-                    name   = info.get("name", code)
-                    symbol = info.get("symbol", "")
-                    parts.append(f"{name}{f' ({symbol})' if symbol else ''}, code {code}")
-                msg = f"Currency: {'.  '.join(parts)}."
-                self._currency_cache[country] = msg
-                wx.CallAfter(self._status_update, msg, True)
+                with open(path, encoding='utf-8') as f:
+                    self._currency_table = json.load(f)
             except Exception as exc:
-                wx.CallAfter(self._status_update, f"Could not fetch currency: {exc}", True)
-        threading.Thread(target=_fetch, daemon=True).start()
+                self._status_update(f"Could not load currency data: {exc}", force=True)
+                return
+
+        entry = self._currency_table.get(country)
+        if not entry:
+            lower = country.lower()
+            entry = next(
+                (v for k, v in self._currency_table.items() if k.lower() == lower),
+                None,
+            )
+
+        if not entry:
+            self._status_update(f"No currency data found for {country}.", force=True)
+            return
+
+        name   = entry.get("name") or entry.get("code", "")
+        symbol = entry.get("symbol", "")
+        code   = entry.get("code", "")
+        label  = f"{name} ({symbol}), code {code}" if symbol else f"{name}, code {code}"
+        msg    = f"Currency: {label}."
+        self._currency_cache[country] = msg
+        self._status_update(msg, force=True)
 
     # ------------------------------------------------------------------
     # Helper — avoids circular import by accessing COUNTRY_ALIASES lazily

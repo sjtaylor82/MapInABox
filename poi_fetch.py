@@ -59,7 +59,7 @@ POI_KIND_EXCLUDE: frozenset = frozenset({
 UNNAMED_OK_KINDS: frozenset = frozenset({
     "mall", "shopping centre", "department store", "supermarket",
     "marketplace", "hospital", "university", "school", "college",
-    "airport", "station", "bus station", "ferry terminal",
+    "airport", "airport terminal", "gate", "station", "bus station", "ferry terminal",
     "park", "garden", "sports centre", "stadium", "museum",
     "theatre", "arts centre", "conference centre", "events venue", "gallery",
     "library", "cinema", "community centre", "place of worship",
@@ -74,7 +74,7 @@ EXPLORABLE_KINDS: frozenset = frozenset({
     # Transit — major nodes only (bus stops handled separately via GTFS)
     "station", "bus station", "ferry terminal",
     # Airport
-    "airport",
+    "airport", "airport terminal",
     # Major venues
     "theatre", "arts centre", "conference centre", "events venue", "stadium",
 })
@@ -87,12 +87,248 @@ SHOPPING_PRIORITY: dict[str, int] = {
     "marketplace": 4,
 }
 
+_MANUAL_SHOPPING_CENTRES: list[dict[str, str]] = [
+    {
+        "name": "Cannon Central Shopping Centre",
+        "address": "1145 Wynnum Road, Cannon Hill QLD 4170, Australia",
+        "kind": "mall",
+    },
+]
+
+_MANUAL_SHOPPING_GEOCODE_CACHE: dict[str, tuple[float, float] | None] = {}
+
+
+def _normalise_lookup_text(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
+
+
+def _forward_geocode_address(address: str) -> tuple[float, float] | None:
+    """Best-effort forward geocode for manual shopping-centre fallbacks."""
+    address = (address or "").strip()
+    if not address:
+        return None
+
+    cache_key = _normalise_lookup_text(address)
+    if cache_key in _MANUAL_SHOPPING_GEOCODE_CACHE:
+        return _MANUAL_SHOPPING_GEOCODE_CACHE[cache_key]
+
+    params = {
+        "format": "jsonv2",
+        "limit": 1,
+        "q": address,
+        "countrycodes": "au",
+    }
+    url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers={"User-Agent": "MapInABox/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception as exc:
+        print(f"[POI] Manual shopping geocode failed for {address!r}: {exc}")
+        _MANUAL_SHOPPING_GEOCODE_CACHE[cache_key] = None
+        return None
+
+    if not data:
+        _MANUAL_SHOPPING_GEOCODE_CACHE[cache_key] = None
+        return None
+
+    item = data[0]
+    try:
+        lat = float(item.get("lat", 0))
+        lon = float(item.get("lon", 0))
+    except (TypeError, ValueError):
+        _MANUAL_SHOPPING_GEOCODE_CACHE[cache_key] = None
+        return None
+    if not lat and not lon:
+        _MANUAL_SHOPPING_GEOCODE_CACHE[cache_key] = None
+        return None
+
+    coords = (lat, lon)
+    _MANUAL_SHOPPING_GEOCODE_CACHE[cache_key] = coords
+    return coords
+
+
+def _inject_manual_shopping_centres(
+    pois: list[dict],
+    lat: float,
+    lon: float,
+    radius: int,
+) -> None:
+    """Add canonical shopping-centre fallbacks when Overpass misses them."""
+    existing = set()
+    for poi in pois:
+        label = (poi.get("label") or poi.get("name") or "").split(",")[0].strip()
+        if label:
+            existing.add(_normalise_lookup_text(label))
+
+    for centre in _MANUAL_SHOPPING_CENTRES:
+        name = centre["name"].strip()
+        if _normalise_lookup_text(name) in existing:
+            continue
+
+        centre_latlon = _forward_geocode_address(centre["address"])
+        if not centre_latlon:
+            continue
+
+        centre_lat, centre_lon = centre_latlon
+        dist_m = int(dist_metres(lat, lon, centre_lat, centre_lon))
+        if dist_m > radius:
+            continue
+
+        bearing = compass_name(bearing_deg(lat, lon, centre_lat, centre_lon))
+        kind = centre.get("kind", "mall").lower()
+        label = (
+            f"{name}, {kind}, {centre['address']}, {dist_m} metres {bearing}"
+            "  Explorable."
+        )
+        pois.append({
+            "label": label,
+            "lat": centre_lat,
+            "lon": centre_lon,
+            "dist": dist_m,
+            "addr": centre["address"],
+            "street": "Wynnum Road",
+            "number": "1145",
+            "osm_type": "relation",
+            "osm_id": 0,
+            "explorable": True,
+            "kind": kind,
+            "tags": {
+                "name": name,
+                "addr:full": centre["address"],
+                "source": "manual",
+            },
+        })
+
+# POIs that are reasonable menu lookup targets.
+# We keep this narrower than the broad "food" category because supermarkets,
+# convenience stores and similar places often do not have a meaningful menu.
+MENU_ELIGIBLE_KINDS: frozenset = frozenset({
+    "restaurant", "cafe", "bakery", "fast food", "bar", "pub",
+    "food court", "ice cream", "takeaway", "deli", "food",
+})
+
+# ---------------------------------------------------------------------------
+# Airport amenity (indoor OSM) constants
+# ---------------------------------------------------------------------------
+
+# OSM amenity tag values worth surfacing inside an airport, grouped so the
+# focus filter can build a lean Overpass query.
+_AIRPORT_FOOD_AMENITY = "cafe|restaurant|fast_food|bar|pub|food_court|ice_cream|biergarten"
+_AIRPORT_FOOD_SHOP = "bakery|confectionery|chocolate|pastry|deli|coffee|tea|greengrocer|farm"
+_AIRPORT_FACILITY_AMENITY = (
+    "pharmacy|atm|bank|bureau_de_change|money_transfer|toilets|drinking_water|"
+    "water_point|charging_station|baby_hatch|nursery|childcare|first_aid|lounge|"
+    "left_luggage|luggage_locker|post_office|car_rental|telephone|shower|"
+    "prayer_room|place_of_worship|clinic|doctors|cinema"
+)
+_AIRPORT_ACCESS_AMENITY = "toilets|first_aid|nursery|baby_hatch|childcare|lounge"
+
+# Generic labels for unnamed facilities that are still useful to a traveller.
+_AIRPORT_UNNAMED_LABEL: dict[str, str] = {
+    "toilets": "Toilets",
+    "water": "Drinking water",
+    "charging": "Charging point",
+    "atm": "ATM",
+    "currency": "Currency exchange",
+    "parents room": "Parents room",
+    "lounge": "Lounge",
+}
+
+
+def _airport_category(tags: dict) -> str:
+    """Map OSM tags on an airport POI to one of our amenity categories."""
+    shop = str(tags.get("shop", "") or "").lower()
+    amenity = str(tags.get("amenity", "") or "").lower()
+    if shop:
+        if shop == "duty_free":
+            return "duty free"
+        if shop in ("chemist", "pharmacy"):
+            return "pharmacy"
+        if shop in ("bakery", "confectionery", "chocolate", "pastry",
+                    "deli", "coffee", "tea", "greengrocer", "farm"):
+            return "food"
+        if shop == "travel_agency":
+            return "service"
+        return "shop"
+    if amenity:
+        if amenity in ("cafe", "ice_cream"):
+            return "coffee"
+        if amenity in ("fast_food", "food_court"):
+            return "fast food"
+        if amenity == "restaurant":
+            return "restaurant"
+        if amenity in ("bar", "pub", "biergarten"):
+            return "bar"
+        if amenity == "pharmacy":
+            return "pharmacy"
+        if amenity == "atm":
+            return "atm"
+        if amenity == "bank":
+            return "bank"
+        if amenity in ("bureau_de_change", "money_transfer"):
+            return "currency"
+        if amenity == "toilets":
+            return "toilets"
+        if amenity in ("drinking_water", "water_point"):
+            return "water"
+        if amenity == "charging_station":
+            return "charging"
+        if amenity in ("baby_hatch", "nursery", "childcare"):
+            return "parents room"
+        if amenity == "lounge":
+            return "lounge"
+        if amenity in ("first_aid", "clinic", "doctors", "left_luggage",
+                       "luggage_locker", "post_office", "car_rental",
+                       "telephone", "shower", "prayer_room", "place_of_worship"):
+            return "service"
+        if amenity == "cinema":
+            return "amenity"
+        return amenity.replace("_", " ")
+    if tags.get("healthcare"):
+        return "service"
+    if str(tags.get("tourism", "")).lower() == "information":
+        return "service"
+    return "amenity"
+
+
+def _airport_level(tags: dict) -> str:
+    """Return a spoken level string from OSM level/floor tags, or ''."""
+    raw = str(tags.get("level") or tags.get("addr:floor") or "").strip()
+    if not raw:
+        return ""
+    parts = [p.strip() for p in re.split(r"[;,]", raw) if p.strip()]
+    if not parts:
+        return ""
+    return "Level " + "/".join(parts[:3])
+
+
+def _airport_hours(tags: dict) -> str:
+    raw = str(tags.get("opening_hours", "") or "").strip()
+    if not raw:
+        return ""
+    if raw.lower() in ("24/7", "24 / 7"):
+        return "24 hours, 7 days"
+    return raw[:120]
+
+
+def _airport_terminal_label(tags: dict) -> str:
+    name = str(tags.get("name", "") or "").strip()
+    if name:
+        return name[:80]
+    ref = str(tags.get("ref", "") or "").strip()
+    if ref:
+        return f"Terminal {ref}"[:80]
+    return ""
+
+
 # Overpass query fragments per category.
 # {lat}, {lon}, {radius} are filled at call time.
 _CATEGORY_QUERIES: dict[str, list[str]] = {
     "all": [
-        'nwr["amenity"~"cafe|restaurant|bar|pharmacy|hospital|school|library|bus_station|toilets|atm|bank|supermarket|fast_food|community_centre|cinema|theatre|arts_centre|conference_centre|events_venue|place_of_worship|marketplace|ferry_terminal|post_office|dentist|doctors|veterinary|fuel"](around:{radius},{lat},{lon});',
+        'nwr["amenity"~"cafe|restaurant|bar|pub|pharmacy|hospital|school|library|bus_station|toilets|atm|bank|supermarket|fast_food|community_centre|cinema|theatre|arts_centre|conference_centre|events_venue|place_of_worship|marketplace|ferry_terminal|post_office|dentist|doctors|veterinary|fuel"](around:{radius},{lat},{lon});',
         'nwr["railway"~"station|halt|tram_stop"](around:{radius},{lat},{lon});',
+        'nwr["aeroway"~"aerodrome|terminal"](around:{radius},{lat},{lon});',
         'node["public_transport"="station"]["train"="yes"](around:{radius},{lat},{lon});',
         'nwr["leisure"~"park|playground|sports_centre|garden|fitness_centre|shopping_centre|stadium|theme_park"](around:{radius},{lat},{lon});',
         'nwr["tourism"~"attraction|museum|hotel|information|viewpoint|gallery|zoo|theme_park"](around:{radius},{lat},{lon});',
@@ -115,6 +351,7 @@ _CATEGORY_QUERIES: dict[str, list[str]] = {
         'node["highway"~"bus_stop"](around:{radius},{lat},{lon});',
         'nwr["amenity"~"bus_station|ferry_terminal"](around:{radius},{lat},{lon});',
         'nwr["railway"~"station|halt|tram_stop"](around:{radius},{lat},{lon});',
+        'nwr["aeroway"~"aerodrome|terminal"](around:{radius},{lat},{lon});',
     ],
     "trains": [
         'nwr["railway"~"station|halt"](around:{radius},{lat},{lon});',
@@ -204,7 +441,8 @@ _KIND_TO_CATEGORY: dict[str, str] = {
     "transit station": "transport", "bus stop": "transport", "bus station": "transport",
     "ferry terminal": "transport", "tram stop": "transport",
     "stop position": "transport", "platform": "transport",
-    "transport": "transport", "airport": "transport",
+    "transport": "transport", "airport": "transport", "airport terminal": "transport",
+    "gate": "transport",
     # trains (subset of transport — larger stations with GTFS data)
     "station": "trains", "halt": "trains",
 }
@@ -641,8 +879,33 @@ def filter_pois_by_category(pois: list, category: str) -> list:
     return result
 
 
+def is_menu_eligible_poi(poi: dict) -> bool:
+    """Return True when *poi* is suitable for menu lookup."""
+    if not isinstance(poi, dict):
+        return False
+
+    kind = str(poi.get("kind", "") or "").strip().lower()
+    if not kind:
+        tags = poi.get("tags") or {}
+        if isinstance(tags, dict):
+            kind = str(
+                tags.get("amenity")
+                or tags.get("shop")
+                or tags.get("tourism")
+                or ""
+            ).replace("_", " ").strip().lower()
+
+    if not kind:
+        return False
+
+    for token in re.split(r"[;,/]+", kind):
+        if token.strip() in MENU_ELIGIBLE_KINDS:
+            return True
+    return False
+
+
 # Cache helpers
-_POI_CACHE_VERSION = 3
+_POI_CACHE_VERSION = 5
 _POI_CACHE_MAX_AGE_DAYS = 30
 
 
@@ -713,8 +976,15 @@ def _parse_element(el: dict, lat: float, lon: float,
             tags.get("leisure") or tags.get("tourism") or
             tags.get("shop") or tags.get("historic") or
             tags.get("public_transport") or tags.get("natural") or
-            tags.get("man_made") or tags.get("highway") or "")
+            tags.get("aeroway") or tags.get("man_made") or tags.get("highway") or "")
     kind = kind.replace("_", " ")
+    aeroway = str(tags.get("aeroway", "") or "").strip().lower()
+    if aeroway in {"aerodrome", "airport"}:
+        kind = "airport"
+    elif aeroway == "terminal":
+        kind = "airport terminal"
+    elif aeroway == "gate":
+        kind = "gate"
 
     if kind.lower() in POI_KIND_EXCLUDE:
         return None
@@ -727,6 +997,10 @@ def _parse_element(el: dict, lat: float, lon: float,
         # Only keep inferred name for venue-type kinds
         if name and kind.lower() not in UNNAMED_OK_KINDS:
             name = ""
+    if not name and kind.lower() == "gate" and tags.get("ref"):
+        name = f"Gate {tags.get('ref')}"
+    if not name and kind.lower() == "airport terminal" and tags.get("ref"):
+        name = f"Terminal {tags.get('ref')}"
 
     if not name and not kind:
         return None
@@ -761,7 +1035,10 @@ def _parse_element(el: dict, lat: float, lon: float,
         if best_addr:
             address = f"{best_addr['number']} {best_addr['street']}"
 
-    explorable = osm_type in ("way", "relation") and kind.lower() in EXPLORABLE_KINDS
+    explorable = (
+        kind.lower() in EXPLORABLE_KINDS
+        and (osm_type in ("way", "relation") or kind.lower() in {"airport", "airport terminal"})
+    )
     lead  = name if name else kind.title()
     label = (
         f"{lead}, {kind}"
@@ -775,6 +1052,7 @@ def _parse_element(el: dict, lat: float, lon: float,
         "lat":      elat,
         "lon":      elon,
         "dist":     dist_m,
+        "address":  address,
         "addr":     address,
         "street":   tags.get("addr:street", ""),
         "number":   tags.get("addr:housenumber", ""),
@@ -801,8 +1079,16 @@ def _parse_background_element(el: dict, lat: float, lon: float,
 
     kind = (tags.get("amenity") or tags.get("shop") or
             tags.get("railway") or tags.get("leisure") or
-            tags.get("tourism") or tags.get("public_transport") or "")
+            tags.get("tourism") or tags.get("public_transport") or
+            tags.get("aeroway") or "")
     kind = kind.replace("_", " ")
+    aeroway = str(tags.get("aeroway", "") or "").strip().lower()
+    if aeroway in {"aerodrome", "airport"}:
+        kind = "airport"
+    elif aeroway == "terminal":
+        kind = "airport terminal"
+    elif aeroway == "gate":
+        kind = "gate"
 
     if kind.lower() in POI_KIND_EXCLUDE:
         return None
@@ -811,6 +1097,10 @@ def _parse_background_element(el: dict, lat: float, lon: float,
     if not name:
         name = (tags.get("brand") or tags.get("operator") or
                 tags.get("official_name") or "")
+    if not name and kind.lower() == "gate" and tags.get("ref"):
+        name = f"Gate {tags.get('ref')}"
+    if not name and kind.lower() == "airport terminal" and tags.get("ref"):
+        name = f"Terminal {tags.get('ref')}"
     if not name and not kind:
         return None
     if not name and kind.lower() not in UNNAMED_OK_KINDS:
@@ -1211,6 +1501,9 @@ class PoiFetcher:
             pois.append(poi)
 
         if category == "shopping":
+            _inject_manual_shopping_centres(pois, lat, lon, radius)
+
+        if category == "shopping":
             pois.sort(key=lambda x: (SHOPPING_PRIORITY.get(x.get("kind", ""), 50),
                                       x["dist"]))
         else:
@@ -1265,6 +1558,7 @@ class PoiFetcher:
                 _clause('["highway"="bus_stop"]'),
                 _clause('["amenity"~"bus_station|ferry_terminal"]'),
                 _clause('["railway"~"station|halt|tram_stop"]'),
+                _clause('["aeroway"~"aerodrome|terminal"]'),
             ],
             "trains": [
                 _clause('["railway"~"station|halt"]'),
@@ -1329,6 +1623,11 @@ class PoiFetcher:
             seen_keys.add(dedup)
             pois.append(poi)
 
+        if category_key == "shopping":
+            query_key = _normalise_lookup_text(query_text)
+            if any(token in query_key for token in ("cannoncentral", "cannoncentralshoppingcentre")):
+                _inject_manual_shopping_centres(pois, lat, lon, radius)
+
         pois.sort(key=lambda x: x["dist"])
         print(f"[POI] OSM broad name search got {len(pois)} pois")
         return pois
@@ -1342,6 +1641,7 @@ class PoiFetcher:
         lat: float,
         lon: float,
         address_points: list | None = None,
+        force_refresh: bool = False,
     ) -> list:
         """Broad POI fetch used to populate self._all_pois for walk-announce.
 
@@ -1359,7 +1659,7 @@ class PoiFetcher:
         # so any position within the same suburb hits the same cache entry.
         cache     = _load_poi_cache(self._cache_path)
         cache_key = _cache_key(round(lat, 1), round(lon, 1), "all_background", radius, source)
-        cached    = _get_cached(cache, cache_key)
+        cached    = None if force_refresh else _get_cached(cache, cache_key)
         if cached is not None:
             print(f"[POI] Background cache hit — {len(cached)} places.")
             return cached
@@ -1396,28 +1696,29 @@ class PoiFetcher:
             return all_pois
 
         # ── OSM / Overpass path ──────────────────────────────────────────
-        query = (
-            f"[out:json][timeout:15];\n(\n"
-            f'  node["amenity"](around:{radius},{lat},{lon});\n'
-            f'  node["shop"](around:{radius},{lat},{lon});\n'
-            f'  node["leisure"](around:{radius},{lat},{lon});\n'
-            f'  node["tourism"](around:{radius},{lat},{lon});\n'
-            f'  way["amenity"](around:{radius},{lat},{lon});\n'
-            f'  way["shop"](around:{radius},{lat},{lon});\n'
-            f'  way["leisure"](around:{radius},{lat},{lon});\n'
-            f'  way["tourism"](around:{radius},{lat},{lon});\n'
-            f'  relation["amenity"~"mall|hospital|university|school|college"](around:{radius},{lat},{lon});\n'
-            f'  node["railway"~"station|halt|tram_stop"](around:{radius},{lat},{lon});\n'
-            f'  way["railway"~"station|halt|tram_stop"](around:{radius},{lat},{lon});\n'
-            f'  relation["railway"~"station|halt"](around:{radius},{lat},{lon});\n'
-            f'  node["public_transport"](around:{radius},{lat},{lon});\n'
-            f'  node["highway"~"bus_stop"](around:{radius},{lat},{lon});\n'
-            f'  nwr["amenity"~"bus_station|ferry_terminal"](around:{radius},{lat},{lon});\n'
-            f'  node["public_transport"="station"]["train"="yes"](around:{radius},{lat},{lon});\n'
-            ");\nout body center 300;\n"
-        )
-        data   = urllib.parse.urlencode({"data": query}).encode()
-        result = self._overpass.poi_request(data, timeout=15)
+        # Keep the automatic background request broad enough for useful
+        # ambient POIs, but not so broad that dense suburbs time out.
+        query_radii = [radius]
+        if radius > 1000:
+            query_radii.append(1000)
+        result = None
+        result_radius = radius
+        for query_radius in query_radii:
+            query_body = "\n  ".join(
+                q.format(lat=lat, lon=lon, radius=query_radius)
+                for q in _CATEGORY_QUERIES["all"]
+            )
+            query = (
+                f"[out:json][timeout:20];\n"
+                f"(\n  {query_body}\n);\n"
+                "out body center 800;\n"
+            )
+            print(f"[POI] Fetching all background radius={query_radius}m timeout=20s")
+            data = urllib.parse.urlencode({"data": query}).encode()
+            result = self._overpass.poi_request(data, timeout=22)
+            if result is not None:
+                result_radius = query_radius
+                break
         if not result:
             return []
 
@@ -1435,7 +1736,12 @@ class PoiFetcher:
             seen_keys.add(dedup)
             pois.append(poi)
 
-        print(f"[POI] Background fetch complete: {len(pois)} places.")
+        print(f"[POI] Background fetch complete: {len(pois)} places "
+              f"(radius={result_radius}m).")
+        # Cache regardless of which radius succeeded — previously this only
+        # cached when the full radius worked, so any area where the wider
+        # query times out (dense suburbs) never got cached at all and
+        # re-hit Overpass on every single street-mode entry.
         _set_cached(cache, cache_key, pois)
         _save_poi_cache(self._cache_path, cache)
         return pois
@@ -1592,6 +1898,7 @@ class PoiFetcher:
             f'  node["leisure"]({bmin_lat},{bmin_lon},{bmax_lat},{bmax_lon});\n'
             f'  node["healthcare"]({bmin_lat},{bmin_lon},{bmax_lat},{bmax_lon});\n'
             f'  node["office"]({bmin_lat},{bmin_lon},{bmax_lat},{bmax_lon});\n'
+            f'  node["aeroway"~"gate|terminal"]({bmin_lat},{bmin_lon},{bmax_lat},{bmax_lon});\n'
             f'  node["highway"="elevator"]({bmin_lat},{bmin_lon},{bmax_lat},{bmax_lon});\n'
             f'  node["vending"]({bmin_lat},{bmin_lon},{bmax_lat},{bmax_lon});\n'
             f'  way["shop"]({bmin_lat},{bmin_lon},{bmax_lat},{bmax_lon});\n'
@@ -1599,6 +1906,7 @@ class PoiFetcher:
             f'  way["leisure"]({bmin_lat},{bmin_lon},{bmax_lat},{bmax_lon});\n'
             f'  way["healthcare"]({bmin_lat},{bmin_lon},{bmax_lat},{bmax_lon});\n'
             f'  way["office"]({bmin_lat},{bmin_lon},{bmax_lat},{bmax_lon});\n'
+            f'  way["aeroway"~"gate|terminal"]({bmin_lat},{bmin_lon},{bmax_lat},{bmax_lon});\n'
             ");\nout body center;\n"
         )
         data2   = urllib.parse.urlencode({"data": bb_query}).encode()
@@ -1609,7 +1917,7 @@ class PoiFetcher:
         UNNAMED_OK = frozenset({
             "elevator", "toilets", "atm", "vending machine",
             "main entrance", "parking", "telephone",
-            "post box", "defibrillator",
+            "post box", "defibrillator", "gate", "airport terminal",
         })
 
         seen: set = set()
@@ -1624,6 +1932,7 @@ class PoiFetcher:
                     tags.get("tourism") or tags.get("cuisine") or
                     tags.get("place_of_worship") or tags.get("emergency") or
                     tags.get("social_facility") or tags.get("club") or
+                    tags.get("aeroway") or
                     tags.get("vending") or "")
 
             # Special-case unnamed venue types
@@ -1638,6 +1947,15 @@ class PoiFetcher:
                     kind = "main entrance"
 
             kind = kind.replace("_", " ")
+            aeroway = str(tags.get("aeroway", "") or "").strip().lower()
+            if aeroway == "terminal":
+                kind = "airport terminal"
+            elif aeroway == "gate":
+                kind = "gate"
+            if not name and kind.lower() == "gate" and tags.get("ref"):
+                name = f"Gate {tags.get('ref')}"
+            if not name and kind.lower() == "airport terminal" and tags.get("ref"):
+                name = f"Terminal {tags.get('ref')}"
 
             if not name and not kind:
                 continue
@@ -1682,3 +2000,299 @@ class PoiFetcher:
 
         children.sort(key=lambda x: x["dist"])
         return children
+
+    # ------------------------------------------------------------------
+    # Airport amenities (indoor OSM directory)
+    # ------------------------------------------------------------------
+
+    def fetch_airport_amenities(
+        self,
+        lat: float,
+        lon: float,
+        focus_key: str = "all",
+        search_radius: int = 6000,
+        timeout: int = 60,
+    ) -> tuple[list[dict], str, list[dict]]:
+        """Return (records, airport_name, terminal_gates) for the nearest airport.
+
+        Records are dicts shaped for ``airport_directory.clean_osm_records``:
+        name, category, terminal, level, opening_hours (plus empty zone/gate/
+        exit/airlines/area/notes).  ``terminal`` is assigned by point-in-bbox
+        against the airport's terminal polygons, falling back to the nearest
+        terminal centroid.  ``terminal_gates`` lists each terminal's departure
+        gate range (low/high gate ref and count) derived from OSM gate nodes.
+        Data is sourced entirely from OpenStreetMap.
+        """
+        focus_key = (focus_key or "all").lower()
+        aerodrome = self._find_aerodrome(lat, lon, search_radius)
+        airport_name = aerodrome.get("name", "") if aerodrome else ""
+
+        elements = []
+        if aerodrome:
+            elements = self._airport_amenity_query(aerodrome, lat, lon, focus_key, timeout)
+
+        # Fallback: no aerodrome polygon, or the area query came back empty.
+        if not elements:
+            elements = self._airport_amenity_query(None, lat, lon, focus_key, timeout)
+
+        terminals: list[dict] = []
+        amenities: list[dict] = []
+        gate_elements: list[dict] = []
+        for el in elements:
+            tags = el.get("tags", {}) or {}
+            aeroway = str(tags.get("aeroway", "")).lower()
+            if aeroway == "terminal":
+                term = self._parse_airport_terminal(el)
+                if term:
+                    terminals.append(term)
+            elif aeroway == "gate":
+                gate_elements.append(el)
+            else:
+                amenities.append(el)
+
+        gates: list[dict] = []
+        for el in gate_elements:
+            tags = el.get("tags", {}) or {}
+            ref = str(tags.get("ref") or tags.get("name") or "").strip()
+            if not ref:
+                continue
+            center = el.get("center") or {}
+            glat = el.get("lat") or center.get("lat")
+            glon = el.get("lon") or center.get("lon")
+            if glat is None or glon is None:
+                continue
+            gates.append({"ref": ref, "lat": glat, "lon": glon})
+        terminal_gates = self._airport_gate_ranges(gates, terminals)
+
+        records: list[dict] = []
+        seen: set = set()
+        for el in amenities:
+            rec = self._parse_airport_amenity(el, terminals)
+            if not rec:
+                continue
+            dedup = f"{rec['name'].lower()}|{rec['category']}|{rec['terminal'].lower()}"
+            if dedup in seen:
+                continue
+            seen.add(dedup)
+            records.append(rec)
+
+        print(f"[Airport] {airport_name or 'airport'}: {len(records)} amenities, "
+              f"{len(terminals)} terminals, {len(gates)} gates (focus={focus_key})")
+        return records, airport_name, terminal_gates
+
+    def _find_aerodrome(self, lat: float, lon: float, search_radius: int) -> dict | None:
+        """Find the aerodrome way/relation nearest (lat, lon)."""
+        query = (
+            "[out:json][timeout:25];\n(\n"
+            f'  way["aeroway"="aerodrome"](around:{search_radius},{lat},{lon});\n'
+            f'  relation["aeroway"="aerodrome"](around:{search_radius},{lat},{lon});\n'
+            ");\nout tags center;\n"
+        )
+        data = urllib.parse.urlencode({"data": query}).encode()
+        result = self._overpass.poi_request(data, timeout=30)
+        if not result:
+            return None
+
+        best = None
+        best_d = float("inf")
+        for el in result.get("elements", []):
+            center = el.get("center") or {}
+            elat = el.get("lat") or center.get("lat")
+            elon = el.get("lon") or center.get("lon")
+            if elat is None or elon is None:
+                continue
+            d = dist_metres(lat, lon, elat, elon)
+            if d < best_d:
+                best_d = d
+                tags = el.get("tags", {}) or {}
+                name = (tags.get("name") or tags.get("iata") or
+                        tags.get("official_name") or "")
+                best = {
+                    "osm_type": el.get("type", "way"),
+                    "osm_id": el.get("id", 0),
+                    "name": str(name).strip(),
+                    "lat": elat,
+                    "lon": elon,
+                }
+        return best
+
+    def _airport_amenity_query(
+        self, aerodrome: dict | None, lat: float, lon: float,
+        focus_key: str, timeout: int,
+    ) -> list[dict]:
+        """Run the indoor-amenity Overpass query and return elements.
+
+        When *aerodrome* is given the amenities are scoped to its polygon via
+        ``map_to_area``; otherwise they fall back to a radius around the point.
+        """
+        if aerodrome:
+            scope = (
+                f"way({aerodrome['osm_id']});"
+                if aerodrome["osm_type"] == "way"
+                else f"relation({aerodrome['osm_id']});"
+            )
+            prefix = f"{scope}\nmap_to_area->.ap;\n"
+            region = "(area.ap)"
+        else:
+            prefix = ""
+            region = f"(around:2500,{lat},{lon})"
+
+        amen_clauses: list[str] = []
+        if focus_key == "food":
+            amen_clauses = [
+                f'  nwr["amenity"~"{_AIRPORT_FOOD_AMENITY}"]{region};',
+                f'  nwr["shop"~"{_AIRPORT_FOOD_SHOP}"]{region};',
+            ]
+        elif focus_key == "shopping":
+            amen_clauses = [f'  nwr["shop"]{region};']
+        elif focus_key == "facilities":
+            amen_clauses = [
+                f'  nwr["amenity"~"{_AIRPORT_FACILITY_AMENITY}"]{region};',
+                f'  nwr["tourism"="information"]{region};',
+                f'  nwr["healthcare"]{region};',
+            ]
+        elif focus_key == "accessibility":
+            amen_clauses = [
+                f'  nwr["amenity"~"{_AIRPORT_ACCESS_AMENITY}"]{region};',
+                f'  nwr["healthcare"]{region};',
+            ]
+        else:  # all
+            amen_clauses = [
+                f'  nwr["shop"]{region};',
+                f'  nwr["amenity"~"{_AIRPORT_FOOD_AMENITY}|{_AIRPORT_FACILITY_AMENITY}"]{region};',
+                f'  nwr["tourism"="information"]{region};',
+                f'  nwr["healthcare"]{region};',
+            ]
+
+        query = (
+            f"[out:json][timeout:{timeout}];\n"
+            + prefix
+            + "(\n" + "\n".join(amen_clauses) + "\n)->.amen;\n"
+            + f'nwr["aeroway"="terminal"]{region}->.terms;\n'
+            + f'node["aeroway"="gate"]{region}->.gates;\n'
+            + ".amen out tags center;\n"
+            + ".terms out tags bb;\n"
+            + ".gates out tags center;\n"
+        )
+        data = urllib.parse.urlencode({"data": query}).encode()
+        result = self._overpass.poi_request(data, timeout=timeout + 5)
+        if not result:
+            return []
+        return result.get("elements", [])
+
+    @staticmethod
+    def _parse_airport_terminal(el: dict) -> dict | None:
+        tags = el.get("tags", {}) or {}
+        label = _airport_terminal_label(tags)
+        if not label:
+            return None
+        bounds = el.get("bounds") or {}
+        center = el.get("center") or {}
+        elat = el.get("lat") or center.get("lat")
+        elon = el.get("lon") or center.get("lon")
+        if bounds:
+            minlat, maxlat = bounds.get("minlat"), bounds.get("maxlat")
+            minlon, maxlon = bounds.get("minlon"), bounds.get("maxlon")
+            clat = (minlat + maxlat) / 2 if minlat is not None else elat
+            clon = (minlon + maxlon) / 2 if minlon is not None else elon
+        else:
+            minlat = maxlat = elat
+            minlon = maxlon = elon
+            clat, clon = elat, elon
+        if clat is None or clon is None:
+            return None
+        return {
+            "label": label,
+            "minlat": minlat, "maxlat": maxlat,
+            "minlon": minlon, "maxlon": maxlon,
+            "clat": clat, "clon": clon,
+        }
+
+    @staticmethod
+    def _assign_terminal(elat: float, elon: float, terminals: list[dict]) -> str:
+        if not terminals or elat is None or elon is None:
+            return ""
+        # Prefer the smallest terminal bounding box that contains the point.
+        containing = []
+        for t in terminals:
+            if (t["minlat"] is not None and t["maxlat"] is not None
+                    and t["minlat"] <= elat <= t["maxlat"]
+                    and t["minlon"] <= elon <= t["maxlon"]):
+                area = ((t["maxlat"] - t["minlat"]) * (t["maxlon"] - t["minlon"]))
+                containing.append((area, t["label"]))
+        if containing:
+            containing.sort()
+            return containing[0][1]
+        # Otherwise fall back to the nearest terminal centroid.
+        return min(
+            terminals,
+            key=lambda t: dist_metres(elat, elon, t["clat"], t["clon"]),
+        )["label"]
+
+    @staticmethod
+    def _gate_sort_key(ref: str):
+        """Sort gate refs naturally, e.g. D7 before D24, numbers before letters."""
+        m = re.match(r"\s*([A-Za-z]*)\s*0*(\d+)", str(ref or ""))
+        if m:
+            return (m.group(1).upper(), int(m.group(2)), str(ref))
+        return ("~~~", 10 ** 9, str(ref))
+
+    def _airport_gate_ranges(self, gates: list[dict], terminals: list[dict]) -> list[dict]:
+        """Group OSM gate refs by terminal and summarise each terminal's range."""
+        from collections import defaultdict
+        by_term: dict[str, list[str]] = defaultdict(list)
+        for g in gates:
+            term = self._assign_terminal(g["lat"], g["lon"], terminals)
+            if term:
+                by_term[term].append(g["ref"])
+
+        out: list[dict] = []
+        for term, refs in by_term.items():
+            uniq = sorted(set(refs), key=self._gate_sort_key)
+            if not uniq:
+                continue
+            numeric = [r for r in uniq if r.isdigit()]
+            info: dict = {"terminal": term, "count": len(uniq)}
+            if len(numeric) >= 2:
+                info["low"] = min(numeric, key=int)
+                info["high"] = max(numeric, key=int)
+            else:
+                info["gates"] = uniq[:12]
+            out.append(info)
+        out.sort(key=lambda i: i["terminal"])
+        return out
+
+    def _parse_airport_amenity(self, el: dict, terminals: list[dict]) -> dict | None:
+        tags = el.get("tags", {}) or {}
+        category = _airport_category(tags)
+        name = str(tags.get("name", "") or "").strip()
+        if not name:
+            name = str(tags.get("brand") or tags.get("operator") or "").strip()
+        if not name:
+            label = _AIRPORT_UNNAMED_LABEL.get(category)
+            if not label:
+                return None
+            name = label
+        # Airline lounges are tagged inconsistently in OSM (bar, restaurant,
+        # cafe); group them as lounges so they read together under Facilities.
+        if "lounge" in name.lower():
+            category = "lounge"
+        center = el.get("center") or {}
+        elat = el.get("lat") or center.get("lat")
+        elon = el.get("lon") or center.get("lon")
+        terminal = self._assign_terminal(elat, elon, terminals)
+        return {
+            "name": name[:120],
+            "category": category,
+            "terminal": terminal,
+            "zone": "",
+            "level": _airport_level(tags),
+            "area": "",
+            "gate": "",
+            "exit": "",
+            "airlines": "",
+            "opening_hours": _airport_hours(tags),
+            "notes": "",
+            "lat": elat,
+            "lon": elon,
+        }

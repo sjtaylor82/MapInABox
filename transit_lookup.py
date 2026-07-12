@@ -32,6 +32,7 @@ import urllib.parse
 import zipfile
 import datetime
 import math
+import re
 from typing import Optional
 
 
@@ -45,7 +46,13 @@ GTFS_STALE_DAYS   = 7
 
 # Increment this whenever _parse_zip output structure changes (new fields etc).
 # Any pickle saved with a different version will be discarded and re-parsed.
-GTFS_PARSER_VERSION = 5
+GTFS_PARSER_VERSION = 7
+
+# Matches "Platform 1", "Plat. 3", "Platform G" etc. inside a stop_name, for
+# operators (e.g. PTV Victoria) that never populate platform_code/stop_code
+# but do publish a separate stop record per platform with the number baked
+# into the name.
+_PLATFORM_IN_NAME_RE = re.compile(r"\bplat(?:form)?\.?\s*(\w+)\b", re.IGNORECASE)
 
 # Overrides file — supplementary feeds not in MobilityData catalog.
 # Set OVERRIDES_SERVER_URL to your hosted copy so URL fixes propagate
@@ -54,7 +61,7 @@ OVERRIDES_LOCAL_FILE = "gtfs_overrides.json"   # relative to script dir
 OVERRIDES_SERVER_URL = ""                       # e.g. "https://yourserver.com/gtfs_overrides.json"
 OVERRIDES_STALE_DAYS = 7
 
-# POI kinds that trigger "Ask Gemini" option in the stop list
+# POI kinds that trigger "Ask Mistral" option in the stop list
 MAJOR_STATION_KINDS: frozenset = frozenset({
     "station", "halt", "bus station", "ferry terminal",
 })
@@ -114,6 +121,7 @@ class TransitLookup:
         self._base         = script_dir or getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
         self._resource_dir = resource_dir or self._base
         self._feeds: dict[str, dict]    = {}
+        self._failed_feeds: set[str]    = set()
         self._location_feeds: dict[str, list[str]] = {}
         self._catalog_df      = None
         self._catalog_df_full = None
@@ -131,7 +139,7 @@ class TransitLookup:
         return poi.get("kind", "").lower() in TRANSIT_POI_KINDS
 
     def is_major_station(self, poi: dict) -> bool:
-        """Return True if poi is a major station warranting an Ask Gemini option."""
+        """Return True if poi is a major station warranting an Ask Mistral option."""
         return poi.get("kind", "").lower() in MAJOR_STATION_KINDS
 
     def nearby_stops(
@@ -277,7 +285,46 @@ class TransitLookup:
                     "_feed_id": feed_id,
                 })
 
-        results.sort(key=lambda x: x["distance"])
+        if not results:
+            # Name matching found nothing — common when the caller's stop name
+            # (e.g. from Google Directions) is phrased differently than the
+            # GTFS stop_name ("Melbourne Central" vs "Melbourne Central
+            # Station"). Fall back to pure coordinate proximity so platform
+            # info still gets populated instead of silently staying blank.
+            print(f"[Transit] find_stops_by_name: no name match for {name!r} — "
+                  f"falling back to nearest stop by coordinates")
+            for feed_id in feed_ids:
+                data = self._feeds.get(feed_id)
+                if not data:
+                    continue
+                for sid, s in data["stops"].items():
+                    uid = f"{feed_id}:{sid}"
+                    if uid in seen_ids:
+                        continue
+                    d = math.sqrt(
+                        ((lat - s["lat"]) * 111_000) ** 2
+                        + ((lon - s["lon"]) * 111_000 * math.cos(math.radians(lat))) ** 2
+                    )
+                    if d > 150:
+                        continue
+                    seen_ids.add(uid)
+                    results.append({
+                        **s,
+                        "stop_id":  sid,
+                        "distance": round(d),
+                        "_feed_id": feed_id,
+                    })
+
+        # PTV's zip-of-zips publishes several stop records per physical
+        # station — one per mode/nested-zip (e.g. a generic interchange
+        # node from one sub-feed with no platform info, and a mode-specific
+        # platform stop a few metres away from another). Sorting on raw
+        # distance alone can surface the platform-less duplicate purely
+        # because it's a metre or two closer. Bucket candidates into ~80m
+        # clusters (same physical station) and within each cluster prefer
+        # whichever stop actually has platform data, before falling back
+        # to plain distance ordering.
+        results.sort(key=lambda x: (round(x["distance"] / 80), 0 if x.get("platform") else 1, x["distance"]))
         primary_feed = feed_ids[0] if feed_ids else None
         return primary_feed, results[:max_results]
 
@@ -1119,6 +1166,8 @@ class TransitLookup:
         """
         if feed_id in self._feeds:
             return feed_id, self._feeds[feed_id]
+        if feed_id in self._failed_feeds:
+            return feed_id, None
 
         zp      = os.path.join(self._cache_dir(), f"{feed_id}.zip")
         pickle_p = os.path.join(self._cache_dir(), f"{feed_id}.parsed.pkl")
@@ -1163,6 +1212,7 @@ class TransitLookup:
                     zip_bytes = r.read()
             except Exception as exc:
                 print(f"[Transit] Download failed for {feed_id}: {exc}")
+                self._failed_feeds.add(feed_id)
                 return feed_id, None
 
             meta_p = os.path.join(self._cache_dir(), f"{feed_id}.meta.json")
@@ -1190,8 +1240,53 @@ class TransitLookup:
             print(f"[Transit] Pickle save failed for {feed_id}: {e}")
         return feed_id, data
 
+    @staticmethod
+    def _iter_source_zips(zip_bytes: bytes, feed_id: str):
+        """Yield (id_prefix, ZipFile) pairs to parse.
+
+        Most GTFS feeds are a single flat ZIP with stops.txt etc. at the
+        top level — that case yields the outer zip once with an empty
+        prefix (id_prefix="") so parsed IDs are unprefixed, matching
+        historical behaviour exactly.
+
+        Some operators (e.g. PTV Victoria's data.ptv.vic.gov.au/downloads/
+        gtfs.zip) distribute a "zip of zips": the outer zip contains one
+        numbered sub-zip per transport mode, each with its own complete
+        set of GTFS files, and no GTFS txt files at the top level at all.
+        Parsing only the outer zip in that case silently yields zero
+        stops. When detected, each inner zip is parsed and merged with a
+        unique id_prefix so IDs (which can collide between an operator's
+        separate per-mode exports) never clash.
+        """
+        outer = zipfile.ZipFile(io.BytesIO(zip_bytes))
+        names = [n for n in outer.namelist() if not n.endswith("/")]
+        has_top_level_gtfs = any(
+            n.lower().split("/")[-1] == "stops.txt" for n in names)
+        if has_top_level_gtfs:
+            yield "", outer
+            return
+
+        inner_zip_names = sorted(n for n in names if n.lower().endswith(".zip"))
+        if not inner_zip_names:
+            # Nothing recognisable — yield the outer zip anyway so the
+            # caller gets the expected (empty) result rather than raising.
+            yield "", outer
+            return
+
+        print(f"[Transit] {feed_id}: no top-level GTFS files — treating as "
+              f"a zip-of-zips with {len(inner_zip_names)} nested feed(s).")
+        for i, inner_name in enumerate(inner_zip_names):
+            try:
+                inner_bytes = outer.read(inner_name)
+                inner_zf = zipfile.ZipFile(io.BytesIO(inner_bytes))
+            except Exception as exc:
+                print(f"[Transit] {feed_id}: failed to open nested zip "
+                      f"{inner_name!r}: {exc}")
+                continue
+            yield f"z{i}_", inner_zf
+
     def _parse_zip(self, zip_bytes: bytes, feed_id: str) -> dict:
-        """Parse a GTFS ZIP in one pass and return a structured dict."""
+        """Parse a GTFS ZIP (or zip-of-zips) and return a structured dict."""
 
         def read_csv(zf: zipfile.ZipFile, fname: str) -> list[dict]:
             names = {n.lower().split("/")[-1]: n for n in zf.namelist()}
@@ -1200,122 +1295,140 @@ class TransitLookup:
             with zf.open(names[fname]) as f:
                 return list(csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig")))
 
-        zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
-
-        # ── stops ──────────────────────────────────────────────────────
-        stops: dict[str, dict] = {}
-        for row in read_csv(zf, "stops.txt"):
-            sid = row.get("stop_id", "").strip()
-            try:
-                slat = float(row.get("stop_lat", 0))
-                slon = float(row.get("stop_lon", 0))
-            except ValueError:
-                continue
-            if sid:
-                stops[sid] = {
-                    "name":     row.get("stop_name", "").strip(),
-                    "lat":      slat,
-                    "lon":      slon,
-                    "platform": (row.get("platform_code", "").strip()
-                                 or row.get("stop_code", "").strip()),
-                }
-
-        # ── agencies ───────────────────────────────────────────────────
-        agencies: dict[str, str] = {}  # agency_id → agency_name
-        for row in read_csv(zf, "agency.txt"):
-            aid  = row.get("agency_id",   "").strip()
-            name = row.get("agency_name", "").strip()
-            if name:
-                # Some feeds omit agency_id when there is only one agency —
-                # store under both the real id and "" so route lookup works.
-                agencies[aid]  = name
-                agencies[""]   = name   # fallback for routes with no agency_id
-
-        # ── routes ─────────────────────────────────────────────────────
-        routes: dict[str, dict] = {}
-        for row in read_csv(zf, "routes.txt"):
-            rid = row.get("route_id", "").strip()
-            if rid:
-                aid = row.get("agency_id", "").strip()
-                routes[rid] = {
-                    "route_id":  rid,
-                    "short":     row.get("route_short_name", "").strip(),
-                    "long":      row.get("route_long_name",  "").strip(),
-                    "type":      ROUTE_TYPE_LABELS.get(
-                                     row.get("route_type", "3").strip(), "bus"),
-                    "agency_id": aid,
-                    "agency":    agencies.get(aid, agencies.get("", "")),
-                }
-
-        # ── trips ──────────────────────────────────────────────────────
-        trip_info: dict[str, tuple[str, str]] = {}  # tid → (rid, headsign)
-        for row in read_csv(zf, "trips.txt"):
-            tid = row.get("trip_id", "").strip()
-            rid = row.get("route_id", "").strip()
-            hs  = row.get("trip_headsign", "").strip()
-            if tid:
-                trip_info[tid] = (rid, hs)
-
-        # ── stop_times ─────────────────────────────────────────────────
+        # Accumulated across all source zips (normally just one).
+        stops:           dict[str, dict]  = {}
+        agencies:        dict[str, str]   = {}
+        routes:          dict[str, dict]  = {}
         stop_routes:     dict[str, set]   = {}
-        # Accumulate ALL departures first — cap applied after sort+dedup
         stop_departures: dict[str, list]  = {}
-        # One representative trip per (route_id, headsign): stores ordered stops
-        # keyed as (rid, headsign) → {trip_id, stops: [(seq, sid), ...]}
-        rep_trip:   dict[tuple, dict]  = {}   # (rid, hs) → {"tid": ..., "seqs": [(seq,sid)]}
+        route_stops:     dict[tuple, list] = {}
+        trip_headsign:   dict[str, str]   = {}
 
-        # First pass: find minimum stop_sequence per trip (= the origin stop)
-        trip_min_seq:  dict[str, int] = {}   # tid → min seq int
-        trip_orig_sid: dict[str, str] = {}   # tid → stop_id at min seq
-        for row in read_csv(zf, "stop_times.txt"):
-            tid = row.get("trip_id", "").strip()
-            sid = row.get("stop_id", "").strip()
-            seq = row.get("stop_sequence", "0").strip()
-            if not (tid and sid):
-                continue
-            try:
-                s_int = int(seq)
-            except ValueError:
-                s_int = 0
-            if tid not in trip_min_seq or s_int < trip_min_seq[tid]:
-                trip_min_seq[tid]  = s_int
-                trip_orig_sid[tid] = sid
+        for id_prefix, zf in self._iter_source_zips(zip_bytes, feed_id):
+            def pfx(raw: str) -> str:
+                return f"{id_prefix}{raw}" if raw else raw
 
-        # Second pass: build stop_routes, rep_trip, stop_departures
-        # Record departures at every stop so the departure board can answer
-        # "what leaves from this stop?" instead of only the trip origin.
-        for row in read_csv(zf, "stop_times.txt"):
-            tid = row.get("trip_id", "").strip()
-            sid = row.get("stop_id", "").strip()
-            dep = (row.get("departure_time", "") or row.get("arrival_time", "")).strip()
-            seq = row.get("stop_sequence", "0").strip()
-            if not (tid and sid):
-                continue
-            rid, hs = trip_info.get(tid, ("", ""))
-            if not rid:
-                continue
-            stop_routes.setdefault(sid, set()).add(rid)
-            # Representative trip: first trip seen per (rid, headsign)
-            rkey = (rid, hs)
-            if rkey not in rep_trip:
-                rep_trip[rkey] = {"tid": tid, "seqs": []}
-            if rep_trip[rkey]["tid"] == tid:
+            # ── stops ──────────────────────────────────────────────────
+            for row in read_csv(zf, "stops.txt"):
+                sid = pfx(row.get("stop_id", "").strip())
                 try:
-                    s_int = int(seq)
+                    slat = float(row.get("stop_lat", 0))
+                    slon = float(row.get("stop_lon", 0))
                 except ValueError:
-                    s_int = 0
-                rep_trip[rkey]["seqs"].append((s_int, sid))
-            # Record the stop's own departure time (or arrival fallback if
-            # departure_time is blank in this feed).
-            if dep:
-                secs = _t2s(dep)
-                if secs >= 0:
-                    bucket = stop_departures.setdefault(sid, [])
-                    if len(bucket) < 5000:
-                        bucket.append((secs, tid, rid, hs))
+                    continue
+                if sid:
+                    stop_name = row.get("stop_name", "").strip()
+                    platform = (row.get("platform_code", "").strip()
+                                or row.get("stop_code", "").strip())
+                    if not platform:
+                        # Some operators (e.g. PTV Victoria) never populate
+                        # platform_code/stop_code but do publish a separate
+                        # stop record per platform, with the platform number
+                        # embedded in the name itself, e.g. "Flinders Street
+                        # Railway Station (Platform 1)" or "...- Plat 3".
+                        m = _PLATFORM_IN_NAME_RE.search(stop_name)
+                        if m:
+                            platform = m.group(1)
+                    stops[sid] = {
+                        "name":     stop_name,
+                        "lat":      slat,
+                        "lon":      slon,
+                        "platform": platform,
+                    }
 
-        # Sort first, then deduplicate (same route + same minute = same service day),
-        # then cap at 300 per stop.
+            # ── agencies ───────────────────────────────────────────────
+            local_agencies: dict[str, str] = {}  # agency_id → agency_name
+            for row in read_csv(zf, "agency.txt"):
+                aid  = row.get("agency_id",   "").strip()
+                name = row.get("agency_name", "").strip()
+                if name:
+                    # Some feeds omit agency_id when there is only one agency —
+                    # store under both the real id and "" so route lookup works.
+                    local_agencies[aid]  = name
+                    local_agencies[""]   = name   # fallback for no agency_id
+            for aid, name in local_agencies.items():
+                agencies[pfx(aid)] = name
+
+            # ── routes ─────────────────────────────────────────────────
+            for row in read_csv(zf, "routes.txt"):
+                rid = row.get("route_id", "").strip()
+                if rid:
+                    aid = row.get("agency_id", "").strip()
+                    routes[pfx(rid)] = {
+                        "route_id":  pfx(rid),
+                        "short":     row.get("route_short_name", "").strip(),
+                        "long":      row.get("route_long_name",  "").strip(),
+                        "type":      ROUTE_TYPE_LABELS.get(
+                                         row.get("route_type", "3").strip(), "bus"),
+                        "agency_id": pfx(aid),
+                        "agency":    local_agencies.get(aid, local_agencies.get("", "")),
+                    }
+
+            # ── trips ──────────────────────────────────────────────────
+            trip_info: dict[str, tuple[str, str]] = {}  # tid → (rid, headsign)
+            for row in read_csv(zf, "trips.txt"):
+                tid = row.get("trip_id", "").strip()
+                rid = row.get("route_id", "").strip()
+                hs  = row.get("trip_headsign", "").strip()
+                if tid:
+                    trip_info[tid] = (pfx(rid), hs)
+
+            # ── stop_times ─────────────────────────────────────────────
+            # One representative trip per (route_id, headsign): stores
+            # ordered stops keyed as (rid, headsign) → {tid, seqs: [(seq,sid)]}
+            rep_trip: dict[tuple, dict] = {}
+
+            for row in read_csv(zf, "stop_times.txt"):
+                tid = row.get("trip_id", "").strip()
+                sid = pfx(row.get("stop_id", "").strip())
+                dep = (row.get("departure_time", "") or row.get("arrival_time", "")).strip()
+                seq = row.get("stop_sequence", "0").strip()
+                if not (tid and sid):
+                    continue
+                rid, hs = trip_info.get(tid, ("", ""))
+                if not rid:
+                    continue
+                stop_routes.setdefault(sid, set()).add(rid)
+                # Representative trip: first trip seen per (rid, headsign)
+                rkey = (rid, hs)
+                if rkey not in rep_trip:
+                    rep_trip[rkey] = {"tid": tid, "seqs": []}
+                if rep_trip[rkey]["tid"] == tid:
+                    try:
+                        s_int = int(seq)
+                    except ValueError:
+                        s_int = 0
+                    rep_trip[rkey]["seqs"].append((s_int, sid))
+                # Record the stop's own departure time (or arrival fallback
+                # if departure_time is blank in this feed).
+                if dep:
+                    secs = _t2s(dep)
+                    if secs >= 0:
+                        bucket = stop_departures.setdefault(sid, [])
+                        if len(bucket) < 5000:
+                            bucket.append((secs, tid, rid, hs))
+
+            # ── ordered stop sequences per (route_id, headsign) ─────────
+            for (rid, hs), rep in rep_trip.items():
+                rep["seqs"].sort(key=lambda x: x[0])
+                stop_list = []
+                for _seq, sid in rep["seqs"]:
+                    s = stops.get(sid)
+                    if s:
+                        stop_list.append({
+                            "stop_id":  sid,
+                            "name":     s["name"],
+                            "platform": s["platform"],
+                            "lat":      s["lat"],
+                            "lon":      s["lon"],
+                        })
+                if stop_list:
+                    route_stops[(rid, hs)] = stop_list
+
+            trip_headsign.update({tid: v[1] for tid, v in trip_info.items()})
+
+        # Sort first, then deduplicate (same route + same minute = same
+        # service day), then cap at 300 per stop.
         for sid in stop_departures:
             stop_departures[sid].sort()
             seen_rt: set = set()
@@ -1327,25 +1440,6 @@ class TransitLookup:
                     seen_rt.add(key2)
                     deduped.append(entry)
             stop_departures[sid] = deduped[:300]
-
-        # ── ordered stop sequences per (route_id, headsign) ────────────
-        # Key: (route_id, headsign)  Value: ordered list of stop dicts
-        route_stops: dict[tuple, list] = {}
-        for (rid, hs), rep in rep_trip.items():
-            rep["seqs"].sort(key=lambda x: x[0])
-            stop_list = []
-            for _seq, sid in rep["seqs"]:
-                s = stops.get(sid)
-                if s:
-                    stop_list.append({
-                        "stop_id":  sid,
-                        "name":     s["name"],
-                        "platform": s["platform"],
-                        "lat":      s["lat"],
-                        "lon":      s["lon"],
-                    })
-            if stop_list:
-                route_stops[(rid, hs)] = stop_list
 
         n_unique_routes = len({(r["short"] or r["long"]).strip() or rid for rid, r in routes.items() if r["short"] or r["long"]})
         unique_agencies = sorted({r.get("agency", "") for r in routes.values() if r.get("agency")})
@@ -1362,7 +1456,7 @@ class TransitLookup:
             "stop_routes":     stop_routes,
             "route_stops":     route_stops,
             "stop_departures": stop_departures,
-            "trip_headsign":   {tid: v[1] for tid, v in trip_info.items()},
+            "trip_headsign":   trip_headsign,
         }
 
     # ------------------------------------------------------------------

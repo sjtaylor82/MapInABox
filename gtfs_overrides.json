@@ -23,10 +23,10 @@
   "AU_Victoria": [
     {
       "feed_id": "ptv_victoria",
-      "note": "PTV (Public Transport Victoria) is in MobilityData as feed 657. Only add an entry here if 657 stops working.",
+      "note": "PTV (Public Transport Victoria) is in MobilityData as feed 3340 (was 657). This override hits the exact same URL as catalog feed 3340, which now parses correctly (as of GTFS_PARSER_VERSION 7's zip-of-zips support) — so this entry is redundant and was only doubling download/parse time (~30k stops parsed twice on every cache invalidation, causing multi-minute hangs on the platform lookup). Re-enable only if feed 3340 stops working in the catalog.",
       "url": "https://data.ptv.vic.gov.au/downloads/gtfs.zip",
       "verified": "2026-03",
-      "status": "unverified",
+      "status": "dead",
       "_note": "PTV requires a developer API key for real-time but the static GTFS is open."
     }
   ],

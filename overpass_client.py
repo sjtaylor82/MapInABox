@@ -94,67 +94,74 @@ class OverpassClient:
             label_list.append(f"Server {len(label_list) + 1}")
         
         n_mirrors = len(mirror_list)
-        
-        # Apply cooldown once before trying any server
+
+        # Hold the semaphore for the entire request lifecycle, not just the
+        # cooldown wait. Previously the semaphore was released as soon as
+        # the wait finished, which only paced how far apart requests started
+        # - it didn't stop two requests actually being in flight to the
+        # public Overpass instance at the same time (e.g. a background
+        # batch fetch and a live F11 press). That risks tripping the public
+        # server's own concurrency limits and causing timeouts on both,
+        # rather than just queuing safely one at a time.
         with self._sem:
             self._wait()
-            
+
             if start_index is None:
                 # Start with the next server after the last known-good mirror.
                 # This spreads load across mirrors while still preserving the
                 # last working choice as a fallback point.
                 start_index = (self._last_successful_mirror + 1) % n_mirrors
-        
-        # Try servers sequentially, starting with rotated position
-        for offset in range(n_mirrors):
-            index = (start_index + offset) % n_mirrors
-            url = mirror_list[index]
-            label = label_list[index]
-            
-            msg = f"Connecting to street server {index + 1} of {n_mirrors}: {label}..."
-            print(f"[Overpass] {msg}")
-            if self.status_cb:
+
+            # Try servers sequentially, starting with rotated position
+            for offset in range(n_mirrors):
+                index = (start_index + offset) % n_mirrors
+                url = mirror_list[index]
+                label = label_list[index]
+
+                msg = f"Connecting to street server {index + 1} of {n_mirrors}: {label}..."
+                print(f"[Overpass] {msg}")
+                if self.status_cb:
+                    try:
+                        self.status_cb(msg)
+                    except Exception:
+                        pass
+
                 try:
-                    self.status_cb(msg)
-                except Exception:
-                    pass
-            
-            try:
-                req = urllib.request.Request(
-                    url, data=query_data,
-                    headers={
-                        "User-Agent":   "MapInABox/1.0",
-                        "Content-Type": "application/x-www-form-urlencoded",
-                    },
-                )
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    result = json.loads(resp.read().decode())
-                
-                # Overpass returns a remark on runtime error
-                if "remark" in result and not result.get("elements"):
-                    print(f"[Overpass] {label} error remark: {result['remark']}")
-                    continue
-                
-                # Success - update rotation tracker
-                if result.get("elements"):
-                    print(f"[Overpass] {label} succeeded")
+                    req = urllib.request.Request(
+                        url, data=query_data,
+                        headers={
+                            "User-Agent":   "MapInABox/1.0",
+                            "Content-Type": "application/x-www-form-urlencoded",
+                        },
+                    )
+                    with urllib.request.urlopen(req, timeout=timeout) as resp:
+                        result = json.loads(resp.read().decode())
+
+                    # Overpass returns a remark on runtime error
+                    if "remark" in result and not result.get("elements"):
+                        print(f"[Overpass] {label} error remark: {result['remark']}")
+                        continue
+
+                    # Success - update rotation tracker
+                    if result.get("elements"):
+                        print(f"[Overpass] {label} succeeded")
+                        if not custom_mirrors:
+                            self._last_successful_mirror = index
+                        return result
+
+                    # Empty but valid
+                    print(f"[Overpass] {label} returned empty result")
                     if not custom_mirrors:
                         self._last_successful_mirror = index
                     return result
-                    
-                # Empty but valid
-                print(f"[Overpass] {label} returned empty result")
-                if not custom_mirrors:
-                    self._last_successful_mirror = index
-                return result
-                
-            except Exception as exc:
-                print(f"[Overpass] {label} failed: {exc}")
-                # Try next server
-                continue
-        
-        # All servers failed
-        return None
+
+                except Exception as exc:
+                    print(f"[Overpass] {label} failed: {exc}")
+                    # Try next server
+                    continue
+
+            # All servers failed
+            return None
 
     def request_one(
         self,

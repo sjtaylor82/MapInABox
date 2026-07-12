@@ -26,7 +26,7 @@ import urllib.parse
 import urllib.request
 from typing import Optional
 
-from geo import dist_metres, bearing_between_nodes, compass_name, GENERIC_STREET_TYPES
+from geo import dist_metres, bearing_deg, bearing_between_nodes, compass_name, GENERIC_STREET_TYPES
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +61,6 @@ class NavigationEngine:
         self.dest_name      : str         = ""
         self.dest_lat       : float       = 0.0
         self.dest_lon       : float       = 0.0
-        self.last_announced : str         = ""
         self.google_mode    : bool        = False  # True for Google/HERE (no OSM path)
         self.route_mode     : str         = "walking"
         self.total_min      : int         = 0
@@ -99,7 +98,6 @@ class NavigationEngine:
         self.dest_name      = ""
         self.dest_lat       = 0.0
         self.dest_lon       = 0.0
-        self.last_announced = ""
         self.google_mode    = False
         self.route_mode     = "walking"
         self.total_min      = 0
@@ -107,6 +105,34 @@ class NavigationEngine:
     # ------------------------------------------------------------------
     # OSM / Dijkstra routing
     # ------------------------------------------------------------------
+
+    def route_via_waypoints(self, waypoints: list) -> Optional[list]:
+        """Build a node path that passes through each (lat, lon) in *waypoints*.
+
+        Snaps each waypoint to the nearest graph node and runs Dijkstra between
+        consecutive ones, concatenating the segments.  Used to make an OSM
+        description FOLLOW a route the user already chose (e.g. Google's) by
+        threading the graph through that route's turn points, rather than taking
+        a different shortest path.  Returns the ordered node list, or None.
+        """
+        if not self._graph or not waypoints:
+            return None
+        wp_nodes = []
+        for lat, lon in waypoints:
+            nid, _dist = self._find_nearest_node_with_distance(lat, lon)
+            if nid is not None and (not wp_nodes or wp_nodes[-1] != nid):
+                wp_nodes.append(nid)
+        if len(wp_nodes) < 2:
+            return None
+        full = [wp_nodes[0]]
+        for a, b in zip(wp_nodes, wp_nodes[1:]):
+            if a == b:
+                continue
+            seg = self._dijkstra(a, b)
+            if not seg:
+                return None
+            full.extend(seg[1:])
+        return full if len(full) >= 2 else None
 
     def find_route_osm(
         self,
@@ -175,7 +201,6 @@ class NavigationEngine:
         self.dest_name      = dest_name
         self.dest_lat       = to_lat
         self.dest_lon       = to_lon
-        self.last_announced = first
         self.google_mode    = False
         self.route_mode     = "walking"
         self.total_min      = total_min
@@ -261,7 +286,6 @@ class NavigationEngine:
         self.dest_name      = dest_name
         self.dest_lat       = to_lat
         self.dest_lon       = to_lon
-        self.last_announced = first
         self.google_mode    = True
         self.route_mode     = travel_mode
         self.total_min      = int(total_min)
@@ -353,7 +377,6 @@ class NavigationEngine:
         self.dest_name      = dest_name
         self.dest_lat       = to_lat
         self.dest_lon       = to_lon
-        self.last_announced = first
         self.google_mode    = True
         self.route_mode     = travel_mode
         self.total_min      = int(total_min)
@@ -406,9 +429,9 @@ class NavigationEngine:
             if cur_pos >= waypoint_idx:
                 announced = text
                 self.step += 1
-                self.last_announced = text
                 if "arriving" in text.lower():
-                    self.active = False
+                    # Don't deactivate — UI keeps nav alive so the user can
+                    # browse the route after arrival; Escape exits.
                     arrived = True
                 break
             else:
@@ -446,77 +469,13 @@ class NavigationEngine:
         if self.step >= len(self.instructions):
             return f"Arriving at {self.dest_name}."
         text = self.instructions[self.step][2]
-        self.last_announced = text
         self.step = min(self.step + 1, len(self.instructions))
         n = len(self.instructions)
         return f"Step {min(self.step, n)} of {n}: {text}"
 
-    def step_back(self) -> str:
-        """Down key during navigation — go back one instruction."""
-        if not self.active:
-            return ""
-        self.step = max(0, self.step - 1)
-        if self.step < len(self.instructions):
-            text = self.instructions[self.step][2]
-            self.last_announced = text
-            n = len(self.instructions)
-            return f"Step {self.step + 1} of {n}: {text}"
-        return ""
-
-    # ------------------------------------------------------------------
-    # Address geocoding (HERE)
-    # ------------------------------------------------------------------
-
-    def geocode_here(
-        self,
-        query: str,
-        near_lat: float,
-        near_lon: float,
-        suburb: str = "",
-    ) -> Optional[tuple[float, float]]:
-        """Geocode *query* near (near_lat, near_lon) using HERE Geocoding API.
-
-        Returns (lat, lon) or None on failure.
-        """
-        api_key = self._settings.get("here_api_key", "").strip()
-        if not api_key:
-            return None
-        try:
-            q = f"{query}, {suburb}" if suburb else query
-            params = urllib.parse.urlencode({
-                "q":      q,
-                "at":     f"{near_lat},{near_lon}",
-                "limit":  1,
-                "apiKey": api_key,
-            })
-            req = urllib.request.Request(
-                f"https://geocode.search.hereapi.com/v1/geocode?{params}",
-                headers={"User-Agent": "MapInABox/1.0"},
-            )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode())
-            items = data.get("items", [])
-            if not items:
-                return None
-            pos = items[0]["position"]
-            return pos["lat"], pos["lng"]
-        except Exception as exc:
-            print(f"[Nav] HERE geocode failed: {exc}")
-            return None
-
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-
-    def _find_nearest_node(
-        self,
-        lat: float,
-        lon: float,
-        street_filter: Optional[str] = None,
-    ) -> Optional[int]:
-        best_nid, _best_dist = self._find_nearest_node_with_distance(
-            lat, lon, street_filter)
-        return best_nid
 
     def _find_nearest_node_with_distance(
         self,
@@ -616,14 +575,13 @@ class NavigationEngine:
             diff         = (curr_bearing - prev_bearing + 180) % 360 - 180
             turn         = self._turn_word(diff)
             next_street  = _street_between(node_path[i], node_path[i + 1])
-            card         = compass_name(curr_bearing)
 
             if turn != "straight":
                 onto = f" onto {next_street}" if next_street else ""
                 wlat, wlon = nodes[node_path[i]]
                 instructions.append((
                     i, leg_dist,
-                    f"{turn}{onto}, heading {card}.",
+                    f"{turn}{onto}.",
                     wlat, wlon,
                 ))
                 leg_dist = 0.0
@@ -639,6 +597,359 @@ class NavigationEngine:
             alat, alon,
         ))
         return instructions
+
+    # ------------------------------------------------------------------
+    # Route digest — structured data for narrative-AI directions
+    # ------------------------------------------------------------------
+
+    # Countries where pedestrians/vehicles drive on the left. ISO 3166-1
+    # alpha-2 codes. Used to phrase "traffic on your left moves in the same
+    # direction" correctly in narrative briefings.
+    _DRIVE_LEFT_COUNTRIES = frozenset({
+        "ag", "au", "bb", "bd", "bn", "bs", "bt", "bw", "cy", "dm", "fj",
+        "gb", "gd", "gy", "hk", "id", "ie", "in", "jm", "jp", "ke", "kn",
+        "lc", "lk", "ls", "mo", "mt", "mu", "mv", "mw", "my", "mz", "na",
+        "np", "nz", "pg", "pk", "sc", "sg", "sr", "sz", "tt", "tz", "ug",
+        "vc", "za", "zm", "zw",
+    })
+
+    @staticmethod
+    def _classify_side(point_lat: float, point_lon: float,
+                       node_lat: float, node_lon: float,
+                       bearing: float) -> Optional[str]:
+        """Which side of a leg the point sits on, relative to a walker at
+        (node_lat, node_lon) heading along ``bearing``.
+
+        Returns 'left' | 'right' | 'ahead' | 'behind' | None.
+        """
+        try:
+            bd = bearing_deg(node_lat, node_lon, point_lat, point_lon)
+        except (TypeError, ValueError):
+            return None
+        rel = (bd - bearing + 180) % 360 - 180
+        if abs(rel) < 25:   return "ahead"
+        if abs(rel) > 155:  return "behind"
+        return "left" if rel < 0 else "right"
+
+    def build_route_digest(
+        self,
+        origin_label: str = "",
+        origin_lat: Optional[float] = None,
+        origin_lon: Optional[float] = None,
+        country_code: str = "",
+    ) -> Optional[dict]:
+        """Produce a structured digest of the current OSM route.
+
+        Only works for OSM routes (where ``self.route`` is a node path through
+        the walk graph). Returns ``None`` for Google/HERE — those providers
+        give us per-step text but no traversable node list, so we cannot list
+        the cross streets passed within a leg.
+
+        Output shape (all street names are taken verbatim from the OSM graph;
+        callers must never permit a downstream AI to invent new names):
+
+            {
+              "origin":      {"lat", "lon", "label"},
+              "destination": {"lat", "lon", "label", "side"},
+              "total_distance_m": int,
+              "total_minutes":    int,
+              "legs": [
+                {
+                  "street":               "Carrington Road",
+                  "compass":              "north",
+                  "bearing_deg":          5.2,
+                  "distance_m":           312,
+                  "cross_streets_passed": ["Pine Street", "Church Street"],
+                  "end_action": {
+                    "turn":          "right" | "left" | "straight" | "arrive" | ...,
+                    "onto":          "Bronte Road" | None,
+                    "junction_type": "T-junction" | "4-way intersection" | ...,
+                  },
+                },
+                ...
+              ],
+            }
+        """
+        if not self.active or self.google_mode or not self.route or not self._graph:
+            return None
+
+        graph         = self._graph
+        nodes         = graph["nodes"]
+        edges         = graph["edges"]
+        node_streets  = graph["node_streets"]
+        intersections = graph.get("intersections", set())
+        path = self.route
+        n = len(path)
+        if n < 2:
+            return None
+
+        def _street_between(a, b):
+            for nb, sname in edges.get(a, []):
+                if nb == b:
+                    return sname
+            return ""
+
+        def _bearing(a, b):
+            return bearing_between_nodes(nodes, a, b)
+
+        def _classify_junction(node_id, leg_street):
+            branches = len({nb for nb, _ in edges.get(node_id, [])})
+            # The leg's street continues past this node iff it appears on
+            # at least 2 edges here (one is the one we arrived on).
+            leg_edge_count = sum(
+                1 for _, s in edges.get(node_id, []) if s == leg_street
+            ) if leg_street else 0
+            leg_continues = leg_edge_count >= 2
+            if branches >= 5:
+                return "complex intersection"
+            if branches == 4:
+                return "4-way intersection"
+            if branches == 3:
+                if leg_street and not leg_continues:
+                    return "T-junction"
+                return "3-way intersection"
+            return "intersection"
+
+        legs = []
+        leg_start_idx     = 0
+        leg_street        = _street_between(path[0], path[1])
+        leg_start_bearing = _bearing(path[0], path[1])
+        leg_dist          = 0.0
+        leg_cross         = []
+        prev_bearing      = leg_start_bearing
+
+        def _flush(turn, onto, junction_node, end_idx):
+            jtype = (_classify_junction(junction_node, leg_street)
+                     if junction_node is not None else None)
+            s_lat, s_lon = nodes[path[leg_start_idx]]
+            legs.append({
+                "street":               leg_street or "unnamed road",
+                "compass":              compass_name(leg_start_bearing),
+                "bearing_deg":          round(leg_start_bearing, 1),
+                "distance_m":           int(round(leg_dist)),
+                "cross_streets_passed": leg_cross[:],
+                "node_start":           leg_start_idx,
+                "node_end":             end_idx,
+                "start_lat":            s_lat,
+                "start_lon":            s_lon,
+                "end_action": {
+                    "turn":          turn,
+                    "onto":          onto,
+                    "junction_type": jtype,
+                },
+            })
+
+        def _record_cross(mid, mid_idx, arriving_bearing, cur_street, dest_list):
+            """Append the named cross streets meeting the route at *mid* to
+            *dest_list*, with the side they sit relative to travel."""
+            if mid not in intersections:
+                return
+            sides_by_street: dict[str, set[str]] = {}
+            nlat, nlon = nodes[mid]
+            for nb, sname in edges.get(mid, []):
+                if not sname or sname == cur_street:
+                    continue
+                if sname.lower() in GENERIC_STREET_TYPES:
+                    continue
+                blat, blon = nodes[nb]
+                br = bearing_deg(nlat, nlon, blat, blon)
+                rel = (br - arriving_bearing + 180) % 360 - 180
+                if abs(rel) < 25:
+                    s_side = "ahead"
+                elif abs(rel) > 155:
+                    s_side = "behind"
+                elif rel < 0:
+                    s_side = "left"
+                else:
+                    s_side = "right"
+                sides_by_street.setdefault(sname, set()).add(s_side)
+            existing = {c["name"] for c in dest_list}
+            for name in sorted(sides_by_street):
+                if name in existing:
+                    continue
+                s = sides_by_street[name]
+                if "left" in s and "right" in s:
+                    side = "left-right"
+                elif "left" in s:
+                    side = "left"
+                elif "right" in s:
+                    side = "right"
+                elif "ahead" in s:
+                    side = "ahead"
+                elif "behind" in s:
+                    side = "behind"
+                else:
+                    side = None
+                dest_list.append({"name": name, "side": side, "node_index": mid_idx})
+                existing.add(name)
+
+        for i in range(1, n):
+            from_nid = path[i - 1]
+            to_nid   = path[i]
+            seg_dist    = dist_metres(*nodes[from_nid], *nodes[to_nid])
+            seg_bearing = _bearing(from_nid, to_nid)
+            seg_street  = _street_between(from_nid, to_nid)
+
+            if i == 1:
+                leg_dist     = seg_dist
+                prev_bearing = seg_bearing
+                continue
+
+            # Decide whether node path[i-1] is a turn point.
+            diff = (seg_bearing - prev_bearing + 180) % 360 - 180
+            street_changed = bool(seg_street and leg_street and seg_street != leg_street)
+            is_turn = abs(diff) >= 20 or street_changed
+
+            mid_node = path[i - 1]
+
+            if is_turn:
+                turn_word = self._turn_word(diff)
+                if street_changed and turn_word == "straight":
+                    turn_word = "continue"
+                onto = seg_street if street_changed else None
+                _flush(turn_word, onto, mid_node, i - 1)
+                # Start new leg from this turn node
+                leg_start_idx     = i - 1
+                leg_street        = seg_street
+                leg_start_bearing = seg_bearing
+                leg_dist          = seg_dist
+                leg_cross         = []
+                # A bend that stays on the same road still passes an
+                # intersection (e.g. Burwood Rd curving at Church St); record
+                # its cross streets so it remains a real boundary, not lost.
+                if not street_changed:
+                    _record_cross(mid_node, i - 1, prev_bearing, leg_street, leg_cross)
+            else:
+                # Continuing through a (possibly cross-) intersection — record
+                # the cross streets with the side they sit, relative to travel.
+                _record_cross(mid_node, i - 1, prev_bearing, leg_street, leg_cross)
+                leg_dist += seg_dist
+
+            prev_bearing = seg_bearing
+
+        # Final leg — arrival at path[-1]
+        _flush("arrive", None, None, n - 1)
+
+        # Destination side, relative to the final leg's direction of travel.
+        dest_side = None
+        if legs:
+            end_node_lat, end_node_lon = nodes[path[-1]]
+            dest_side = self._classify_side(
+                self.dest_lat, self.dest_lon,
+                end_node_lat, end_node_lon,
+                legs[-1]["bearing_deg"],
+            )
+
+        # Origin side, relative to leg 0's direction of travel. Only computed
+        # when the caller passed real address coordinates (the actual
+        # property), not the graph-snapped node.
+        origin_side = None
+        if legs and origin_lat is not None and origin_lon is not None:
+            start_node_lat, start_node_lon = nodes[path[0]]
+            origin_side = self._classify_side(
+                float(origin_lat), float(origin_lon),
+                start_node_lat, start_node_lon,
+                legs[0]["bearing_deg"],
+            )
+
+        drives_on = None
+        cc = (country_code or "").strip().lower()
+        if cc:
+            drives_on = "left" if cc in self._DRIVE_LEFT_COUNTRIES else "right"
+
+        # The road is always on the opposite side of the walker from where
+        # the property sits. This is the single most important orientation
+        # cue for a blind walker.
+        origin_road_side = None
+        if origin_side == "right":
+            origin_road_side = "left"
+        elif origin_side == "left":
+            origin_road_side = "right"
+
+        # Which way traffic in the nearest lane flows relative to the
+        # walker. Derived from drive-side + road-side:
+        #
+        #   drives_on=left:  road on right → nearest lane = with you;
+        #                    road on left  → nearest lane = toward you.
+        #   drives_on=right: mirror image.
+        origin_traffic_nearest = None
+        if drives_on and origin_road_side:
+            if drives_on == "left":
+                origin_traffic_nearest = (
+                    "with_you" if origin_road_side == "right" else "toward_you"
+                )
+            else:  # drives_on == "right"
+                origin_traffic_nearest = (
+                    "with_you" if origin_road_side == "left" else "toward_you"
+                )
+
+        # Does the walker have to cross the carriageway to reach the
+        # destination?  The road sits on the opposite side of the walker from
+        # their footpath, so the destination is reachable WITHOUT crossing only
+        # when it is on the footpath side — i.e. NOT on the road side.  Hence
+        # crossing is needed exactly when the destination sits on the road side.
+        #
+        # CAVEAT: origin_road_side is measured on leg 0, while dest_side is
+        # measured on the final leg.  Those frames only agree when the route has
+        # not made a net turn between them — after a turn the relative road side
+        # can flip, so the comparison would be unsafe.  Only assert a crossing
+        # when the final leg still runs roughly parallel to the first; otherwise
+        # leave it unknown and let the narrator fall back to a plain
+        # "on your left/right as you approach", which never invents a crossing.
+        crossing_needed = None
+        if origin_road_side and dest_side in ("left", "right") and legs:
+            net_turn = abs(((legs[-1]["bearing_deg"] - legs[0]["bearing_deg"]
+                             + 180) % 360) - 180)
+            if net_turn <= 35:
+                crossing_needed = (dest_side == origin_road_side)
+
+        # Mark whether the walker physically crosses each passed side street.
+        # A side street is crossed only when it opens onto the walker's own
+        # footpath — the side OPPOSITE the road.  This needs the road side in the
+        # cross street's leg frame, which only matches the leg-0 road side while
+        # that leg has not turned away from leg 0; otherwise leave it unknown so
+        # the narrator makes no crossing claim.
+        base_bearing = legs[0]["bearing_deg"] if legs else 0.0
+        footpath_side = None
+        if origin_road_side:
+            footpath_side = "left" if origin_road_side == "right" else "right"
+        for leg in legs:
+            net = abs(((leg["bearing_deg"] - base_bearing + 180) % 360) - 180)
+            aligned = net <= 35
+            for cs in leg.get("cross_streets_passed", []):
+                side = cs.get("side")
+                if not footpath_side or not aligned or side not in ("left", "right", "left-right"):
+                    cs["crossed"] = None
+                elif side == "left-right":
+                    cs["crossed"] = True
+                else:
+                    cs["crossed"] = (side == footpath_side)
+
+        total_m = sum(leg["distance_m"] for leg in legs)
+        return {
+            "origin": {
+                "lat":                  nodes[path[0]][0],
+                "lon":                  nodes[path[0]][1],
+                "label":                origin_label or "current position",
+                "side":                 origin_side,
+                "road_side":            origin_road_side,
+                "traffic_nearest_lane": origin_traffic_nearest,
+            },
+            "destination": {
+                "lat":              self.dest_lat,
+                "lon":              self.dest_lon,
+                "label":            self.dest_name,
+                "side":             dest_side,
+                "crossing_needed":  crossing_needed,
+            },
+            "country": {
+                "code":      cc.upper() if cc else None,
+                "drives_on": drives_on,
+            },
+            "total_distance_m": total_m,
+            "total_minutes":    self.total_min,
+            "legs":             legs,
+        }
 
     @staticmethod
     def _decode_here_polyline(encoded: str) -> list[tuple[float, float]]:
@@ -712,12 +1023,10 @@ class NavMixin:
 
     def _nav_update_ui(self, msg):
         """Navigation messages own the focused listbox item."""
-        self._suppress_update_ui_until = 0
         try:
             self.update_ui(msg, force=True)
         except TypeError:
             self.update_ui(msg)
-        wx.CallAfter(self.listbox.SetFocus)
 
     def _nav_status(self, msg):
         """Navigation status that should speak without changing focus."""
@@ -967,7 +1276,6 @@ class NavMixin:
         self._nav_route = []
         self._nav_instructions = []
         self._nav_step = 0
-        self._nav_last_announced = ""
         self._nav_google_mode = False
         self._nav_dest_name = dest_name
         self._nav_dest_lat = dest_lat
@@ -1007,16 +1315,18 @@ class NavMixin:
                 self.settings,
             )
             suggestion = "Try HERE or Google in Navigation provider settings."
+            already_there = "already at the destination" in str(msg).lower()
             if target_source == "poi":
-                msg = (
+                full_msg = (
+                    msg if already_there else
                     f"OpenStreetMap could not calculate a route to {dest_name}. "
                     f"{msg} {suggestion}"
                 )
-                wx.CallAfter(self._nav_update_ui, msg)
+                wx.CallAfter(self._nav_update_ui, full_msg)
                 return
-            elif suggestion not in str(msg):
+            if not already_there and suggestion not in str(msg):
                 msg = f"{msg} {suggestion}"
-            wx.CallAfter(self._nav_status, msg)
+            wx.CallAfter(self._nav_update_ui, msg)
 
         walk_graph = getattr(self, "_walk_graph", None)
         if not walk_graph:
@@ -1122,16 +1432,17 @@ class NavMixin:
         """Mirror NavigationEngine state into legacy _nav_* attributes.
         Called after any successful route fetch so existing code keeps working."""
         self._nav_active         = self._nav.active
+        self._nav_arrived        = False
         self._nav_route          = self._nav.route
         self._nav_instructions   = self._nav.instructions
         self._nav_step           = self._nav.step
         self._nav_dest_name      = self._nav.dest_name
         self._nav_dest_lat       = self._nav.dest_lat
         self._nav_dest_lon       = self._nav.dest_lon
-        self._nav_last_announced = self._nav.last_announced
         self._nav_google_mode    = self._nav.google_mode
         self._nav_route_mode     = self._nav.route_mode
         self._nav_total_min      = self._nav.total_min
+        wx.CallAfter(self._set_nav_button_visible, True)
 
     def _nav_route_summary(self, dest_name, provider="Route"):
         instructions = getattr(self, '_nav_instructions', [])
@@ -1176,7 +1487,7 @@ class NavMixin:
     def _nav_announce_step(self):
         """I key — repeat last nav instruction, or announce next if none yet."""
         if not getattr(self, '_nav_active', False):
-            self._nav_update_ui("No navigation active. Press G to navigate to an address.")
+            self._nav_update_ui("No navigation active. Press Ctrl+G to navigate to an address.")
             return
         last_idx = max(0, min(
             getattr(self, '_nav_step', 1) - 1,
@@ -1190,6 +1501,117 @@ class NavMixin:
                 self._nav_update_ui(nxt)
             else:
                 self._nav_update_ui(f"Heading to {self._nav_dest_name}.")
+
+    def _nav_request_narrative_briefing(self):
+        """Kick off narrative briefing after the current UI event returns."""
+        wx.CallAfter(self._nav_narrative_briefing)
+
+    def _nav_narrative_briefing(self):
+        """Shift+I — load a Mistral-generated full pedestrian briefing and
+        enter step-through briefing mode.
+
+        Only available for OSM routes (where we have a node path with named
+        cross streets). Falls back to the deterministic step list if Mistral
+        is not configured, fails, or returns invented street names.
+
+        Once loaded, Up/Down walk through briefing steps, I repeats the
+        current step, and Escape exits briefing mode (back to normal nav
+        step-through, with the route still active).
+        """
+        from accessible_route import start_narrative_briefing
+        start_narrative_briefing(self)
+
+    @staticmethod
+    def _parse_briefing_steps(text: str) -> list[str]:
+        """Split Mistral's numbered narrative into discrete steps.
+
+        The system prompt asks for each numbered step on its own line, so we
+        split on lines beginning with `<digits>.` and re-join any wrapped
+        continuation lines back onto their parent step.
+        """
+        import re as _re
+        lines = [ln.rstrip() for ln in (text or "").splitlines()]
+        steps: list[str] = []
+        cur: list[str] = []
+        for ln in lines:
+            if not ln.strip():
+                if cur:
+                    cur.append("")
+                continue
+            m = _re.match(r"^\s*(\d+)[.)]\s+(.*)$", ln)
+            if m:
+                if cur:
+                    steps.append(" ".join(s for s in cur if s).strip())
+                    cur = []
+                cur.append(m.group(2).strip())
+            else:
+                # Continuation of the current step.
+                if cur:
+                    cur.append(ln.strip())
+                # If we haven't seen a numbered line yet, ignore preamble lines.
+        if cur:
+            steps.append(" ".join(s for s in cur if s).strip())
+        # Drop empties and trim runs of whitespace inside each step.
+        cleaned = []
+        for s in steps:
+            s2 = _re.sub(r"\s{2,}", " ", s).strip()
+            if s2:
+                cleaned.append(s2)
+        return cleaned
+
+    def _nav_briefing_enter(self, steps: list[str]):
+        """Begin step-through of a freshly loaded briefing."""
+        self._nav_briefing_mode  = True
+        self._nav_briefing_steps = steps
+        self._nav_briefing_step  = 0
+        self._nav_briefing_announce_current(intro=True)
+
+    def _nav_briefing_exit(self, announce: bool = True):
+        """Leave briefing mode; route stays active for normal step-through."""
+        was_on = getattr(self, '_nav_briefing_mode', False)
+        self._nav_briefing_mode  = False
+        self._nav_briefing_steps = []
+        self._nav_briefing_step  = 0
+        if announce and was_on:
+            self._announce_transient(
+                "Briefing closed. Up and Down step through the route.")
+
+    def _nav_briefing_announce_current(self, intro: bool = False):
+        steps = getattr(self, '_nav_briefing_steps', [])
+        idx   = getattr(self, '_nav_briefing_step', 0)
+        if not steps:
+            self._announce_transient("No briefing loaded.")
+            return
+        idx = max(0, min(idx, len(steps) - 1))
+        self._nav_briefing_step = idx
+        prefix = "Briefing.  " if intro else ""
+        suffix = "  Up for next, Down for previous, I to repeat, Escape to close."
+        msg = f"{prefix}Step {idx + 1} of {len(steps)}.  {steps[idx]}"
+        if intro or idx == 0:
+            msg += suffix
+        self._nav_update_ui(msg)
+
+    def _nav_briefing_next(self):
+        steps = getattr(self, '_nav_briefing_steps', [])
+        if not steps:
+            return
+        if self._nav_briefing_step >= len(steps) - 1:
+            self._announce_transient(
+                "End of briefing. Down for previous, Escape to close.")
+            return
+        self._nav_briefing_step += 1
+        self._nav_briefing_announce_current()
+
+    def _nav_briefing_prev(self):
+        steps = getattr(self, '_nav_briefing_steps', [])
+        if not steps:
+            return
+        if self._nav_briefing_step <= 0:
+            self._announce_transient(
+                "Start of briefing. Up for next, Escape to close.")
+            return
+        self._nav_briefing_step -= 1
+        self._nav_briefing_announce_current()
 
     def _play_arrival_sound(self):
         """Play a distinct sound on arriving at navigation destination."""
@@ -1243,7 +1665,14 @@ class NavMixin:
         self._nav_update_ui(msg)
 
     def _nav_finish_arrival(self):
-        """End navigation and announce final street context after the sound."""
+        """Fire arrival sound + final context the first time the user reaches
+        the destination. Navigation stays active so the user can keep stepping
+        back and forward through the route; Escape exits."""
+        if getattr(self, '_nav_arrived', False):
+            # Already arrived once — don't replay the sound or re-run lookup;
+            # the user is just hitting Up at the end again.
+            return
+        self._nav_arrived = True
         self._nav_arrival_provider_mode = getattr(self, "_nav_google_mode", False)
         dest_name = getattr(self, "_nav_dest_name", "") or "destination"
         dest_lat = getattr(self, "_nav_dest_lat", None)
@@ -1255,7 +1684,6 @@ class NavMixin:
             self.last_city_found = ""
             if not getattr(self, "street_mode", False):
                 self.street_label = ""
-            self._suppress_next_location = True
             wx.CallAfter(
                 self.map_panel.set_position,
                 self.lat,
@@ -1264,10 +1692,9 @@ class NavMixin:
                 getattr(self, "street_label", ""),
             )
             threading.Thread(target=self._lookup, daemon=True).start()
-        self._nav_active = False
-        self._nav_google_mode = False
         wx.CallAfter(self._play_arrival_sound)
         wx.CallLater(200, self._nav_arrival_context)
+        wx.CallLater(3500, self._nav_arrival_streetview)
 
     def _nav_check_progress(self, current_nid) -> str:
         """Delegate to NavigationEngine. Syncs state and fires arrival sound."""
@@ -1279,12 +1706,17 @@ class NavMixin:
         # Sync state back
         self._nav_step           = self._nav.step
         self._nav_active         = self._nav.active
-        self._nav_last_announced = self._nav.last_announced
         if arrived:
             wx.CallAfter(self._play_arrival_sound)
         if announced:
             idx = max(0, min(self._nav_step - 1, len(self._nav_instructions) - 1))
             announced = self._nav_format_instruction(idx, self._nav_instructions[idx])
+            if not arrived:
+                entry = self._nav_instructions[idx]
+                if len(entry) >= 5 and self._nav_valid_coord(entry[3], entry[4]):
+                    poi_text = self._nearby_walk_poi_text(entry[3], entry[4], prefix="Nearby")
+                    if poi_text:
+                        announced = f"{announced}  {poi_text}"
         return announced
 
 
@@ -1309,7 +1741,6 @@ class NavMixin:
 
         # Street mode — announce intersection + nearby POIs from already-loaded grid
         if self.street_mode:
-            _NO_DATA = ("No street data nearby", "No street data", "")
             _SUFFIXES = {
                 "st": "street", "rd": "road", "ave": "avenue", "dr": "drive",
                 "ct": "court", "pl": "place", "cres": "crescent", "cl": "close",
@@ -1323,117 +1754,137 @@ class NavMixin:
                     words[-1] = _SUFFIXES[words[-1]]
                 return " ".join(words)
 
-            def _add_cross(candidates, name, distance):
-                key = _street_key(name)
-                if not key or key == _street_key(label):
-                    return
-                if key not in candidates or distance < candidates[key][1]:
-                    candidates[key] = (name, distance)
+            def _nearest_side_or_cross_street_text():
+                if not hasattr(self, "_street_survey_current_street"):
+                    return ""
+                street = self._street_survey_current_street()
+                if not street:
+                    return ""
+                intersections = self._street_survey_intersections(street)
+                here = self._street_survey_project(street, self.lat, self.lon)
+                if not intersections or not here:
+                    return ""
 
-            def _street_pair_other(name):
-                match = re.match(r"(.+?)\s+near\s+(.+)$", name or "", re.I)
-                if not match:
-                    return None
-                first, second = match.group(1).strip(), match.group(2).strip()
-                current_key = _street_key(label)
-                if _street_key(first) == current_key:
-                    return second
-                if _street_key(second) == current_key:
-                    return first
-                return None
+                axis = self._street_survey_address_axis(street)
+                if axis:
+                    _lat0, _lon0, ux, uy, _scale_x = axis
+                    heading = (math.degrees(math.atan2(ux, uy)) + 360) % 360
+                    here_along = self._street_survey_axis_value(
+                        axis, here[2], here[3])
+                else:
+                    heading = getattr(self, "_road_heading", None)
+                    if heading is None:
+                        heading = bearing_deg(self.lat, self.lon, here[2], here[3])
+                    here_along = here[1]
+                my_side = self._nav._classify_side(
+                    self.lat, self.lon, here[2], here[3], heading)
 
-            nearby_roads = self._nearest_roads_with_distances(self.lat, self.lon)
-            label, cross = self._nearest_road(self.lat, self.lon)
-            pinned = getattr(self, '_jump_street_label', None)
-            pin_lat = getattr(self, '_jump_street_pin_lat', None)
-            pin_lon = getattr(self, '_jump_street_pin_lon', None)
-            if pinned and (pin_lat is None or pin_lon is None or dist_metres(self.lat, self.lon, pin_lat, pin_lon) <= 2.0):
-                if label == pinned:
-                    pass
-                elif cross == pinned:
-                    label, cross = pinned, label
-                else:
-                    label, cross = pinned, None if label in _NO_DATA else label
-                road_map = {name: distance for name, distance in nearby_roads}
-                if pinned in road_map:
-                    nearby_roads = [(pinned, road_map[pinned])] + [
-                        item for item in nearby_roads if item[0] != pinned
-                    ]
-                else:
-                    nearby_roads = [(pinned, 0.0)] + nearby_roads
-            no_street = not label or label in _NO_DATA
-            if no_street:
-                announcement = "No street data."
-                radius = 300  # widen search in open areas / parks / bridges
-            else:
-                cross_candidates = {}
-                road_map = {name: distance for name, distance in nearby_roads}
-                if cross:
-                    _add_cross(cross_candidates, cross, road_map.get(cross, float("inf")))
-                elif nearby_roads:
-                    for name, distance in nearby_roads:
-                        _add_cross(cross_candidates, name, distance)
-                        if len(cross_candidates) >= 2:
-                            break
-                radius = self.settings.get("walk_poi_radius_m", 80)
-                cross_parts = [
-                    f"{name}, {int(round(distance))} metres"
-                    for _key, (name, distance) in sorted(
-                        cross_candidates.items(), key=lambda item: item[1][1])
-                    if math.isfinite(distance)
-                ]
-                if cross_parts:
-                    announcement = "; ".join(cross_parts) + "."
-                else:
-                    announcement = f"No cross streets nearby. On {label}."
+                graph = self._walk_graph or {}
+                nodes = graph.get("nodes", {})
+                edges = graph.get("edges", {})
+                current_key = _street_key(street)
+                candidates = []
 
-            poi_grid = getattr(self, '_poi_grid', {})
-            if poi_grid:
-                category  = (self.settings.get("walk_poi_category", "all") or "all").lower()
-                show_kind = self.settings.get("walk_announce_category", True)
-                pois = self._poi_grid_nearby(self.lat, self.lon, radius)
-                if category != "all":
-                    pois = filter_pois_by_category(pois, category)
-                labels = []
-                seen = set()
-                for poi in pois:
-                    name = (poi.get("label") or poi.get("name") or "").split(",")[0].strip()
-                    if not name or name.lower() in seen:
+                def _cross_names(nid):
+                    names = []
+                    seen = set()
+                    for _neighbour, street_name in edges.get(nid, []):
+                        name = (street_name or "").strip()
+                        key = _street_key(name)
+                        if not key or key == current_key or key in seen:
+                            continue
+                        seen.add(key)
+                        names.append(name)
+                    return sorted(names, key=str.lower)
+
+                nearest_here = None
+                for along, nid, nlat, nlon in intersections:
+                    real_distance = dist_metres(self.lat, self.lon, nlat, nlon)
+                    if real_distance > 250:
                         continue
-                    kind = poi.get("kind", "")
-                    plat = poi.get("lat"); plon = poi.get("lon")
-                    live_dist = int(math.sqrt(
-                        ((self.lat - plat) * 111000) ** 2 +
-                        ((self.lon - plon) * 111000 * math.cos(math.radians(self.lat))) ** 2
-                    )) if plat is not None else None
-                    other_street = None if no_street else _street_pair_other(name)
-                    if other_street and live_dist is not None:
-                        _add_cross(cross_candidates, other_street, live_dist)
-                        seen.add(name.lower())
+                    cross_names = _cross_names(nid)
+                    if real_distance <= 35 and cross_names:
+                        if nearest_here is None or real_distance < nearest_here[0]:
+                            nearest_here = (real_distance, nid, cross_names)
+                    intersection_bearing = bearing_deg(self.lat, self.lon, nlat, nlon)
+                    front_rel = (intersection_bearing - heading + 180) % 360 - 180
+                    front_word = "ahead" if abs(front_rel) <= 90 else "behind"
+                    along_delta = along - here_along
+                    if abs(along_delta) < 4:
                         continue
-                    seen.add(name.lower())
-                    dist_str = f", {live_dist}m" if live_dist is not None else ""
-                    if show_kind and kind:
-                        labels.append(f"{name}, {kind}{dist_str}")
-                    else:
-                        labels.append(f"{name}{dist_str}")
-                    if len(labels) >= 5:
-                        break
-                if not no_street:
-                    cross_parts = [
-                        f"{name}, {int(round(distance))} metres"
-                        for _key, (name, distance) in sorted(
-                            cross_candidates.items(), key=lambda item: item[1][1])
-                        if math.isfinite(distance)
-                    ]
-                    if cross_parts:
-                        announcement = "; ".join(cross_parts) + "."
-                    else:
-                        announcement = f"No cross streets nearby. On {label}."
-                if labels:
-                    announcement = f"{announcement}  Nearby: {'; '.join(labels)}."
-            elif not getattr(self, '_poi_fetch_in_progress', False):
-                announcement = f"{announcement}  No POIs loaded — press P to search."
+                    if not cross_names:
+                        continue
+                    for neighbour, street_name in edges.get(nid, []):
+                        name = (street_name or "").strip()
+                        key = _street_key(name)
+                        if not key or key == current_key:
+                            continue
+                        nb_lat, nb_lon = nodes.get(neighbour, (None, None))
+                        if nb_lat is None:
+                            continue
+                        branch_bearing = bearing_deg(nlat, nlon, nb_lat, nb_lon)
+                        rel = (branch_bearing - heading + 180) % 360 - 180
+                        abs_rel = abs(rel)
+                        branch_side = None
+                        if abs_rel > 25 and abs_rel < 155:
+                            branch_side = "left" if rel < 0 else "right"
+                        candidates.append({
+                            "name": name,
+                            "delta": along_delta,
+                            "front": front_word,
+                            "side": branch_side,
+                            "same_side": my_side in ("left", "right") and branch_side == my_side,
+                            "distance": real_distance,
+                        })
+                if nearest_here:
+                    metres, nid, cross_names = nearest_here
+                    miab_log(
+                        "verbose",
+                        f"X street result: current='{street}' here='{', '.join(cross_names[:2])}' "
+                        f"distance={metres:.1f}m node={nid}",
+                        self.settings,
+                    )
+                    return f"{street} at {', '.join(cross_names[:2])}."
+                if not candidates:
+                    return ""
+                behind = [item for item in candidates if item["delta"] < 0]
+                ahead = [item for item in candidates if item["delta"] > 0]
+                if behind and ahead:
+                    behind.sort(key=lambda item: abs(item["delta"]))
+                    ahead.sort(key=lambda item: abs(item["delta"]))
+                    back_name = behind[0]["name"]
+                    forward_name = ahead[0]["name"]
+                    if _street_key(back_name) != _street_key(forward_name):
+                        back_metres = int(round(behind[0]["distance"]))
+                        forward_metres = int(round(ahead[0]["distance"]))
+                        miab_log(
+                            "verbose",
+                            f"X street result: current='{street}' between='{back_name}' "
+                            f"back_distance={behind[0]['distance']:.1f}m "
+                            f"and='{forward_name}' forward_distance={ahead[0]['distance']:.1f}m",
+                            self.settings,
+                        )
+                        return (
+                            f"Between {back_name} {back_metres} metres "
+                            f"and {forward_name} {forward_metres} metres."
+                        )
+                candidates.sort(key=lambda item: item["distance"])
+                nearest = candidates[0]
+                rel_word = "forward" if nearest["front"] == "ahead" else "back"
+                metres = int(round(nearest["distance"]))
+                miab_log(
+                    "verbose",
+                    f"X street result: current='{street}' cross='{nearest['name']}' "
+                    f"front='{rel_word}' distance={nearest['distance']:.1f}m "
+                    f"side='{nearest['side']}' my_side='{my_side}'",
+                    self.settings,
+                )
+                return f"{nearest['name']} is {metres} metres {rel_word}."
+
+            announcement = (
+                _nearest_side_or_cross_street_text()
+                or "Cross street information is not available here."
+            )
 
             self._status_update(announcement, force=True)
             return
@@ -1469,13 +1920,66 @@ class NavMixin:
             else:
                 self._status_update("Cross street information not available.", force=True)
 
+    def _nav_arrival_streetview(self):
+        """Announce a Street View description at the destination after arrival.
+
+        Only fires when Google StreetView and Mistral vision are both configured.
+        Runs text-only (no dialog) so it doesn't interrupt the user's workflow.
+        """
+        try:
+            from streetview import lookup_streetview_description
+        except ImportError:
+            return
+        google_key = self.settings.get("google_api_key", "").strip()
+        mistral = getattr(self, "_mistral", None)
+        if not google_key or not mistral or not getattr(mistral, "is_configured", False):
+            return
+        dest_lat = getattr(self, "_nav_dest_lat", None)
+        dest_lon = getattr(self, "_nav_dest_lon", None)
+        if not self._nav_valid_coord(dest_lat, dest_lon):
+            return
+
+        import os, sys
+        _base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+        cache_path = os.path.join(_base, "streetview_cache.json")
+
+        def _fetch():
+            try:
+                result = lookup_streetview_description(
+                    float(dest_lat), float(dest_lon),
+                    google_api_key=google_key,
+                    mistral_client=mistral,
+                    street_heading=None,
+                    cache_path=cache_path,
+                    include_images=False,
+                    mode="navigation",
+                )
+                if result:
+                    _, desc = result
+                    if desc:
+                        wx.CallAfter(
+                            self._announce_transient,
+                            f"Street View at destination: {desc}",
+                        )
+            except Exception as exc:
+                print(f"[Nav] Arrival StreetView failed: {exc}")
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
     def _nav_step_forward(self):
         """Up arrow during navigation — announce next instruction, silently move position."""
         instructions = getattr(self, '_nav_instructions', [])
         step = getattr(self, '_nav_step', 0)
         if step >= len(instructions):
-            self._nav_update_ui(f"You have arrived at {self._nav_dest_name}.")
-            self._nav_finish_arrival()
+            # Already past the final instruction. Stay put and remind the
+            # user the route is finished; Down still steps back, Escape exits.
+            if getattr(self, '_nav_arrived', False):
+                self._nav_update_ui(
+                    f"End of route at {self._nav_dest_name}. "
+                    "Down arrow to step back, Escape to exit navigation.")
+            else:
+                self._nav_update_ui(f"You have arrived at {self._nav_dest_name}.")
+                self._nav_finish_arrival()
             return
         entry = instructions[step]
         _, _, text = entry[0], entry[1], entry[2]
@@ -1490,10 +1994,15 @@ class NavMixin:
                     self.settings,
                 )
         self._nav_step += 1
-        self._nav_last_announced = text
         msg = self._nav_format_instruction(step, entry)
-        
-        if "arriving" in text.lower() or self._nav_step >= len(instructions):
+
+        arrived = "arriving" in text.lower() or self._nav_step >= len(instructions)
+        if not arrived and len(entry) >= 5 and self._nav_valid_coord(entry[3], entry[4]):
+            poi_text = self._nearby_walk_poi_text(entry[3], entry[4], prefix="Nearby")
+            if poi_text:
+                msg = f"{msg}  {poi_text}"
+
+        if arrived:
             self._nav_finish_arrival()
         self._nav_update_ui(msg)
 
@@ -1509,7 +2018,6 @@ class NavMixin:
             return
         self._nav_step -= 1
         entry = self._nav_instructions[self._nav_step - 1]
-        text = entry[2]
         if len(entry) >= 5:
             if self._nav_valid_coord(entry[3], entry[4]):
                 self.lat, self.lon = entry[3], entry[4]
@@ -1519,6 +2027,5 @@ class NavMixin:
                     f"Ignored invalid route coordinate: lat={entry[3]!r} lon={entry[4]!r}",
                     self.settings,
                 )
-        self._nav_last_announced = text
         self._nav_update_ui(
             self._nav_format_instruction(self._nav_step - 1, entry))

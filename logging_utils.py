@@ -3,7 +3,7 @@
 Categories:
     errors       — exceptions, API failures, missing data
     street       — Overpass queries, cache hits/misses
-    api_calls    — HERE/Gemini requests and responses
+    api_calls    — HERE/Mistral requests and responses
     challenges   — player, country, time, score
     feature_usage — keys pressed, lookups made
     navigation   — country entries, crossings, jumps
