@@ -61,14 +61,21 @@ a = Analysis(
         'pandas._libs.tslibs.nattype',
         'pandas._libs.tslibs.timedeltas',
         'pandas._libs.tslibs.timestamps',
-        # h3 Cython extensions — collect_all misses these
+        # h3 Cython extensions — collect_all misses these. Verified against
+        # the actual h3 4.5.0 wheel layout (pip download + inspect); the
+        # previous list had 'vertexes' (should be 'vertex', singular) and
+        # two modules ('inspection', 'regions') that don't exist at all,
+        # which made PyInstaller fail outright with "Hidden import ... not
+        # found" on both Windows and macOS builds.
         'h3._cy',
         'h3._cy.cells',
         'h3._cy.edges',
-        'h3._cy.vertexes',
+        'h3._cy.error_system',
         'h3._cy.latlng',
-        'h3._cy.inspection',
-        'h3._cy.regions',
+        'h3._cy.memory',
+        'h3._cy.to_multipoly',
+        'h3._cy.util',
+        'h3._cy.vertex',
         # wx
         'wx._xml',
         'wx.lib.agw',
