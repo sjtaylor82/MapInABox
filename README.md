@@ -1,2 +1,85 @@
-Map in a Box is an accessible world map and local exploration program designed for blind and low-vision users. It runs on Windows and macOS and works fully with screen readers including NVDA, JAWS, and VoiceOver.
-The program combines global geography with street-level navigation. You can explore countries, cities, oceans, and landmarks from the world map, then drop into any street network to walk intersections, look up businesses, plan routes, and check public transport and food options — all without a visual display. Explore the world map by country, city, coordinates, and geographic features. Explore streets, intersections, house numbers, and nearby points of interest. Move along a real street network with controlled turn choices at intersections, with optional POI announcements. Includes support for optional API keys, supports route planning, transit, flights, hotels, food, toll calculation, and journey planning.
+# Map in a Box
+
+Map in a Box is an accessible world map and local exploration program designed for blind and low-vision users. It runs on Windows and macOS and works with screen readers including NVDA, JAWS, and VoiceOver.
+
+The program combines global geography with street-level navigation. You can explore countries, cities, oceans, and landmarks from the world map, then drop into any street network to walk intersections, look up businesses, plan routes, and check public transport and food options without a visual display.
+
+## Features
+
+- Explore the world map by country, city, coordinates, and geographic features.
+- Explore streets, intersections, house numbers, and nearby points of interest.
+- Move along a real street network with controlled turn choices at intersections.
+- Hear optional POI announcements while walking.
+- Plan walking and driving routes, compare toll and toll-free routes, and check public transport.
+- Look up weather, marine conditions, air quality, Wikipedia summaries, flights, airports, hotels, food, and nearby services.
+- Use optional API keys for richer third-party data while keeping the core map experience usable without paid keys.
+
+## License
+
+Map in a Box is released under the MIT License. See [LICENSE](LICENSE).
+
+## Downloads, install, and uninstall
+
+Release builds are published from GitHub Actions at:
+
+https://github.com/sjtaylor82/MapInABox/releases
+
+On Windows, download and run `MapInABox-<version>-setup.exe`. The installer creates Start Menu entries for the app and for uninstalling it. You can also uninstall Map in a Box from Windows Settings or Control Panel.
+
+On macOS, download `MapInABox-macOS.zip`, extract it, and follow the included `README.txt` and `install-macos.sh` instructions. To uninstall the macOS build, remove `MapInABox.app` from Applications or from the folder where you placed it.
+
+Free code signing for Windows releases is provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+## Privacy and network access
+
+Map in a Box stores settings, API keys, caches, favourites, renamed POIs, suppressed POIs, and personal POIs locally on the user's computer. User-supplied API keys are stored in the local settings file and are only sent to the service they belong to.
+
+The program will not transfer information to networked systems unless the user uses a feature that requires network data, enables a setting that uses network data, enters an API key for a third-party service, opens an external web page, checks for updates, or submits an OpenStreetMap note. Requests generally include the location, place, route, airport, hotel, or query needed for the feature being used.
+
+Core features that do not require the user to provide an API key may contact:
+
+- OpenStreetMap services, including Nominatim, Overpass API, and OpenStreetMap Notes.
+- OSRM and Photon for routing and geocoding fallbacks.
+- Wikipedia for place summaries.
+- Open-Meteo for weather, marine forecasts, sunrise/sunset, and air quality.
+- OpenSky Network for flight tracking and route lookup.
+- Mapillary as an open street-level imagery fallback.
+- GitHub for update checks and release downloads.
+- MobilityData and OurAirports public datasets for transit and airport data.
+- `samtaylor9.nfshost.com` for GNAF address lookup in Australia when GNAF address data is enabled.
+- Google Search, Bing, DuckDuckGo, Google Maps, venue websites, and provider websites when the user explicitly opens a search result, menu, review page, map page, donation page, or other external browser link.
+- `miab-menu-search.miab.workers.dev` for best-effort menu and website discovery features.
+
+Optional features are only contacted when the user supplies the relevant key or chooses the relevant action:
+
+- Google Maps, Routes, Places, Static Maps, and Street View.
+- HERE search, routing, geocoding, transit, and POI services.
+- Mistral AI for image descriptions, POI summaries, transit questions, and narrative walking briefings.
+- AviationStack for airport arrival and departure boards.
+- OpenRouteService for distance calculations.
+- RapidAPI-hosted services including Priceline, TripAdvisor, and timetable lookup.
+
+## Code signing policy
+
+After project approval, signed releases will use this notice: "Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/)".
+
+The Map in a Box code signing policy is:
+
+- Signed artifacts must be built from this public source repository using GitHub Actions.
+- The release workflow must run on GitHub-hosted runners.
+- Signed Windows artifacts are expected to include the Windows installer, `MapInABox-<version>-setup.exe`, and any executable files inside that installer that are produced by the project build.
+- Release signing requests must be manually approved by a project approver before publication.
+- Signing must only be used for Map in a Box artifacts built from this repository. Upstream third-party binaries must not be signed as if they were Map in a Box binaries.
+- The product name in signed artifact metadata must be `Map in a Box`, and product version metadata must match the release version.
+- Maintainers must use multi-factor authentication on GitHub and SignPath accounts used for release or signing access.
+
+Project roles:
+
+- Committers and reviewers: Map in a Box repository maintainers.
+- Approvers: Sam Taylor and any future repository maintainer explicitly granted release/signing approval responsibility.
+
+## Development and releases
+
+The release workflow builds Windows and macOS artifacts from GitHub Actions. Windows packaging uses PyInstaller and Inno Setup; macOS packaging creates a zipped app bundle with the install helper script.
+
+SignPath integration is not committed with live organization or signing-policy values because those values are only issued after SignPath Foundation approval and SignPath project setup.
