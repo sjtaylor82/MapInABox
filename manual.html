@@ -24,7 +24,8 @@
 <body>
 
 <h1>Map in a Box — User Manual</h1>
-<p><strong>Version 1.0.0.9</strong> &nbsp;|&nbsp; Windows &amp; macOS</p>
+<p><strong>Version 1.0.0.12</strong> &nbsp;|&nbsp; Windows &amp; macOS</p>
+
 
 <nav aria-label="Table of contents">
   <h2>Contents</h2>
@@ -39,73 +40,68 @@
     <li><a href="#find-food">8. Find food</a></li>
     <li><a href="#satellite-street-view">9. Satellite and Street View</a></li>
     <li><a href="#street-mode">10. Street mode</a></li>
-    <li><a href="#walking-mode">11. Walking mode</a></li>
-    <li><a href="#free-mode">12. Free mode</a></li>
-    <li><a href="#tools">13. Tools menu</a></li>
-    <li><a href="#challenge">14. Geography challenge game</a></li>
-    <li><a href="#settings">15. Settings</a></li>
-    <li><a href="#api-keys">16. Internet and API keys</a></li>
-    <li><a href="#workflows">17. Common workflows</a></li>
-    <li><a href="#troubleshooting">18. Troubleshooting</a></li>
-    <li><a href="#key-reference">19. Quick key reference</a></li>
+    <li><a href="#city-packs">11. Downloading a city's suburbs in one go</a></li>
+    <li><a href="#walking-mode">12. Walking mode</a></li>
+    <li><a href="#free-mode">13. Free mode</a></li>
+    <li><a href="#tools">14. Tools menu</a></li>
+    <li><a href="#challenge">15. Geography challenge game</a></li>
+    <li><a href="#settings">16. Settings</a></li>
+    <li><a href="#api-keys">17. Internet and API keys</a></li>
+    <li><a href="#workflows">18. Common workflows</a></li>
+    <li><a href="#troubleshooting">19. Troubleshooting</a></li>
+    <li><a href="#key-reference">20. Quick key reference</a></li>
   </ul>
 </nav>
 
 
 <h2 id="overview">1. Overview</h2>
 
-<p>Map in a Box is an accessible world map and local exploration program for blind and low-vision users. It runs on Windows and macOS and is designed to make geography feel immediate, practical, and fun.</p>
+<p>Welcome to MapInABox, an accessible world map and local exploration program built for blind and low-vision users. It runs on Windows and macOS, and it's meant to make geography easy, immediate, and even a little bit fun.</p>
 
-<p>The program combines global geography with street-level navigation. It is keyboard driven, works well with screen readers, and lets you move from the world map into street-level exploration without relying on a visual display. In just a few keystrokes you can jump to a place, inspect nearby businesses, open a website, or keep going until you are listening to street numbers and intersections.</p>
+<p>It's entirely keyboard driven and built around screen readers from the ground up. That's right, nothing here depends on seeing a screen. You can jump to a place, check what businesses are nearby, open a website, or drop all the way down to street level and start walking the neighbourhood, all without leaving the keyboard.</p>
 
-<div class="note">
-  <strong>Why people love it:</strong> it turns browsing into action. You are not just hearing where a place is, you can move there, inspect it, hear its address and phone details, open its official website, look for food nearby, or switch into street mode and keep exploring.
-</div>
-
-<p>The program has six main modes:</p>
+<p>Six main modes make up the program:</p>
 
 <table>
   <tr><th>Mode</th><th>What it does</th></tr>
-  <tr><td>Map mode</td><td>Roam the world by country, city, coordinates, and geographic feature. This is where Map in a Box really shows off its global reach.</td></tr>
-  <tr><td>Street mode</td><td>Drop down to the neighbourhood level and explore streets, intersections, house numbers, and nearby points of interest in detail.</td></tr>
-  <tr><td>Walking mode</td><td>Move along a real street network with controlled turn choices at intersections, plus optional POI announcements as you go.</td></tr>
+  <tr><td>Map mode</td><td>Roam the world by country, city, coordinates, and geographic feature. This is where Map in a Box's global reach really shows.</td></tr>
+  <tr><td>Street mode</td><td>Drop to the neighbourhood level and explore streets, intersections, house numbers, and nearby points of interest in detail.</td></tr>
+  <tr><td>Walking mode</td><td>Move along a real street network with turn choices at intersections, plus optional POI announcements as you go.</td></tr>
   <tr><td>Free mode</td><td>Explore nearby streets and points of interest relative to a heading, without being locked to a road.</td></tr>
-  <tr><td>Tools</td><td>Route planning, detour calculation, toll comparison, meeting-place finder, public transport journey planning, departure boards, flight search, hotel search, and Find Food.</td></tr>
-  <tr><td>Challenge game</td><td>A geography game that asks you to locate a named country on the world map by sound.</td></tr>
+  <tr><td>Tools</td><td>Route planning, detour calculation, toll comparison, meeting-place finder, public transport journeys, departure boards, flight search, hotel search, and Find Food.</td></tr>
+  <tr><td>Challenge game</td><td>A geography game where you locate a named country on the world map by ear.</td></tr>
 </table>
 
 
 <h2 id="starting">2. Starting out</h2>
 
-<p>When Map in a Box opens, it places you at your saved home location. If no home location has been set, the program prompts you to set one before continuing. Home can be changed at any time from the Settings dialog (<code>Ctrl+,</code>) using the <strong>Set Home Location</strong> button.</p>
+<p>When Map in a Box opens, it drops you at your saved home location. If you haven't set one yet, it'll ask you to before continuing — and you can change it any time from Settings (<code>Ctrl+,</code>) with the <strong>Set Home Location</strong> button.</p>
 
-<p>The main window contains a visual map canvas and a status area. Screen reader users interact primarily through spoken output and the keyboard — the map canvas is not required. All navigation, lookup, and mode-switching functions are keyboard driven, so the experience stays quick and direct.</p>
+<p>Although  the main window has a visual map canvas and a status area, you don't need to be able to see either.</p>
 
-<p>You can use the shortcuts in <a href="#key-reference">Section 19</a>, or access the same features from the menu bar with <code>Alt</code>.</p>
+<p>An attempt has been made to make the shortcuts in <a href="#key-reference">Section 20</a> as comprehensive as possible, however you can reach the same features from the menu bar with <code>Alt</code> if that's easier to explore initially.</p>
 
 
 <h2 id="map-mode">3. Map mode</h2>
 
-<p>Map mode is the default. The arrow keys move a cursor across the world map. As you move, the program announces the country, city, region, body of water, or geographic feature at the cursor position, so you can build a mental map almost instantly.</p>
+<p>Map mode is where you land by default, and is, in essence, the heart of the application. The arrow keys move your position across a virtual 2-dimensional map of the world and. As you explore, the program tells you the city or suburb of the country you're currently navigating. In addition, you'll hear about neighbouring landmarks, countries, and bodies of water,. You'll find that a mental picture of where things are builds up almost immediately.</p>
 
-<p>Move with the arrow keys. Use smaller steps when you need fine positioning, larger steps for long jumps, and a directional jump when you want the nearest country in a given direction.</p>
+<p>Move across the map by using the arrow keys, adding shift or control where appropriate for smaller or larger jumps respectively. You can even virtually jump over a body of water into a neighbouring country if you wish, by using control+alt with arrow keys</p>
 
-<p>Press <code>Shift+F8</code> to switch the map display between <strong>World</strong> and <strong>Country</strong> modes. World mode keeps the full global view as it is today. Country mode keeps the world map but reduces label clutter and focuses on the country you are in, along with its main state or province labels and a smaller set of nearby cities.</p>
+<p>If demonstrating to a visual learner or educator, press <code>Shift+F8</code> to switch the map display between <strong>World</strong> and <strong>Country</strong> modes. World mode is the default global view, while Country mode visually focuses upon the country you're in, its main states or provinces, and a smaller set of nearby cities.</p>
 
-<p>Map mode also includes global shortcuts for repeating the current position, reading coordinates, turning sounds on or off, opening Street Mode, opening Tools, and changing Settings. The map-specific shortcuts cover jumping to a place, postcode lookup, current region or country, nearby city, switching GeoFeatures on or off, and the regional information keys such as time, weather, airports, and currency. The quick reference at the end lists the full shortcut set, but the important point is that the map is never just passive: it is a launchpad for the next thing you want to do.</p>
+<p>Map mode also contains a host of useful lookups which can be activated with a single key press, including repeating position, announcing coordinates, toggling sounds on/off, postcode lookup, time and timezone check, air quality index, weather lookup, nearest airports,, and country currency. The full list is in <a href="#key-reference">Section 20</a>, but by now, you've probably realised that Map Mode is a launchpad for whatever you want to do next, and that MapInABox really contains a plethora of tools..</p>
 
-<p>For current-location information, the app can report the capital city, climate zone, time, timezone, sunrise and sunset, weather, air quality, nearest airport, overhead aircraft, coordinates, languages, and currency. Most of those require the internet.</p>
+<p>Prefer menus over remembering keystrokes? Never fear. Everything here is also reachable from the menu bar with <code>Alt</code>.</p>
 
-<p>If you prefer menus, the same features are available from the menu bar with <code>Alt</code>.</p>
-
-<p>Spatial tones give you an audio sense of your position without speech. Pitch represents latitude and panning represents longitude, so you can hear where countries, states or provinces, and cities sit on the map. On top of that, each country has its own sound profile, which makes neighboring countries easier to tell apart by ear. Settings lets you choose whether the tones are based on the world, the current country, or the current region.</p>
+<p>Let's talk about what happens when you navigate the world. Spatial tones give you an audio sense of your global or regional position. This is achieved via higher or lower pitches for latitude, and stereo panning for longitude, so you can hear roughly where countries, states, and cities sit relative to each other. Each country also has its own sound profile which helps tell neighbouring countries apart simply by listening to them. This is particularly engaging for young students who are learning about neighbours near and far in their Geography or HASS lessons. </p>
 
 
 <h2 id="jumping">4. Jumping to a place</h2>
 
-<p>Press <code>J</code> in map mode to open the jump dialog. Type a search term and press <code>Enter</code>. If multiple results are found, a list is presented — use the arrow keys to choose and press <code>Enter</code> to jump.</p>
+<p>Press <code>J</code> in map mode to open the jump dialog. Type what you're looking for such as a landmark, city or country, and press <code>Enter</code>. If there's more than one match, you'll get a list — arrow through it and press <code>Enter</code> to jump.</p>
 
-<p>Accepted search terms include:</p>
+<p>You can type:</p>
 <ul>
   <li><strong>City names</strong> — e.g. <em>Brisbane</em>, <em>London</em>, <em>Vancouver</em></li>
   <li><strong>Countries</strong> — e.g. <em>Japan</em>, <em>New Zealand</em>, <em>South Africa</em></li>
@@ -113,32 +109,34 @@
   <li><strong>Geographic features</strong> — major deserts, mountain ranges, reefs, gulfs, capes, and other named natural features</li>
 </ul>
 
-<p>For search terms of four or more characters, a "Search online" option appears at the bottom of any results list, and is offered automatically if no local match is found. Online search uses OpenStreetMap's Nominatim service and returns a second list to pick from. Shorter terms with no local match return "not found". Jump is disabled during the geography challenge game.</p>
+<p>For anything four characters or longer, a "Search online" option shows up at the bottom of the results list, and kicks in automatically if there's no local match. Online search goes through OpenStreetMap's Nominatim service and gives you a second list to choose from. Shorter terms with no local match just come back "not found". The Jump keystroke is disabled during the geography challenge game, since that would rather defeat the purpose!.</p>
+
+<p>Map in a Box also quietly remembers your last five jumps, and stores them in a History list, which you can reach with <code>Ctrl+H</code>. This is handy if you've been bouncing between a few places and don't want to retype a search each time.</p>
 
 
 <h2 id="marks">5. Marks</h2>
 
-<p>Marks let you remember and compare up to three temporary places. Map in a Box supports marks numbered 1, 2, and 3. Unlike favourites, which are permanent saved places, marks are temporary — they're there for quick comparisons and can be cleared when you're done.</p>
+<p>Marks are particularly useful when you want to know the rough distance between Point A and Point B. You can compare up to three places at once, without committing to a permanent favourite. Think of them as temporary locations, or sticky notes — numbered 1, 2, and 3 — that you can set, check back on, and clear whenever you're done with them.</p>
 
-<p>To save a mark, move to the place you want to remember and press <code>Ctrl+M</code>. You'll be asked which slot to use — press <code>1</code>, <code>2</code>, or <code>3</code>. To hear a mark's distance from your current location, press <code>Ctrl+1</code>, <code>Ctrl+2</code>, or <code>Ctrl+3</code>. To jump back to a saved mark, press <code>Ctrl+J</code> and choose the slot if prompted. When you no longer need a mark, press <code>Ctrl+Shift+M</code> and choose the slot to clear it.</p>
+<p>To save one, move to the place you want to remember and press <code>Ctrl+M</code>. You'll be asked which slot to use — press <code>1</code>, <code>2</code>, or <code>3</code>. To hear how far a mark is from where you are now, press <code>Ctrl+1</code>, <code>Ctrl+2</code>, or <code>Ctrl+3</code>. To jump back to one, press <code>Ctrl+J</code> and pick the slot if asked. Done with a mark? Press <code>Ctrl+Shift+M</code> and choose the slot to clear it.</p>
 
-<p>With two or three marks in place, press <code>Shift+Alt+M</code> to hear the distances between all saved marks.</p>
+<p>You can press <code>Shift+Alt+M</code> to hear the distances between all of your stored marks at once.</p>
 
 
 <h2 id="favourites">6. Favourites</h2>
 
-<p>Favourites let you save and quickly return to frequently used places or points of interest.</p>
+<p>Favourites are for the places you'll want to come back to regularly. Unlike marks, these stick around permanently, saved locally across sessions.</p>
 
-<p>They are stored locally and persist across sessions. You can add the current place or a selected point of interest, then return to it later from the favourites list.</p>
+<p>Save the current place, or a point of interest you've found, and return to it any time from the favourites list.</p>
 
 
 <h2 id="pois">7. Points of interest</h2>
 
-<p>Points of interest (POIs) include businesses, transport stops, parks, medical services, accommodation, and landmarks. POI data is sourced from OpenStreetMap by default. A HERE API key enables richer live detail such as opening hours, phone numbers, and ratings.</p>
+<p>Points of interest — POIs — cover businesses, transport stops, parks, medical services, accommodation, and landmarks. They come from OpenStreetMap by default; add a HERE API key and you get richer live detail like opening hours, phone numbers, and ratings on top.</p>
 
-<p>POIs are useful in both map and street exploration. In map mode they help you see what is nearby, and in street mode they let you inspect local places one by one. A good POI entry can tell you the address, phone number, opening hours, and website, and the website can often be opened straight away with a single keystroke.</p>
+<p>They're useful in both map and street exploration — in map mode they tell you what's around, and in street mode you can inspect places one at a time. A good POI entry gives you an address, phone number, hours, and website, and that website is just one keystroke away.</p>
 
-<p>When opening the POI list, you are prompted to choose a category:</p>
+<p>When you open the POI list, you'll be asked to pick a category:</p>
 
 <ul>
   <li>All nearby</li>
@@ -153,176 +151,195 @@
   <li>Accommodation</li>
 </ul>
 
-<p>Selecting a transit stop can open departure information where timetable data is available. POIs can be jumped to, explored in more detail, queried for address or contact details, and opened in a browser if a website is available. In practice, that makes the POI list much more than a directory: it is a fast way to go from hearing about a place to acting on it.</p>
+<p>MapInABox can download relevant transport timetable information that can be browsed in an accessible list. So, if you pick a transit stop, you can often open departure information immediately if the timetable data is known to the program and can be downloaded.</p>
 
 
 <h2 id="find-food">8. Find food</h2>
 
-<p>Find Food searches for food and drink venues along a route — useful when you want to plan a stop on a longer journey. It lives in the Tools menu (<code>F12</code>); select <strong>Find Food</strong> from the list. For full details see <a href="#tool-find-food">section 13.9</a>.</p>
+<p>Find Food looks for food and drink venues along a route — handy for planning a stop on a longer trip. It lives in the Tools menu (<code>F12</code>) under <strong>Find Food</strong>; see <a href="#tool-find-food">section 14.9</a> for the full walkthrough.</p>
 
-<p>When you open it, you'll be asked to choose a starting point and then a destination. Each time, the app offers a short list of options: type an address, pick a saved mark, choose a favourite, or use your current position. Once both ends of the route are set, Map in a Box fetches the route and lists any food and drink venues found within 300 metres of it, ordered by where they appear along the way. It is a fast, practical way to turn a route into a usable trip with food stops already lined up.</p>
+<p>You'll be asked for a starting point and a destination, and for each, the app offers a short menu which consists of the following options: type an address, pick a saved mark, choose a favourite, or use current location. Once both origin and destination are set, MapInABox fetches the route and attempts to list food and drink venues on-route in the order you'd pass them. It solves a problem a blind traveller often encounters on the road, who doesn't always know where their next meal is coming from!</p>
 
 
 <h2 id="satellite-street-view">9. Satellite and Street View</h2>
 
-<p>Map in a Box can open satellite imagery and street-level photographs for the current position. Both require a Google API key. If a Mistral API key is also configured, the program asks for a spoken description of the image.</p>
+<p>Map in a Box can pull up satellite imagery and street-level photographs for wherever you're standing. Both need a Google API key. Add a Mistral key as well, and the program will provide an image description.</p>
 
 <h3>9.1 Satellite view</h3>
-<p>Satellite view shows an overhead image of the current position in an in-app dialog. The Mistral description appears below the image and is announced through the screen reader. It can describe terrain, land use, buildings, water, and vegetation. Without a Mistral key, the image still opens but the text field reads: <em>"Satellite imagery loaded. A Mistral API key is required to fetch a visual description."</em></p>
+<p>Satellite view shows an overhead image of your current position in an in-app dialog. The Mistral description sits below the image and appears in a read-only dialog box. It can cover terrain, land use, buildings, water, and vegetation. If you don't have a Mistral key,, the image still opens, but the text field prompts that a Mistral key is required for descriptions.</p>
 
 <h3>9.2 Street View</h3>
-<p>Street View fetches up to two ground-level photographs of the current location — one in each direction along the street — and displays them in an in-app dialog. The Mistral description appears below the images and is announced through the screen reader. With a Mistral key, it can describe building types, street layout, signage, access features, and surroundings. Without a Mistral key, the images still display but the text field reads: <em>"Street View imagery loaded. A Mistral API key is required to fetch a visual description."</em></p>
-<p>If no Google API key is configured, the program opens <a href="https://www.mapillary.com">Mapillary</a> in your browser as a fallback. If Google Street View has no coverage at the current location, the program falls back to satellite view instead.</p>
-
-<div class="note">
-  <strong>Note:</strong> Both satellite and Street View open inside the app as dialogs, not in a browser. The Mistral description is announced by the screen reader as well as shown in the dialog text field. Mapillary is the only browser fallback.
-</div>
+<p>Street View grabs up to two ground-level photographs of the current spot — one in each direction along the street — and shows them in an in-app dialog. Again, the Mistral description appears below the images and is announced by your screenreader, covering building types, street layout, signage, access features, and surroundings when a Mistral key is set. Without one, the images still load but the text just reads: <em>"Street View imagery loaded. A Mistral API key is required to fetch a visual description."</em></p>
+<p>No Google key at all? The program opens <a href="https://www.mapillary.com">Mapillary</a> in your browser instead. And if Google Street View simply has no coverage where you are, it falls back to satellite view.</p>
 
 
 <h2 id="street-mode">10. Street mode</h2>
 
-<p>Press <code>F11</code> from map mode to enter street mode at the current cursor position. Street data is downloaded from OpenStreetMap on demand and cached locally. The first visit to an area may take a few seconds to load depending on connection speed.</p>
+<p>Press <code>F11</code> from map mode to drop into street mode at your current position. Street data comes from OpenStreetMap on demand and gets cached locally, so the first visit to an area can take a few seconds depending on your connection — after that, it's instant.</p>
 
-<p>Street mode allows detailed local exploration: moving along roads, checking house numbers and intersections, looking up businesses, and getting walking directions. It is where the app shifts from overview to real-world detail.</p>
+<p>This is where the app shifts from overview to real-world detail: moving along roads, checking house numbers and intersections, looking up businesses, and getting walking directions.</p>
 
-<p>Movement follows the street network, with finer or larger steps available when you need them. You can step through house numbers and intersections, turn onto cross streets, search for streets or addresses, hear the nearest cross street, open the POI list, and ask for walking directions to a typed address. Press <code>F11</code> again when you want to return to map mode.</p>
+<p>Movement follows the street network, with finer or larger steps when you need them. You can step through house numbers and intersections, turn onto cross streets, search for a street or address, hear the nearest cross street, open the POI list, and ask for walking directions to a typed address. Press <code>F11</code> again to head back to map mode.</p>
 
-<p>In Australia, <code>Ctrl+Shift+F12</code> reports whether GNAF address data is on or off; press it again within five seconds to toggle. GNAF is often better for residential house-number coverage. On business strips, shopping streets, hotels, pubs, and other named venues, OpenStreetMap may give better address results because businesses and buildings can carry their own address tags. If address stepping seems to skip businesses or keeps landing on residential-style numbers, try GNAF off; turn it back on when exploring mostly residential streets.</p>
+<p>Once you've asked for walking directions with <code>Ctrl+G</code>, you can normally step through them one instruction at a time. Press <code>Shift+I</code> instead, and — if you've got a Mistral key set up — the app will ask Mistral to generate an accessible narration for the walk, the way a local might describe it, rather than a list of turns. You then move through that narrative with <code>Up</code> and <code>Down</code>, repeat the current step with <code>I</code>, and press <code>Escape</code> to drop back into the ordinary step-by-step directions, with the route still active. If Mistral isn't configured, or the request fails, you just get the regular turn-by-turn list — nothing is lost by trying it.</p>
 
-
-<h2 id="walking-mode">11. Walking mode</h2>
-
-<p>Walking mode simulates moving along a real street network. You travel forward and backward along the current street and choose which way to turn at intersections. Nearby points of interest can be announced automatically as you walk.</p>
-
-<p>POI announcements while walking are configured in Settings. You can choose the category of POIs to announce, the detection radius (50, 80, or 120 metres), and whether the category label is included in each announcement.</p>
+<p>MapInABox supports GNAF. GNAF (Geocoded National Address File) is Australia's authoritative address database, maintained by Geoscape. It contains millions of verified addresses, including precise street numbers, street names, suburbs and geographic coordinates. Unlike OpenStreetMap, where house numbers depend on volunteer contributions and may be incomplete, G-NAF is compiled from state and territory government address data and is regarded as the definitive source for valid Australian addresses. For applications that need accurate street numbering, such as address lookup or navigation for blind users, G-NAF can be used to determine the exact location of a numbered property, validate that an address exists, and identify nearby street numbers with a much higher level of completeness and reliability than crowd-sourced mapping alone.</p>
+<p>While browsing within Australia, <code>Ctrl+Shift+F12</code> tells you whether GNAF address data is on or off; press it again within five seconds to flip it. GNAF tends to be better for residential house numbers. On business strips, shopping streets, hotels, pubs, and other named venues, OpenStreetMap can actually do better, since businesses and buildings often carry their own address tags. If address stepping seems to skip past businesses or keeps landing on plain residential numbers, try turning GNAF off — then back on again once you're back among mostly houses.</p>
 
 
-<h2 id="free-mode">12. Free mode</h2>
-<p>Free mode lets you explore an area relative to a heading, without being constrained to a road. You move forward along your current heading and can pan left or right to hear what is nearby on either side.</p>
+<h2 id="city-packs">11. Mass Downloading a city's suburbs</h2>
 
-<p>This mode is designed for heading-based exploration. You can move forward, listen for nearby places on each side, snap to nearby cross streets, reverse direction, inspect address numbers or POIs, and leave the mode when you want to return to the street view.</p>
+<p>Normally street data is downloaded on demand. Press <code>F11</code> and the current area loads there and then. That's fine for casual exploring, but there is generally a delay whilst the suburb data is fetched. If you already know you're going to spend a while in, say, Brisbane, or you'd rather not wait on a download mid-navigation, you can grab a whole batch of suburbs ahead of time instead.</p>
+
+<p>Press <code>Ctrl+Shift+F11</code> to open the city data wizard. It walks you through four short steps:</p>
+
+<ol>
+  <li><strong>Country.</strong> Pick from a worldwide list — the country you are currently exploring ought to be auto-selected</li>
+  <li><strong>State, region, or postcode range.</strong> Choose a state/region from the list, or type a postcode range instead (useful when you want something more precise than a whole state).</li>
+  <li><strong>Suburbs.</strong> The app asks OpenStreetMap what real, named suburbs and towns actually exist in that area, and gives you a proper checkable list to choose from — arrow through it, tick the ones you want, and a filter box lets you narrow a long list down by typing part of a name. Nothing gets downloaded until you say so.</li>
+  <li><strong>Confirm.</strong> Review your selections and the estimated time, then start the download.</li>
+</ol>
+
+<p>Once you confirm, the wizard closes and you are returned to the map, while the suburbs are downloaded in the background. It pays to avoid brand-new, un-downloaded areas while a batch download is running, since both would be competing for the same street-data connection and things would just go slower for a while. Anywhere you've already visited, or already downloaded, is unaffected.</p>
+
+<p>Suburbs fetched this way are cached exactly the same as anything you'd visit normally with <code>F11</code>, so there's no difference once they're downloaded — walking into a pre-fetched suburb for the first time feels just as instant as revisiting somewhere you explored yourself yesterday.</p>
 
 
-<h2 id="tools">13. Tools menu</h2>
+<h2 id="walking-mode">12. Walking mode</h2>
 
-<p>Press <code>F12</code> in map mode to open the Tools menu. It collects the longer route and travel tools in one place. Some tools need marks, a destination, or API keys, and the program tells you what is needed when something is missing. If you are trying to plan, compare, or discover, this is where a lot of the program’s power shows up.</p>
+<p>Walking mode simulates moving along a real street network. You can travel forward and back along the current street and choose your turn at each intersection, with nearby points of interest optionally announced as you go.</p>
 
-<h3 id="tool-detour">13.1 Detour Calculator</h3>
+<p>Points of interest can be announced as you virtually walk, and these can be set up in the Settings menu (Control+Comma)</p>
 
-<p>Compares a direct trip against a trip with one or more stop-offs, showing the extra distance and time each diversion adds.</p>
+
+<h2 id="free-mode">13. Free mode</h2>
+<p>Free mode lets you explore relative to a heading,. Best of all, you can move forward along your chosen path, and use the left or right arrow keys to hear points of interest on either side of the street on which you're travelling.</p>
+
+<p>It's built for heading-based exploration: you can easily move forward or back, listen for nearby places on either side, snap to nearby cross streets, reverse direction, check address numbers or POIs, and step back into street mode whenever you're ready.</p>
+
+
+<h2 id="tools">14. Tools menu</h2>
+
+<p>Press <code>F12</code> in map mode to open the Tools menu — this is where the longer route and travel tools live. Some need marks, a destination, or an API key, and if a required key is missing, the app will let you know. If you're trying to plan, compare, or discover something, there's a good chance the answer is in this menu.</p>
+
+<h3 id="tool-detour">14.1 Detour Calculator</h3>
+
+<p>Got time to drop off that parcel on the way to work? This tool Compares a direct trip against one with stop-offs added, showing the extra distance and time each diversion costs you.</p>
 
 <ol>
   <li>Enter your starting point.</li>
   <li>Enter your first stop-off, then your final destination.</li>
-  <li>Add further stop-offs if needed — leave the prompt blank to finish.</li>
+  <li>Add more stop-offs if you like — leave the prompt blank to finish.</li>
 </ol>
 
-<p>Falls back to open routing without a Google key; turn-by-turn detail may be reduced.</p>
+<p>Falls back to open routing without a Google key; turn-by-turn detail may be a bit thinner.</p>
 
-<h3 id="tool-suburb">13.2 Suburb Lister</h3>
+<h3 id="tool-suburb">14.2 Suburb Lister</h3>
 
-<p>Lists alternative routes between two points showing which suburbs or areas each passes through and whether toll roads are involved.</p>
+<p>Lists alternative routes between two points, showing which suburbs or areas each one passes through and whether toll roads are involved.</p>
 
 <ol>
   <li>Enter your starting point.</li>
   <li>Enter your destination.</li>
 </ol>
 
-<h3 id="tool-rendezvous">13.3 Rendezvous Point</h3>
+<h3 id="tool-rendezvous">14.3 Rendezvous Point</h3>
 
-<p>Finds a pickup, dropoff, or meeting point between two people. Select a mode in the dialog.</p>
+<p>How convenient is it for your friend to pick you up? Who gets dropped off first? Works out a pickup, dropoff, or meeting point between two people. Pick a mode in the dialog.</p>
 
-<p><strong>Pickup</strong> — a driver collects you en route to a shared destination. Enter the driver's start, the shared destination, and your location. Candidates are scored by minimising the driver's detour plus your travel to the pickup. Each result shows your distance to the point, the driver's distance from their start, and the remaining shared journey.</p>
+<p><strong>Pickup</strong> — a driver collects you on the way to a shared destination. Enter the driver's start, the shared destination, and your location. Candidates are scored by minimising the driver's detour plus your travel to the pickup point. Each result shows your distance to the point, the driver's distance from their start, and the remaining shared journey.</p>
 
-<p><strong>Dropoff</strong> — a driver drops you off en route to their own destination. Enter the driver's start, their destination, and your destination. Scoring favours points where the driver carries you further, penalising detours from the driver's route at 4× weight — a 5 km detour counts the same as 20 km of remaining travel for you. Each result shows how far the driver carries you, your remaining distance, and whether the point is on the driver's route or off it.</p>
+<p><strong>Dropoff</strong> — a driver drops you off on the way to their own destination. Enter the driver's start, their destination, and your destination. Scoring favours points where the driver carries you further, and penalises detours from the driver's route at 4× weight — a 5 km detour counts the same as 20 km of remaining travel for you. Each result shows how far the driver carries you, your remaining distance, and whether the point is on the driver's route or off it.</p>
 
-<p><strong>Meeting place</strong> — two people travelling toward each other. Enter both starting locations. Candidates are ranked by road distance from the true midpoint. Each result shows distance from each person and the offset from the exact halfway point.</p>
+<p><strong>Meeting place</strong> — two people travelling toward each other. Enter both starting locations. Candidates are ranked by road distance from the true midpoint, with each result showing distance from each person and the offset from the exact halfway point.</p>
 
-<p>All modes return up to six candidates, ranked best first.</p>
+<p>All three modes return up to six candidates, best first.</p>
 
-<h3 id="tool-toll">13.4 Toll Compare</h3>
+<h3 id="tool-toll">14.4 Toll Compare</h3>
 
-<p>Compares the toll route against the toll-free alternative for the same corridor. Enter start and destination; results show distance, travel time, and toll cost. Toll pricing requires a Google API key — without one, only distance and time are shown.</p>
+<p>Ever contemplate whether or not to take the tolls? How much time does it really save? This tool compares the toll route against the toll-free alternative for the same trip. Enter a start and destination; results show distance, travel time, and toll cost. Toll pricing needs a Google API key — without one you just get distance and time.</p>
 
-<h3 id="tool-journey">13.5 Journey Planner</h3>
+<h3 id="tool-journey">14.5 Journey Planner</h3>
 
-<p>Plans a public transport trip between two addresses or stops.</p>
+<p>Plans a public transport trip or walking route between two addresses or stops.</p>
 
 <ol>
   <li>Enter origin and destination (address, stop name, or suburb).</li>
   <li>Choose timing: leave now, depart at, or arrive by.</li>
-  <li>Enter a date and time if prompted.</li>
+  <li>Enter a date and time if asked.</li>
 </ol>
 
-<p>Results include connections, total duration, and per-leg departure times. Requires a Google API key; no fallback.</p>
+<p>Results include connections, total duration, and per-leg departure times, as well as platform information where possible from GTFS data. Needs a Google API key; there's no fallback for this one.</p>
 
-<h3 id="tool-departures">13.6 Departure Board</h3>
+<h3 id="tool-departures">14.6 Departure Board</h3>
 
-<p>Shows upcoming departures for transit stops near the current map position. Select from a list of nearby stops; results include service name, headsign, and departure time. Also accessible via <code>Ctrl+Enter</code> on a transit stop in the POI list.</p>
+<p>Shows upcoming departures for transit stops near your current position. Pick from a list of nearby stops; results include the service name, headsign, and departure time. You can also get here via <code>Ctrl+Enter</code> on a transit stop in the POI list.</p>
 
-<p>Uses GTFS scheduled data by default. With a HERE API key, switches to live departures with platform numbers and real-time status.</p>
+<p>Uses GTFS scheduled data by default. Add a HERE API key and it switches to live departures with platform numbers and real-time status.</p>
 
-<h3 id="tool-flights">13.7 Flight Search</h3>
+<h3 id="tool-flights">14.7 Flight Search</h3>
 
-<p>Searches flights between two airports by name or IATA code. Returns up to 15 itineraries sorted by duration, with airline, departure and arrival times, and connections shown per leg. Requires a RapidAPI key (Timetable Lookup API, free tier available).</p>
+<p>Searches flights between two airports by name or IATA code, returning up to 15 itineraries sorted by duration — airline, departure and arrival times, and connections per leg. Needs a RapidAPI key (Timetable Lookup API, free tier available).</p>
 
-<h3 id="tool-hotels">13.8 Hotel Search</h3>
+<h3 id="tool-hotels">14.8 Hotel Search</h3>
 
 <ol>
   <li>Enter a city.</li>
-  <li>Select from matched locations.</li>
+  <li>Select from the matched locations.</li>
   <li>Enter check-in and check-out dates.</li>
 </ol>
 
-<p>Results aggregate hotels for the city and show each hotel name and address. Selecting a hotel opens the hotel’s own website, which makes it much easier to move from search results to the official booking or information page. Requires a RapidAPI key (Priceline API, free tier available).</p>
+<p>Results aggregate hotels for the city with name and address for each. Pick one and it opens the hotel's own website, so you go straight from search result to the actual booking or info page. Needs a RapidAPI key (Priceline API, free tier available).</p>
 
-<h3 id="tool-find-food">13.9 Find Food</h3>
+<h3 id="tool-find-food">14.9 Find Food</h3>
 
-<p>Find Food searches for food and drink venues within 300 metres of a route, ordered by where they appear along the way. Open the Tools menu with <code>F12</code> and select <strong>Find Food</strong>. This is one of the most practical examples of how Map in a Box turns a route into something you can act on immediately.</p>
+<p>Find Food searches for food and drink venues within 300 metres of a route, in the order you'd pass them. Open the Tools menu with <code>F12</code> and pick <strong>Find Food</strong> — it's one of the most practical examples of how the app turns a route into something you can actually act upon.</p>
 
 <ol>
   <li>Choose a starting point — type an address, pick a saved mark, choose a favourite, or use your current position.</li>
   <li>Choose a destination the same way.</li>
-  <li>Map in a Box fetches the route and lists food and drink venues found within 300 metres of it. Select a venue to hear its address; with a HERE API key you'll also get opening hours, phone number, and a link to its website.</li>
+  <li>Map in a Box fetches the route and lists food and drink venues within 300 metres of it. Select one to hear its address; with a HERE API key you also get hours, phone number, and a website link.</li>
 </ol>
 
-<p>If a GTFS transit route is active when you open Find Food, the search runs along that transit line rather than a road route.</p>
+<p>Please note: If a GTFS transit route is already active you can press control+alt+f. This keystroke invokes a search which runs along that transit line instead of a road route, returning food places across the transit journey.</p>
 
 
-<h2 id="challenge">14. Geography challenge game</h2>
+<h2 id="challenge">15. Geography challenge game</h2>
 
-<p>The challenge game tests your knowledge of world geography by sound. The program names a country and you must locate it on the world map using movement and audio cues.</p>
+<p>The challenge game tests your world geography by ear. The program names a country, and you have to find it on the world map using audio cues alone, and speed is the name of the game!</p>
 
-<div class="note"><strong>Note:</strong> Jump (<code>J</code>) is disabled during the challenge.</div>
+<div class="note"><strong>Note:</strong> Jump (<code>J</code>) is switched off during the challenge — no shortcuts allowed.</div>
 
-<h3>14.1 Audio cues</h3>
+<h3>15.1 Audio cues</h3>
 <table>
   <tr><th>Sound</th><th>Meaning</th></tr>
   <tr><td>Map position tone</td><td>The normal spatial tone — tells you where you currently are on the world map.</td></tr>
-  <tr><td>Sonar pulse</td><td>A centred pulse that rises in pitch as you approach the target country.</td></tr>
-  <tr><td>Heartbeat</td><td>A low rhythmic beat that speeds up as the time limit approaches.</td></tr>
-  <tr><td>Fanfare</td><td>Plays when you successfully locate the target country.</td></tr>
+  <tr><td>Sonar pulse</td><td>A centred pulse that rises in pitch as you get closer to the target country.</td></tr>
+  <tr><td>Heartbeat</td><td>A low rhythmic beat that speeds up as the clock runs down.</td></tr>
+  <tr><td>Fanfare</td><td>Plays when you successfully find the target country.</td></tr>
   <tr><td>Buzzer</td><td>Plays when time runs out.</td></tr>
 </table>
 
-<p>Direction mode (Map learning or Shortest globe) is configured in Settings under <em>Challenge direction</em>.</p>
+<p>Fancy playing against someone else? <code>Ctrl+F10</code> starts a scored, multi-player challenge session rather than a solo round — same audio cues, but now it's a competition.</p>
+
+<p>Direction mode (Map learning or Shortest globe) is set in Settings under <em>Challenge direction</em>.</p>
 
 
-<h2 id="settings">15. Settings</h2>
+<h2 id="settings">16. Settings</h2>
 
-<p>Press <code>Ctrl+,</code> to open Settings. The dialog has three tabs: General, API Keys, and Logging.</p>
+<p>Press <code>Ctrl+,</code> to open Settings. There are three tabs: General, API Keys, and Logging.</p>
 
-<h3>15.1 General tab</h3>
+<h3>16.1 General tab</h3>
 <table>
   <tr><th>Setting</th><th>Description</th></tr>
-  <tr><td>Announce nearby POIs while walking</td><td>Enable or disable automatic POI announcements in walking mode.</td></tr>
+  <tr><td>Announce nearby POIs while walking</td><td>Turn automatic POI announcements on or off in walking mode.</td></tr>
   <tr><td>POIs to announce while walking</td><td>Choose which category of POIs to announce (all, food, transport, etc.).</td></tr>
   <tr><td>Announce POIs within</td><td>Detection radius for walking mode POI announcements: 50, 80, or 120 metres.</td></tr>
   <tr><td>Include category label</td><td>Whether the POI category is spoken as part of each announcement.</td></tr>
-  <tr><td>Announce climate zones</td><td>Announce climate zone changes during navigation.</td></tr>
+  <tr><td>Announce climate zones</td><td>Announce climate zone changes as you navigate.</td></tr>
   <tr><td>Announce suburb size</td><td>Announce the suburb's size category when street data loads.</td></tr>
   <tr><td>Spatial tones</td><td>World, Country, or Region — controls the scale of audio position feedback.</td></tr>
-  <tr><td>Challenge direction</td><td>Map learning or Shortest globe — controls how the challenge game indicates direction.</td></tr>
+  <tr><td>Challenge direction</td><td>Map learning or Shortest globe — controls how the challenge game points you toward the target.</td></tr>
   <tr><td>Weather temperature units</td><td>Automatic (country-based), Celsius, or Fahrenheit.</td></tr>
   <tr><td>POI database</td><td>OpenStreetMap or HERE for street and free mode POI data.</td></tr>
   <tr><td>Navigation provider</td><td>OpenStreetMap, Google Maps, or HERE for walking route calculation.</td></tr>
@@ -330,13 +347,13 @@
   <tr><td>Refresh Transit Feed Catalog</td><td>Re-download the public transport feed index.</td></tr>
 </table>
 
-<h3>15.2 API Keys tab</h3>
-<p>Enter keys for third-party services. See <a href="#api-keys">Section 16</a> for details on what each key enables. All keys are stored locally in your settings file and are never transmitted except to the relevant service.</p>
+<h3>16.2 API Keys tab</h3>
+<p>This is where you enter keys for third-party services — see <a href="#api-keys">Section 17</a> for what each one unlocks. Keys are stored locally in your settings file and never sent anywhere except the relevant service.</p>
 
-<h3>15.3 Logging tab</h3>
-<p>Controls which events are written to <code>miab.log</code> in your settings folder. Useful for diagnosing problems. Available log categories: errors, street/POI data, street snap, API calls, challenge sessions, feature usage, navigation events, and verbose diagnostics.</p>
+<h3>16.3 Logging tab</h3>
+<p>Controls which events get written to <code>miab.log</code> in your settings folder — useful if something's misbehaving and you want to see what actually happened. Available categories: errors, street/POI data, street snap, API calls, challenge sessions, feature usage, navigation events, and verbose diagnostics.</p>
 
-<h3>15.4 Other buttons</h3>
+<h3>16.4 Other buttons</h3>
 <table>
   <tr><th>Button</th><th>Action</th></tr>
   <tr><td>Set Home Location</td><td>Set the current map position as your home/startup location.</td></tr>
@@ -344,15 +361,14 @@
 </table>
 
 
-<h2 id="api-keys">16. Internet and API keys</h2>
+<h2 id="api-keys">17. Internet and API keys</h2>
 
-<p>Core map features work from local bundled data and do not require an internet connection. The following features require internet access:</p>
+<p>Much of MapInABox runs off local bundled data and doesn't need the internet at all. These are the components that do:</p>
 
 <ul>
   <li>Weather and air quality</li>
   <li>Timezone and sunrise/sunset</li>
   <li>Wikipedia summaries</li>
-  <li>Country facts (live data)</li>
   <li>POI lookups and detail</li>
   <li>Street data downloads</li>
   <li>Transit timetable data</li>
@@ -362,12 +378,12 @@
   <li>Overhead flight information</li>
 </ul>
 
-<h3>16.1 API keys and what they unlock</h3>
+<h3>17.1 API keys and what they unlock</h3>
 
 <table>
   <tr><th>Key</th><th>Where to get it</th><th>What it enables</th></tr>
   <tr><td>Google</td><td><a href="https://developers.google.com/maps/get-started">Google Cloud Console</a></td><td>Satellite imagery, Street View, Google Maps walking navigation, and proximity-aware address search</td></tr>
-  <tr><td>Mistral</td><td><a href="https://console.mistral.ai/">Mistral console</a> (free, no credit card)</td><td>Spoken descriptions of satellite and Street View images, POI summaries, and transit questions</td></tr>
+  <tr><td>Mistral</td><td><a href="https://console.mistral.ai/">Mistral console</a> (free, no credit card)</td><td>Spoken descriptions of satellite and Street View images, POI summaries, narrative walking briefings, and transit questions</td></tr>
   <tr><td>HERE</td><td><a href="https://developer.here.com/sign-up">HERE Developer</a></td><td>Live POI details including phone number, website, opening hours, and ratings; category-filtered POI browsing with better commercial coverage than OpenStreetMap; turn-by-turn walking navigation; real-time departure boards showing next services, platform, and transport mode (rather than scheduled timetable only)</td></tr>
   <tr><td>OpenRouteService</td><td><a href="https://openrouteservice.org/sign-up/">openrouteservice.org</a></td><td>Walking and driving distance calculation between marks</td></tr>
   <tr><td>AviationStack</td><td><a href="https://aviationstack.com/signup/free">aviationstack.com</a></td><td>Airport arrival and departure boards, live flight information</td></tr>
@@ -375,18 +391,18 @@
   <tr><td>RapidAPI</td><td><a href="https://rapidapi.com/auth/sign-up">rapidapi.com</a></td><td>Flight search (Timetable Lookup API) and hotel search (Priceline API)</td></tr>
 </table>
 
-<h3>16.2 Google and HERE in more detail</h3>
+<h3>17.2 Google and HERE in more detail</h3>
 
-<p><strong>Google API key</strong> — enables satellite imagery and Street View inside the app as dialogs, not in a browser. Satellite view shows an overhead image of the current position. Street View fetches up to two ground-level photographs of the location. Google Maps navigation provides turn-by-turn walking directions with named street instructions. Without a Google key, navigation falls back to OpenStreetMap routing, Street View falls back to Mapillary in a browser, and satellite imagery is unavailable.</p>
+<p><strong>Google API key</strong> — enables satellite imagery and Street View inside the app as dialogs, not a browser tab. Satellite view shows an overhead image of your current position; Street View grabs up to two ground-level photographs of the location. Google Maps navigation gives turn-by-turn walking directions with named street instructions. Without a Google key, navigation falls back to OpenStreetMap routing, Street View falls back to Mapillary in a browser, and satellite imagery just isn't available.</p>
 
-<p><strong>HERE API key</strong> — HERE is optional. Without it, the app uses OpenStreetMap data throughout and remains fully functional. With a HERE key, three things improve: POI details, HERE walking directions, and live departure boards. HERE accounts are free to create but require registration and may involve follow-up contact from HERE's commercial team.</p>
+<p><strong>HERE API key</strong> — entirely optional. Without it, the app runs on OpenStreetMap data throughout and works fine. With a HERE key, three things get better: POI details, HERE walking directions, and live departure boards. HERE accounts are free to create, but do need registration and might involve some follow-up contact from their commercial team.</p>
 
-<h3>16.3 What changes when a key is missing</h3>
+<h3>17.3 What changes when a key is missing</h3>
 
 <table>
   <tr><th>Missing key</th><th>Effect</th></tr>
   <tr><td>Google</td><td>Satellite imagery is unavailable. Street View falls back to Mapillary in a browser. Google Maps navigation is unavailable; walking routes use OpenStreetMap instead.</td></tr>
-  <tr><td>Mistral</td><td>No spoken descriptions for satellite or Street View images, POI summaries, or transit questions.</td></tr>
+  <tr><td>Mistral</td><td>No spoken descriptions for satellite or Street View images, POI summaries, narrative walking briefings, or transit questions.</td></tr>
   <tr><td>HERE</td><td>POI details use OpenStreetMap only. Walking navigation uses OpenStreetMap routing. The departure board uses GTFS scheduled timetables.</td></tr>
   <tr><td>OpenRouteService</td><td>Distance calculations between marks are unavailable.</td></tr>
   <tr><td>AviationStack</td><td>Airport arrival and departure boards are unavailable.</td></tr>
@@ -394,20 +410,20 @@
   <tr><td>RapidAPI</td><td>Flight search and hotel search are unavailable.</td></tr>
 </table>
 
-<p>When a key is missing and a fallback exists, Map in a Box uses the fallback silently. When no fallback is available, the program explains what is needed.</p>
+<p>When a key's missing and there's a fallback, Map in a Box just quietly uses it. When there isn't one, it'll tell you what's needed.</p>
 
 
-<h2 id="workflows">17. Common workflows</h2>
+<h2 id="workflows">18. Common workflows</h2>
 
-<h3>17.1 Find a city</h3>
+<h3>18.1 Find a city</h3>
 <ol>
   <li>Press <code>J</code>.</li>
   <li>Type the city name and press <code>Enter</code>.</li>
-  <li>Choose from the results list if more than one match is found.</li>
+  <li>Choose from the results list if there's more than one match.</li>
   <li>Press <code>Enter</code> to jump.</li>
 </ol>
 
-<h3>17.2 Get facts about a country</h3>
+<h3>18.2 Get facts about a country</h3>
 <ol>
   <li>Move the cursor onto the country.</li>
   <li>Press <code>F6</code> for area, population, and regional data.</li>
@@ -415,81 +431,88 @@
   <li>Press <code>L</code> for languages, <code>$</code> for currency.</li>
 </ol>
 
-<h3>17.3 Explore a neighbourhood at street level</h3>
+<h3>18.3 Explore a neighbourhood at street level</h3>
 <ol>
   <li>Jump to the city with <code>J</code>.</li>
-  <li>Press <code>F11</code> to enter street mode. Wait for data to load.</li>
-  <li>Use arrow keys to move, <code>S</code> to search for a street by name, <code>P</code> for nearby POIs, <code>A</code> for address lookup, and <code>Ctrl+G</code> for walking directions.</li>
+  <li>Press <code>F11</code> to enter street mode. Give it a moment to load.</li>
+  <li>Use the arrow keys to move, <code>S</code> to search for a street by name, <code>P</code> for nearby POIs, <code>A</code> for address lookup, and <code>Ctrl+G</code> for walking directions.</li>
 </ol>
 
-<h3>17.4 Plan food stops along a route</h3>
+<h3>18.4 Get ready to explore a whole city ahead of time</h3>
+<ol>
+  <li>Press <code>Ctrl+Shift+F11</code> to open the city data wizard.</li>
+  <li>Pick a country, then a state/region (or a postcode range if you want a specific range, and if postcodes are supported in your region.</li>
+  <li>Tick the suburbs you're interested in from the list, then press confirm.</li>
+  <li>Keep doing whatever else you were doing — the download runs in the background, and each suburb loads instantly once it's done.</li>
+</ol>
+
+<h3>18.5 Plan food stops along a route</h3>
 <ol>
   <li>Move to your departure point. Press <code>Ctrl+M</code> then <code>1</code> to save it as mark 1.</li>
   <li>Move to your destination. Press <code>Ctrl+M</code> then <code>2</code> to save it as mark 2.</li>
-  <li>Press <code>F12</code>, choose <strong>Find Food</strong>, select mark 1 as the starting point and mark 2 as the destination. Review the list of food and drink venues along the route.</li>
+  <li>Press <code>F12</code>, choose <strong>Find Food</strong>, select mark 1 as the start and mark 2 as the destination, and look over the venues along the way.</li>
 </ol>
 
-<h3>17.5 Compare distances between marked places</h3>
+<h3>18.6 Compare distances between marked places</h3>
 <ol>
-  <li>Move to each place and press <code>Ctrl+M</code>, storing each as mark 1, 2, and 3.</li>
-  <li>Press <code>Shift+Alt+M</code> to compare distances between all saved marks.</li>
+  <li>Move to each place and press <code>Ctrl+M</code>, saving them as marks 1, 2, and 3.</li>
+  <li>Press <code>Shift+Alt+M</code> to hear the distances between all three.</li>
 </ol>
 
-<h3>17.6 Play the geography challenge</h3>
+<h3>18.7 Play the geography challenge</h3>
 <ol>
   <li>Press <code>F10</code>. The program names a target country.</li>
-  <li>Move with the arrow keys. Use the map-position tone to track where you are and the sonar pulse to judge how close you are to the target.</li>
-  <li>Press <code>Shift+F10</code> or <code>R</code> at any time to hear the target name again.</li>
+  <li>Move with the arrow keys — the map-position tone tells you where you are, and the sonar pulse tells you how close you're getting.</li>
+  <li>Press <code>Shift+F10</code> at any time to hear the target name again.</li>
 </ol>
 
-<h3>17.7 Open a business website instantly</h3>
+<h3>18.8 Open a business website instantly</h3>
 <ol>
   <li>Find a business in the POI list or in street mode.</li>
-  <li>Press <code>Ctrl+Alt+4</code> to hear the saved website field, or press <code>Ctrl+W</code> to open the official site straight away.</li>
-  <li>If the app cannot find a site immediately, it falls back to a web search so you can keep moving.</li>
+  <li>Press <code>Ctrl+Alt+4</code> to hear the saved website field, or <code>Ctrl+W</code> to just open the site right away.</li>
+  <li>Can't find a site straight away? The app falls back to a web search so you're not stuck.</li>
 </ol>
 
-<p>This is one of the most powerful everyday shortcuts in Map in a Box: discover a place, hear its details, and jump to its website without leaving the keyboard.</p>
 
 
-<h2 id="troubleshooting">18. Troubleshooting</h2>
+<h2 id="troubleshooting">19. Troubleshooting</h2>
 
-<h3>18.1 First launch on macOS — app blocked by Gatekeeper</h3>
-<p>macOS blocks apps from developers who have not paid for Apple's code signing programme. To open Map in a Box for the first time, use the install script included in the zip:</p>
+<h3>19.1 First launch on macOS — app blocked by Gatekeeper</h3>
+<p>macOS blocks apps from developers who haven't paid for Apple's code-signing programme, which includes us for now. To open Map in a Box the first time, use the install script that comes in the zip:</p>
 <ol>
-  <li>Extract the downloaded zip. You will find <code>MapInABox.app</code> and <code>install-macos.sh</code> in the same folder.</li>
-  <li>Open Terminal (Applications → Utilities → Terminal, or Spotlight search for Terminal).</li>
-  <li>Type <code>bash </code> (with a space after), then drag the <code>install-macos.sh</code> file into the Terminal window. Press <code>Enter</code>.</li>
-  <li>The script removes the restriction, copies the app to your Applications folder, and opens it.</li>
+  <li>Extract the downloaded zip — you'll find <code>MapInABox.app</code> and <code>install-macos.sh</code> sitting together.</li>
+  <li>Open Terminal (Applications → Utilities → Terminal, or search for it with Spotlight).</li>
+  <li>Type <code>bash </code> (with a space after it), then drag <code>install-macos.sh</code> into the Terminal window and press <code>Enter</code>.</li>
+  <li>The script clears the restriction, copies the app to your Applications folder, and opens it.</li>
 </ol>
-<p>After running the script once, you can open Map in a Box from your Applications folder normally — the script does not need to be run again.</p>
-<p>Alternatively, in Terminal:</p>
+<p>After that first run, you can open Map in a Box from Applications like any other app — no need to run the script again.</p>
+<p>Or, if you'd rather do it directly in Terminal:</p>
 <pre><code>xattr -rd com.apple.quarantine /path/to/MapInABox.app</code></pre>
 
-<h3>18.2 First launch on Windows — SmartScreen warning</h3>
-<p>Windows may show a SmartScreen warning the first time you run the installer because the app does not yet have a widespread download history. This warning will reduce and eventually stop appearing as more people download the app. To proceed:</p>
+<h3>19.2 First launch on Windows — SmartScreen warning</h3>
+<p>Windows might show a SmartScreen warning the first time you run the installer, simply because the app hasn't built up a download history yet. This fades away as more people download it. To get past it:</p>
 <ol>
-  <li>When the SmartScreen dialog appears, press <code>Tab</code> to reach the <strong>More info</strong> link and press <code>Enter</code>.</li>
-  <li>Press <code>Tab</code> again to reach the <strong>Run anyway</strong> button and press <code>Enter</code>.</li>
+  <li>When the SmartScreen dialog appears, press <code>Tab</code> to reach <strong>More info</strong> and press <code>Enter</code>.</li>
+  <li>Press <code>Tab</code> again to reach <strong>Run anyway</strong> and press <code>Enter</code>.</li>
 </ol>
 
-<h3>18.3 General issues</h3>
+<h3>19.3 General issues</h3>
 <table>
   <tr><th>Problem</th><th>What to try</th></tr>
-  <tr><td>A key press does nothing</td><td>Check which mode you are in. Some keys are mode-specific. Press <code>F1</code> for context-sensitive help.</td></tr>
-  <tr><td>Street mode says it is loading</td><td>Wait a moment. Some areas require data to be downloaded over the internet before they can be explored.</td></tr>
-  <tr><td>A feature reports a missing API key</td><td>Open Settings with <code>Ctrl+,</code>, go to the API Keys tab, and enter the relevant key.</td></tr>
-  <tr><td>The map announces "remote area"</td><td>The cursor is in a sparsely populated location. Try postcode lookup, nearby features (<code>N</code>), or street mode if data is available for the area.</td></tr>
-  <tr><td>The challenge direction is confusing</td><td>In Settings, switch Challenge direction to <em>Map learning</em>. Also check that Spatial tones is set to <em>World</em>, which is easiest for global orientation.</td></tr>
-  <tr><td>You are lost or disoriented</td><td>Press <code>F2</code> to repeat your location. Press <code>J</code> to jump to a known place. Press <code>Ctrl+F</code> to open favourites.</td></tr>
-  <tr><td>Log file location</td><td>Open Settings and press <strong>Open Settings Folder</strong>. The file <code>miab.log</code> is in that folder.</td></tr>
+  <tr><td>A key press does nothing</td><td>Check which mode you're in — some keys are mode-specific. Press <code>F1</code> for context-sensitive help.</td></tr>
+  <tr><td>Street mode says it's loading</td><td>Give it a moment. Some areas need data downloaded over the internet before they're ready to explore.</td></tr>
+  <tr><td>A feature reports a missing API key</td><td>Open Settings with <code>Ctrl+,</code>, go to the API Keys tab, and add the key it's asking for.</td></tr>
+  <tr><td>The map announces "remote area"</td><td>The cursor's over somewhere sparsely populated. Try postcode lookup, nearby features (<code>N</code>), or street mode if data's available there.</td></tr>
+  <tr><td>The challenge direction is confusing</td><td>In Settings, switch Challenge direction to <em>Map learning</em>, and check Spatial tones is set to <em>World</em> — that's the easiest setting for getting your global bearings.</td></tr>
+  <tr><td>You're lost or disoriented</td><td>Press <code>F2</code> to repeat your location, <code>J</code> to jump somewhere known, or <code>Ctrl+F</code> to open favourites.</td></tr>
+  <tr><td>Log file location</td><td>Open Settings and press <strong>Open Settings Folder</strong> — <code>miab.log</code> is right there.</td></tr>
 </table>
 
 
-<h2 id="key-reference">19. Quick key reference</h2>
+<h2 id="key-reference">20. Quick key reference</h2>
 
-<h3>19.1 Global hotkeys</h3>
-<p>These shortcuts work across modes, or they keep the same meaning wherever they are used.</p>
+<h3>20.1 Global hotkeys</h3>
+<p>These behave the same wherever you press them — map mode, street mode, walking mode, free mode, doesn't matter.</p>
 <table>
   <tr><th>Key</th><th>Action</th></tr>
   <tr><td><code>F1</code></td><td>Help</td></tr>
@@ -499,24 +522,16 @@
   <tr><td><code>F4</code></td><td>Longitude</td></tr>
   <tr><td><code>Shift+F3</code></td><td>Volume down</td></tr>
   <tr><td><code>Shift+F4</code></td><td>Volume up</td></tr>
-  <tr><td><code>F5</code></td><td>Continent</td></tr>
-  <tr><td><code>F6</code></td><td>Country facts</td></tr>
-  <tr><td><code>Shift+F6</code></td><td>Wikipedia summary</td></tr>
   <tr><td><code>F7</code></td><td>Sounds on/off</td></tr>
-  <tr><td><code>F8</code></td><td>Flash country</td></tr>
-  <tr><td><code>Shift+F8</code></td><td>Toggle map display between World and Country modes</td></tr>
-  <tr><td><code>F9</code></td><td>Full-screen map</td></tr>
-  <tr><td><code>F10</code></td><td>Challenge game</td></tr>
-  <tr><td><code>Ctrl+F10</code></td><td>Scored challenge session</td></tr>
-  <tr><td><code>Shift+F10</code></td><td>Repeat challenge target</td></tr>
   <tr><td><code>F11</code></td><td>Street mode</td></tr>
-  <tr><td><code>Shift+F11</code></td><td>Pre-download streets</td></tr>
+  <tr><td><code>Ctrl+Shift+F11</code></td><td>Download a city's suburbs in bulk (city data wizard)</td></tr>
   <tr><td><code>F12</code></td><td>Tools menu</td></tr>
   <tr><td><code>Ctrl+Shift+F12</code></td><td>Report GNAF address state; press again within five seconds to toggle</td></tr>
   <tr><td><code>Ctrl+,</code></td><td>Settings</td></tr>
   <tr><td><code>Ctrl+F</code></td><td>Favourites</td></tr>
   <tr><td><code>Ctrl+Shift+F</code></td><td>Add favourite</td></tr>
   <tr><td><code>J</code></td><td>Jump to place</td></tr>
+  <tr><td><code>Ctrl+H</code></td><td>Jump history — revisit one of your last five jumps</td></tr>
   <tr><td><code>Ctrl+J</code></td><td>Jump to saved mark</td></tr>
   <tr><td><code>Ctrl+M</code></td><td>Save current position as mark (prompts for slot 1, 2, or 3)</td></tr>
   <tr><td><code>Ctrl+Shift+P</code></td><td>Save current position as a personal POI</td></tr>
@@ -530,10 +545,20 @@
   <tr><td><code>Ctrl+Shift+Alt+S</code></td><td>Street view</td></tr>
 </table>
 
-<h3>19.2 Map hotkeys</h3>
-<p>These are the world-map shortcuts, or keys whose meaning changes in street mode.</p>
+<h3>20.2 Map hotkeys</h3>
+<p>These are about the world map itself. Some only mean something while you're looking at it (like flashing a country or switching the map's display style); others — <code>F6</code>, <code>Shift+F6</code>, <code>F10</code>, <code>Ctrl+F10</code>, and <code>Shift+F11</code> — are properly enforced in code: use them from street mode and the app asks whether to exit street mode first, rather than doing something confusing or nothing at all.</p>
 <table>
   <tr><th>Key</th><th>Action</th></tr>
+  <tr><td><code>F5</code></td><td>Continent</td></tr>
+  <tr><td><code>F6</code></td><td>Country facts — asks to exit street mode first, since this reports on the world-map country, not your street-level position</td></tr>
+  <tr><td><code>Shift+F6</code></td><td>Wikipedia summary — same exit-street-mode prompt as <code>F6</code></td></tr>
+  <tr><td><code>F8</code></td><td>Flash country (visual highlight of the country box on the map)</td></tr>
+  <tr><td><code>Shift+F8</code></td><td>Toggle map display between World and Country modes</td></tr>
+  <tr><td><code>F9</code></td><td>Full-screen map</td></tr>
+  <tr><td><code>F10</code></td><td>Challenge game — asks to exit street mode first; playing the challenge means moving the world-map cursor, which street mode's arrow keys don't do</td></tr>
+  <tr><td><code>Ctrl+F10</code></td><td>Scored, multi-player challenge session — same exit-street-mode prompt as <code>F10</code></td></tr>
+  <tr><td><code>Shift+F10</code></td><td>Repeat challenge target (only does anything once a challenge is already running, so there's nothing to gate)</td></tr>
+  <tr><td><code>Shift+F11</code></td><td>Pre-download streets for the current spot — restricted to map mode; if you try it in street mode, the app tells you to back out first</td></tr>
   <tr><td><code>Ctrl+Arrows</code></td><td>Move in large steps (~333 km) for fast long-distance navigation</td></tr>
   <tr><td><code>Ctrl+Alt+Arrows</code></td><td>Jump to the nearest foreign country in that direction</td></tr>
   <tr><td><code>R</code></td><td>Current region</td></tr>
@@ -555,7 +580,7 @@
   <tr><td><code>Q</code></td><td>Air quality</td></tr>
 </table>
 
-<h3>19.3 Street mode</h3>
+<h3>20.3 Street mode</h3>
 <table>
   <tr><th>Key</th><th>Action</th></tr>
   <tr><td><code>Arrow keys</code></td><td>Move</td></tr>
@@ -573,7 +598,8 @@
   <tr><td><code>A</code></td><td>Address lookup</td></tr>
   <tr><td><code>X</code></td><td>Nearest cross street</td></tr>
   <tr><td><code>N</code></td><td>Nearby geographic features</td></tr>
-  <tr><td><code>I</code></td><td>Street summary</td></tr>
+  <tr><td><code>I</code></td><td>Street summary, or repeat the current step during walking directions</td></tr>
+  <tr><td><code>Shift+I</code></td><td>Request (or repeat) a Mistral-narrated walking briefing during walking directions; <code>Escape</code> exits back to normal turn-by-turn</td></tr>
   <tr><td><code>P</code></td><td>POI search</td></tr>
   <tr><td><code>Ctrl+Alt+P</code></td><td>Refresh POIs</td></tr>
   <tr><td><code>Ctrl+Shift+P</code></td><td>Save current position as a personal POI</td></tr>
@@ -597,7 +623,7 @@
   <tr><td><code>F11</code></td><td>Toggle street mode</td></tr>
 </table>
 
-<h3>19.4 Walking mode</h3>
+<h3>20.4 Walking mode</h3>
 <table>
   <tr><th>Key</th><th>Action</th></tr>
   <tr><td><code>Up / Down</code></td><td>Move forward and backward</td></tr>
@@ -614,7 +640,7 @@
   <tr><td><code>W</code></td><td>Start/stop walking mode</td></tr>
 </table>
 
-<h3>19.5 Free mode</h3>
+<h3>20.5 Free mode</h3>
 <table>
   <tr><th>Key</th><th>Action</th></tr>
   <tr><td><code>Up</code></td><td>Move forward</td></tr>

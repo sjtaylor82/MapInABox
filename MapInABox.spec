@@ -48,6 +48,8 @@ a = Analysis(
         ('airports.csv.gz',      '.'),
         ('countries.geojson.gz', '.'),
         ('facts.json',           '.'),
+        ('currency_data.json',   '.'),
+        ('languages_data.json',  '.'),
         ('gtfs_overrides.json',  '.'),
         ('manual.html',          '.'),
         ('sounds',               'sounds'),

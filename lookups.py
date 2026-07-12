@@ -901,49 +901,68 @@ class LookupsMixin:
         return None
 
     def _announce_languages(self):
-        """L key — official languages of current country."""
+        """Shift+L — official languages of current country.
+
+        Reads a local, bundled languages_data.json rather than calling
+        restcountries.com - that API's old versions were deprecated and
+        now require a paid account, so this was silently failing the same
+        way _announce_capital was (see its docstring). languages_data.json
+        covers the same 200 countries as facts.json, keyed the same way,
+        with each country's one to a handful of official/national
+        languages. It's a shorter list than some countries' full
+        constitutionally-recognised set (South Africa's eleven, for
+        instance, or Papua New Guinea's hundreds of living languages) -
+        deliberately so, to stay a quick spoken answer rather than a
+        recitation - but the officially recognised set is present.
+        """
         country = getattr(self, 'last_country_found', '')
         if not country or country == 'Open Water':
             self._status_update("No country to look up.", force=True)
             return
-        cached = getattr(self, '_rest_countries_cache', {}).get(country, {})
-        if 'languages' in cached:
-            self._status_update(f"Languages: {', '.join(cached['languages'].values())}.", force=True)
-            return
-        self._status_update(f"Looking up languages for {country}...")
-        def _fetch():
-            data  = self._fetch_rest_countries(country)
-            langs = list((data or {}).get('languages', {}).values())
-            wx.CallAfter(self._status_update,
-                         f"Languages: {', '.join(langs)}." if langs
-                         else f"No language data found for {country}.",
-                         True)
-        threading.Thread(target=_fetch, daemon=True).start()
+        if not hasattr(self, '_languages_table'):
+            import sys
+            base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+            path = os.path.join(base, 'languages_data.json')
+            try:
+                with open(path, encoding='utf-8') as f:
+                    self._languages_table = json.load(f)
+            except Exception as exc:
+                self._status_update(f"Could not load language data: {exc}", force=True)
+                return
+        canonical = self._country_aliases().get(country, country)
+        langs = self._languages_table.get(canonical) or self._languages_table.get(country)
+        if langs:
+            self._status_update(f"Languages: {', '.join(langs)}.", force=True)
+        else:
+            self._status_update(f"No language data found for {country}.", force=True)
 
     def _announce_capital(self):
-        """Shift+F1 — capital city of current country."""
+        """Shift+F1 — capital city of current country.
+
+        Reads the same local, bundled facts.json that F6 (announce_facts)
+        already uses, rather than calling restcountries.com - that API's
+        old versions (v1-v4, including the v3.1 endpoint this used to hit)
+        were deprecated and now return an empty "success": false response
+        with no data, which made this key reliably fail to find any
+        capital at all, for every country, with no network flakiness
+        involved. facts.json already has capital data for 200 countries,
+        works offline, and can't break due to a third party's API change.
+        """
         country = getattr(self, 'last_country_found', '')
         if not country or country == 'Open Water':
             self._status_update("No country to look up.", force=True)
             return
-        cached = getattr(self, '_rest_countries_cache', {}).get(country, {})
-        if 'capital' in cached:
-            caps = cached['capital']
-            cap_str = ', '.join(caps) if isinstance(caps, list) else str(caps)
-            self._status_update(f"You are in {country}.  Capital: {cap_str}.", force=True)
-            return
-        self._status_update(f"Looking up capital of {country}...", force=True)
-        def _fetch():
-            data = self._fetch_rest_countries(country)
-            caps = (data or {}).get('capital', [])
-            if caps:
-                cap_str = ', '.join(caps) if isinstance(caps, list) else str(caps)
-                wx.CallAfter(self._status_update,
-                             f"You are in {country}.  Capital: {cap_str}.", True)
-            else:
-                wx.CallAfter(self._status_update,
-                             f"No capital data found for {country}.", True)
-        threading.Thread(target=_fetch, daemon=True).start()
+        canonical = self._country_aliases().get(country, country).lower()
+        found = next(
+            (info for info in self.facts.values()
+             if info.get('name', '').lower() == canonical),
+            None
+        )
+        capital = (found or {}).get('capital')
+        if capital and capital != 'None':
+            self._status_update(f"You are in {country}.  Capital: {capital}.", force=True)
+        else:
+            self._status_update(f"No capital data found for {country}.", force=True)
 
     def _announce_currency(self):
         """$ key — currency of current country. Looks up currency_data.json (static file)."""

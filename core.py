@@ -93,7 +93,7 @@ import mall_directory
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0.0.11'
+APP_VERSION   = '1.0.0.12'
 
 # Bundled read-only resources — inside the exe (_MEIPASS) or next to the script.
 BASE_DIR      = getattr(_sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -8918,13 +8918,16 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._find_food_destination = {"coords": (float(coords[0]), float(coords[1])), "name": name}
         self._set_map_destination_from_coords(coords, name, announce=announce)
 
-    def _confirm_exit_street_mode_for_jump(self, repeat_location=False):
+    def _confirm_exit_street_mode(self, prompt, repeat_location=False):
+        """Ask to leave street mode before doing something that only makes
+        sense on the world map (jumping, starting the challenge game).
+        Returns True if it's now safe to proceed - either street mode
+        wasn't active, or the user agreed to exit it. Returns False if the
+        user declined, in which case the caller should just stop."""
         if not self.street_mode:
             return True
         dlg = wx.MessageDialog(
-            self,
-            "Exit street mode and jump to a new location?",
-            "Exit Street Mode",
+            self, prompt, "Exit Street Mode",
             wx.YES_NO | wx.NO_DEFAULT)
         if dlg.ShowModal() != wx.ID_YES:
             dlg.Destroy()
@@ -8933,6 +8936,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         dlg.Destroy()
         self._exit_street_mode(repeat_location=repeat_location)
         return True
+
+    def _confirm_exit_street_mode_for_jump(self, repeat_location=False):
+        return self._confirm_exit_street_mode(
+            "Exit street mode and jump to a new location?",
+            repeat_location=repeat_location)
 
     def _mark_coords(self, slot, coords, name, announce=True):
         self._map_marks[slot] = {"coords": (float(coords[0]), float(coords[1])), "name": name}
@@ -10790,9 +10798,19 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             miab_log("feature_usage", "Key: Shift+F5 (toggle GeoFeatures)", self.settings)
             self._toggle_geo_features();  return True
         if no_mod and key == wx.WXK_F6:
+            # Country facts - like the challenge game, this is tied to
+            # the world-map country under the cursor, not to street-level
+            # position, so it doesn't reliably mean anything mid-street-mode.
+            # Same treatment as F10/Ctrl+F10: offer to exit street mode first.
+            if not self._confirm_exit_street_mode(
+                    "Country facts are for the world map. Exit street mode?"):
+                return True
             miab_log("feature_usage", "Key: F6 (facts)", self.settings)
             self.announce_facts();        return True
         if shift and not primary and key == wx.WXK_F6:
+            if not self._confirm_exit_street_mode(
+                    "The Wikipedia summary is for the world map. Exit street mode?"):
+                return True
             miab_log("feature_usage", f"Key: Shift+F6 (Wikipedia) at {self.last_country_found}", self.settings)
             self.announce_wikipedia_summary(); return True
         if no_mod and key == wx.WXK_F7:    self.toggle_sounds();    return True
@@ -10819,6 +10837,14 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 self._status_update("Challenge session ended.", force=True)
                 wx.CallAfter(self._resume_location_sound)
             else:
+                # The challenge is played by moving the world-map cursor -
+                # in street mode arrow keys move along the road network
+                # instead, so a challenge started from there would be
+                # unplayable (nothing would ever answer the target). Exit
+                # street mode first, same pattern as jumping with J.
+                if not self._confirm_exit_street_mode(
+                        "Playing the challenge exits street mode. Continue?"):
+                    return True
                 self._start_challenge_session()
             return True
         if no_mod and key == wx.WXK_F10:
@@ -10834,6 +10860,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 wx.CallAfter(self._resume_location_sound)
             else:
                 if self.df is not None and not self.df.empty:
+                    if not self._confirm_exit_street_mode(
+                            "Playing the challenge exits street mode. Continue?"):
+                        return True
                     self.sound.stop()
                     self._game.start(self.df, self.lat, self.lon)
                 else:
