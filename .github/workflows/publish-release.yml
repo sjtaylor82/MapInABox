@@ -141,29 +141,28 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
 
     steps:
-      - name: Derive winget version from tag
+      - name: Derive winget version from release asset
         id: ver
         shell: powershell
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = "${{ github.ref_name }}"          # e.g. v1.0.0.1
-          $appVer = $tag.TrimStart('v')             # e.g. 1.0.0.1
-          $wingetVer = "$appVer.0"                  # e.g. 1.0.0.1.0
-          $url = "https://github.com/sjtaylor82/MapInABox/releases/download/$tag/MapInABox-$appVer-setup.exe|x64"
-          echo "winget_version=$wingetVer" >> $env:GITHUB_OUTPUT
-          echo "installer_url=$url"        >> $env:GITHUB_OUTPUT
 
-      - name: Install wingetcreate
-        shell: powershell
-        run: |
-          $releases = Invoke-RestMethod "https://api.github.com/repos/microsoft/winget-create/releases/latest"
-          $asset = $releases.assets | Where-Object { $_.name -eq "wingetcreate.exe" } | Select-Object -First 1
-          Invoke-WebRequest $asset.browser_download_url -OutFile wingetcreate.exe
+          # Look up the actual release assets instead of guessing the filename
+          # from the tag - the tag and the app's internal version string can
+          # drift apart (see update-winget failure on v1.0.0.10).
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; "User-Agent" = "MapInABox-release-workflow" }
+          $release = Invoke-RestMethod -Headers $headers `
+            "https://api.github.com/repos/sjtaylor82/MapInABox/releases/tags/$tag"
 
-      - name: Submit winget update
-        shell: powershell
-        run: |
-          .\wingetcreate.exe update SamTaylor.MapInABox `
-            --version "${{ steps.ver.outputs.winget_version }}" `
-            --urls "${{ steps.ver.outputs.installer_url }}" `
-            --submit `
-            --token "${{ secrets.WINGET_TOKEN }}"
+          $asset = $release.assets | Where-Object { $_.name -match '^MapInABox-.+-setup\.exe$' } | Select-Object -First 1
+          if (-not $asset) {
+            Write-Error "No MapInABox-*-setup.exe asset found on release $tag"
+            exit 1
+          }
+
+          # Pull the real app version out of the asset filename itself, so it
+          # always matches what was actually built and uploaded.
+          if ($asset.name -notmatch '^MapInABox-(?<ver>[\d.]+)-setup\.exe$') {
+            Write-Error "Could not parse version out of asset name '
