@@ -16,6 +16,9 @@ AppName={#AppName}
 AppVersion=1.0.0.9
 AppVerName={#AppName} {#AppVersion}
 AppPublisher=Sam Taylor
+AppPublisherURL=https://github.com/sjtaylor82/MapInABox
+AppSupportURL=https://github.com/sjtaylor82/MapInABox/issues
+AppUpdatesURL=https://github.com/sjtaylor82/MapInABox/releases
 AppCopyright=Copyright (C) 2026 Sam Taylor
 
 ; Default: per-user (no UAC). If user has admin rights they can switch to
@@ -43,6 +46,7 @@ DisableDirPage=no
 VersionInfoVersion={#AppVersion}.0.0
 VersionInfoDescription={#AppName}
 VersionInfoProductName={#AppName}
+VersionInfoCompany=Sam Taylor
 
 ; Icon shown in Add/Remove Programs
 UninstallDisplayIcon={app}\{#AppExe}

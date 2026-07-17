@@ -199,6 +199,7 @@ class ChallengeGame:
         timeout_cb=None,
         direction_mode_cb=None,
         position_tone_cb=None,
+        country_info_cb=None,
         log_cb=None,
     ) -> None:
         self._announce       = announce_cb
@@ -207,6 +208,7 @@ class ChallengeGame:
         self._timeout_cb     = timeout_cb
         self._direction_mode_cb = direction_mode_cb or (lambda: "map")
         self._position_tone_cb = position_tone_cb
+        self._country_info_cb = country_info_cb or (lambda country: ("", ""))
         self._log_cb         = log_cb or (lambda msg: None)
 
         self.active          = False
@@ -254,21 +256,14 @@ class ChallengeGame:
         self.target_continent     = ""
         self.target_subregion     = ""
 
-        # Fetch target continent/subregion in background for milestone scoring
-        def _fetch_region(country=country):
-            try:
-                import urllib.request, json, urllib.parse
-                query = urllib.parse.quote(country)
-                url   = f"https://restcountries.com/v3.1/name/{query}?fields=region,subregion"
-                req   = urllib.request.Request(url, headers={"User-Agent": "MapInABox/1.0"})
-                with urllib.request.urlopen(req, timeout=8) as r:
-                    data = json.loads(r.read().decode())
-                if data and isinstance(data, list):
-                    self.target_continent = data[0].get("region", "")
-                    self.target_subregion = data[0].get("subregion", "")
-            except Exception:
-                pass
-        threading.Thread(target=_fetch_region, daemon=True).start()
+        # Use bundled country facts for milestone scoring. Subregion is optional
+        # and remains blank unless the host app can provide local data for it.
+        try:
+            continent, subregion = self._country_info_cb(country)
+            self.target_continent = continent or ""
+            self.target_subregion = subregion or ""
+        except Exception:
+            pass
 
         mins, secs = divmod(int(self._time_limit), 60)
         if secs:

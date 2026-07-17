@@ -44,11 +44,18 @@ jobs:
         run: |
           python build.py install
 
+      - name: Build Windows portable zip
+        shell: powershell
+        run: |
+          Compress-Archive -Path dist\MapInABox -DestinationPath MapInABox-Windows-portable.zip -Force
+
       - name: Upload Windows installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: MapInABox-Windows
-          path: installer/*.exe
+          path: |
+            installer/*.exe
+            MapInABox-Windows-portable.zip
           if-no-files-found: error
 
   build-macos:
@@ -127,12 +134,20 @@ jobs:
           name: MapInABox-macOS
           path: artifacts/macos
 
+      - name: Generate SHA256 checksums
+        shell: bash
+        run: |
+          cd artifacts
+          find windows macos -type f \( -name '*.exe' -o -name '*.zip' \) -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             artifacts/windows/*.exe
+            artifacts/windows/*.zip
             artifacts/macos/*.zip
+            artifacts/SHA256SUMS.txt
           generate_release_notes: true
 
   update-winget:

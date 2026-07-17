@@ -52,6 +52,7 @@ a = Analysis(
         ('languages_data.json',  '.'),
         ('gtfs_overrides.json',  '.'),
         ('manual.html',          '.'),
+        ('locale',               'locale'),
         ('sounds',               'sounds'),
         ('GeoFeatures',          'GeoFeatures'),
     ],

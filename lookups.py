@@ -873,33 +873,6 @@ class LookupsMixin:
             self._fetch_in_progress = True
             threading.Thread(target=self._lookup, daemon=True).start()
 
-    # ------------------------------------------------------------------
-    # REST Countries (languages, capital, currency)
-    # ------------------------------------------------------------------
-
-    def _fetch_rest_countries(self, country):
-        """Shared REST Countries fetch — cached per country name."""
-        if not hasattr(self, '_rest_countries_cache'):
-            self._rest_countries_cache = {}
-        if country in self._rest_countries_cache:
-            return self._rest_countries_cache[country]
-        try:
-            COUNTRY_ALIASES = self._country_aliases()
-            query = urllib.parse.quote(COUNTRY_ALIASES.get(country, country))
-            url   = (f"https://restcountries.com/v3.1/name/{query}"
-                     f"?fields=currencies,languages,capital,borders,area,population,region,subregion")
-            req   = urllib.request.Request(url, headers={"User-Agent": "MapInABox/1.0"})
-            with urllib.request.urlopen(req, timeout=10) as r:
-                data = json.loads(r.read().decode())
-            if data and isinstance(data, list):
-                self._rest_countries_cache[country] = data[0]
-                return data[0]
-        except Exception as exc:
-            miab_log("errors",
-                     f"REST Countries fetch failed for {country}: {exc}",
-                     self.settings)
-        return None
-
     def _announce_languages(self):
         """Shift+L — official languages of current country.
 

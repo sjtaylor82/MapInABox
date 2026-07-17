@@ -18,6 +18,7 @@ import re
 import wx
 import wx.adv
 
+from i18n import _
 from wx_utils import _log_key_event, _primary_down
 
 
@@ -91,7 +92,7 @@ def show_api_key_required(parent, title: str, message: str,
     link.Bind(wx.EVT_KEY_DOWN, _on_link_key)
     vs.Add(link, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 14)
 
-    btn = wx.Button(dlg, wx.ID_OK, "OK")
+    btn = wx.Button(dlg, wx.ID_OK, _("OK"))
     btn.SetDefault()
     vs.Add(btn, 0, wx.ALIGN_RIGHT | wx.RIGHT | wx.BOTTOM, 10)
 
@@ -114,10 +115,11 @@ def show_optional_key_warning(parent, title: str, message: str) -> bool:
     txt.Wrap(440)
     vs.Add(txt, 0, wx.ALL, 14)
 
-    cb = wx.CheckBox(dlg, label="Don't show this warning again")
+    # Translators: Checkbox label in optional API-key warning dialogs.
+    cb = wx.CheckBox(dlg, label=_("Don't show this warning again"))
     vs.Add(cb, 0, wx.LEFT | wx.BOTTOM, 14)
 
-    btn = wx.Button(dlg, wx.ID_OK, "OK")
+    btn = wx.Button(dlg, wx.ID_OK, _("OK"))
     btn.SetDefault()
     vs.Add(btn, 0, wx.ALIGN_RIGHT | wx.RIGHT | wx.BOTTOM, 10)
 
@@ -133,23 +135,23 @@ def show_open_source_notice(parent) -> None:
     """Tell users the app prefers free/open services and accepts optional keys."""
     dlg = wx.Dialog(
         parent,
-        title="Open Sources and Optional Keys",
+        title=_("Open Sources and Optional Keys"),
         style=wx.DEFAULT_DIALOG_STYLE | wx.STAY_ON_TOP,
     )
     vs = wx.BoxSizer(wx.VERTICAL)
 
     message = (
-        "Every effort has been made to keep Map in a Box usable with open "
-        "data and free endpoints. The app will fall back to those services "
-        "where it can.\n\n"
-        "If you want richer coverage or higher limits, you can still add "
-        "your own API keys in Settings."
+        _("Every effort has been made to keep Map in a Box usable with open "
+          "data and free endpoints. The app will fall back to those services "
+          "where it can.\n\n"
+          "If you want richer coverage or higher limits, you can still add "
+          "your own API keys in Settings.")
     )
     txt = wx.StaticText(dlg, label=message)
     txt.Wrap(430)
     vs.Add(txt, 0, wx.ALL, 14)
 
-    btn = wx.Button(dlg, wx.ID_OK, "OK")
+    btn = wx.Button(dlg, wx.ID_OK, _("OK"))
     btn.SetDefault()
     vs.Add(btn, 0, wx.ALIGN_RIGHT | wx.RIGHT | wx.BOTTOM, 10)
 
@@ -185,7 +187,7 @@ class SettingsDialog(wx.Dialog):
 
     def __init__(self, parent, settings: dict, user_dir: str = "") -> None:
         super().__init__(
-            parent, title="Settings", size=(640, 680),
+            parent, title=_("Settings"), size=(640, 680),
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
         )
         self.settings = dict(settings)
@@ -200,176 +202,176 @@ class SettingsDialog(wx.Dialog):
         for page in (self.general_page, self.api_page, self.logging_page):
             page.SetScrollRate(0, 20)
 
-        self.notebook.AddPage(self.general_page, "General")
-        self.notebook.AddPage(self.api_page, "API Keys")
-        self.notebook.AddPage(self.logging_page, "Logging")
+        self.notebook.AddPage(self.general_page, _("General"))
+        self.notebook.AddPage(self.api_page, _("API Keys"))
+        self.notebook.AddPage(self.logging_page, _("Logging"))
         vs.Add(self.notebook, 1, wx.EXPAND | wx.ALL, 8)
 
         general_vs = wx.BoxSizer(wx.VERTICAL)
         api_vs = wx.BoxSizer(wx.VERTICAL)
         log_vs = wx.BoxSizer(wx.VERTICAL)
 
-        general_vs.Add(wx.StaticText(self.general_page, label="Walking mode POI announcements:"), 0, wx.ALL, 8)
-        self.cb_walk = wx.CheckBox(self.general_page, label="Announce nearby POIs while walking")
+        general_vs.Add(wx.StaticText(self.general_page, label=_("Walking mode POI announcements:")), 0, wx.ALL, 8)
+        self.cb_walk = wx.CheckBox(self.general_page, label=_("Announce nearby POIs while walking"))
         general_vs.Add(self.cb_walk, 0, wx.LEFT | wx.BOTTOM, 12)
 
-        general_vs.Add(wx.StaticText(self.general_page, label="POIs to announce while walking:"), 0, wx.LEFT, 8)
+        general_vs.Add(wx.StaticText(self.general_page, label=_("POIs to announce while walking:")), 0, wx.LEFT, 8)
         self.combo_cat = wx.ComboBox(
             self.general_page,
-            choices=[label for _, label in POI_CATEGORY_CHOICES],
+            choices=[_(label) for _, label in POI_CATEGORY_CHOICES],
             style=wx.CB_READONLY,
         )
         general_vs.Add(self.combo_cat, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
-        general_vs.Add(wx.StaticText(self.general_page, label="Announce POIs within:"), 0, wx.LEFT, 8)
+        general_vs.Add(wx.StaticText(self.general_page, label=_("Announce POIs within:")), 0, wx.LEFT, 8)
         self.combo_radius = wx.ComboBox(
             self.general_page,
-            choices=["50 metres", "80 metres", "120 metres"],
+            choices=[_("50 metres"), _("80 metres"), _("120 metres")],
             style=wx.CB_READONLY,
         )
         general_vs.Add(self.combo_radius, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
-        self.cb_walk_cat = wx.CheckBox(self.general_page, label="Include category label in announcement")
+        self.cb_walk_cat = wx.CheckBox(self.general_page, label=_("Include category label in announcement"))
         general_vs.Add(self.cb_walk_cat, 0, wx.LEFT | wx.BOTTOM, 8)
 
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        general_vs.Add(wx.StaticText(self.general_page, label="Map announcements:"), 0, wx.LEFT, 8)
-        self.cb_climate_zones = wx.CheckBox(self.general_page, label="Announce climate zones during navigation")
+        general_vs.Add(wx.StaticText(self.general_page, label=_("Map announcements:")), 0, wx.LEFT, 8)
+        self.cb_climate_zones = wx.CheckBox(self.general_page, label=_("Announce climate zones during navigation"))
         general_vs.Add(self.cb_climate_zones, 0, wx.LEFT | wx.BOTTOM, 8)
-        self.cb_suburb_size = wx.CheckBox(self.general_page, label="Announce suburb size when streets load")
+        self.cb_suburb_size = wx.CheckBox(self.general_page, label=_("Announce suburb size when streets load"))
         general_vs.Add(self.cb_suburb_size, 0, wx.LEFT | wx.BOTTOM, 8)
 
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        general_vs.Add(wx.StaticText(self.general_page, label="Spatial tones:"), 0, wx.LEFT, 8)
+        general_vs.Add(wx.StaticText(self.general_page, label=_("Spatial tones:")), 0, wx.LEFT, 8)
         self.combo_spatial_tones = wx.ComboBox(
             self.general_page,
-            choices=["World", "Country", "Region"],
+            choices=[_("World"), _("Country"), _("Region")],
             style=wx.CB_READONLY,
         )
         general_vs.Add(self.combo_spatial_tones, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        general_vs.Add(wx.StaticText(self.general_page, label="Challenge direction:"), 0, wx.LEFT, 8)
+        general_vs.Add(wx.StaticText(self.general_page, label=_("Challenge direction:")), 0, wx.LEFT, 8)
         self.combo_challenge_direction = wx.ComboBox(
             self.general_page,
-            choices=["Map learning", "Shortest globe"],
+            choices=[_("Map learning"), _("Shortest globe")],
             style=wx.CB_READONLY,
         )
         general_vs.Add(self.combo_challenge_direction, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        general_vs.Add(wx.StaticText(self.general_page, label="Weather temperature units:"), 0, wx.LEFT, 8)
+        general_vs.Add(wx.StaticText(self.general_page, label=_("Weather temperature units:")), 0, wx.LEFT, 8)
         self.combo_weather_units = wx.ComboBox(
             self.general_page,
-            choices=["Automatic (country-based)", "Celsius", "Fahrenheit"],
+            choices=[_("Automatic (country-based)"), _("Celsius"), _("Fahrenheit")],
             style=wx.CB_READONLY,
         )
         general_vs.Add(self.combo_weather_units, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        general_vs.Add(wx.StaticText(self.general_page, label="POI database (for street/free mode):"), 0, wx.LEFT, 8)
+        general_vs.Add(wx.StaticText(self.general_page, label=_("POI database (for street/free mode):")), 0, wx.LEFT, 8)
         self.combo_poi_source = wx.ComboBox(
             self.general_page,
-            choices=["OpenStreetMap", "HERE"],
+            choices=[_("OpenStreetMap"), _("HERE")],
             style=wx.CB_READONLY,
         )
         general_vs.Add(self.combo_poi_source, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        general_vs.Add(wx.StaticText(self.general_page, label="Navigation provider (walking routes):"), 0, wx.LEFT, 8)
+        general_vs.Add(wx.StaticText(self.general_page, label=_("Navigation provider (walking routes):")), 0, wx.LEFT, 8)
         self.combo_nav = wx.ComboBox(
             self.general_page,
-            choices=["OpenStreetMap", "Google Maps", "HERE"],
+            choices=[_("OpenStreetMap"), _("Google Maps"), _("HERE")],
             style=wx.CB_READONLY,
         )
         general_vs.Add(self.combo_nav, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        general_vs.Add(wx.StaticText(self.general_page, label="Departure board source:"), 0, wx.LEFT, 8)
+        general_vs.Add(wx.StaticText(self.general_page, label=_("Departure board source:")), 0, wx.LEFT, 8)
         self.combo_departure_board = wx.ComboBox(
             self.general_page,
-            choices=["GTFS data", "Google Places"],
+            choices=[_("GTFS data"), _("Google Places")],
             style=wx.CB_READONLY,
         )
         general_vs.Add(self.combo_departure_board, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
-        self.btn_gtfs = wx.Button(self.general_page, label="Refresh Transit Feed Catalog")
+        self.btn_gtfs = wx.Button(self.general_page, label=_("Refresh Transit Feed Catalog"))
         general_vs.Add(self.btn_gtfs, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         self.gtfs_refreshed = False
         self.btn_gtfs.Bind(wx.EVT_BUTTON, self._on_gtfs_refresh)
 
         self.general_page.SetSizer(general_vs)
 
-        api_vs.Add(wx.StaticText(self.api_page, label="Google API key — enhanced geocoding/routing, satellite/street view, Google navigation:"), 0, wx.ALL, 8)
+        api_vs.Add(wx.StaticText(self.api_page, label=_("Google API key - enhanced geocoding/routing, satellite/street view, Google navigation:")), 0, wx.ALL, 8)
         self.txt_google_key = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
         api_vs.Add(self.txt_google_key, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
-        api_vs.Add(wx.adv.HyperlinkCtrl(self.api_page, label="Get a Google API key",
+        api_vs.Add(wx.adv.HyperlinkCtrl(self.api_page, label=_("Get a Google API key"),
             url="https://developers.google.com/maps/get-started"), 0, wx.LEFT | wx.BOTTOM, 8)
 
         api_vs.Add(wx.StaticLine(self.api_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        api_vs.Add(wx.StaticText(self.api_page, label="Mistral API key — optional descriptions for satellite/street view and transit:"), 0, wx.LEFT, 8)
+        api_vs.Add(wx.StaticText(self.api_page, label=_("Mistral API key - optional descriptions for satellite/street view and transit:")), 0, wx.LEFT, 8)
         self.txt_mistral_key = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
         api_vs.Add(self.txt_mistral_key, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
-        api_vs.Add(wx.adv.HyperlinkCtrl(self.api_page, label="Get a Mistral API key (free mode, no credit card)",
+        api_vs.Add(wx.adv.HyperlinkCtrl(self.api_page, label=_("Get a Mistral API key (free mode, no credit card)"),
             url="https://console.mistral.ai/"), 0, wx.LEFT | wx.BOTTOM, 8)
 
         api_vs.Add(wx.StaticLine(self.api_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        api_vs.Add(wx.StaticText(self.api_page, label="HERE API key — optional POI details, HERE navigation, and departure board:"), 0, wx.LEFT, 8)
+        api_vs.Add(wx.StaticText(self.api_page, label=_("HERE API key - optional POI details, HERE navigation, and departure board:")), 0, wx.LEFT, 8)
         self.txt_here_key = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
         api_vs.Add(self.txt_here_key, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
-        api_vs.Add(wx.adv.HyperlinkCtrl(self.api_page, label="Get a HERE API key",
+        api_vs.Add(wx.adv.HyperlinkCtrl(self.api_page, label=_("Get a HERE API key"),
             url="https://developer.here.com/sign-up"), 0, wx.LEFT | wx.BOTTOM, 8)
 
         api_vs.Add(wx.StaticLine(self.api_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        api_vs.Add(wx.StaticText(self.api_page, label="OpenRouteService API key — optional walking/driving distance between marks:"), 0, wx.LEFT, 8)
+        api_vs.Add(wx.StaticText(self.api_page, label=_("OpenRouteService API key - optional walking/driving distance between marks:")), 0, wx.LEFT, 8)
         self.txt_ors_key = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
         api_vs.Add(self.txt_ors_key, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
-        api_vs.Add(wx.adv.HyperlinkCtrl(self.api_page, label="Get an OpenRouteService API key",
+        api_vs.Add(wx.adv.HyperlinkCtrl(self.api_page, label=_("Get an OpenRouteService API key"),
             url="https://openrouteservice.org/sign-up/"), 0, wx.LEFT | wx.BOTTOM, 8)
 
         api_vs.Add(wx.StaticLine(self.api_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        api_vs.Add(wx.StaticText(self.api_page, label="AviationStack API key — optional airport departure/arrival boards:"), 0, wx.LEFT, 8)
+        api_vs.Add(wx.StaticText(self.api_page, label=_("AviationStack API key - optional airport departure/arrival boards:")), 0, wx.LEFT, 8)
         self.txt_aviationstack_key = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
         api_vs.Add(self.txt_aviationstack_key, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
-        api_vs.Add(wx.adv.HyperlinkCtrl(self.api_page, label="Get an AviationStack API key",
+        api_vs.Add(wx.adv.HyperlinkCtrl(self.api_page, label=_("Get an AviationStack API key"),
             url="https://aviationstack.com/signup/free"), 0, wx.LEFT | wx.BOTTOM, 8)
 
         api_vs.Add(wx.StaticLine(self.api_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        api_vs.Add(wx.StaticText(self.api_page, label="OpenSky client ID — optional overhead flight destination lookup (free):"), 0, wx.LEFT, 8)
+        api_vs.Add(wx.StaticText(self.api_page, label=_("OpenSky client ID - optional overhead flight destination lookup (free):")), 0, wx.LEFT, 8)
         self.txt_opensky_id = wx.TextCtrl(self.api_page)
         api_vs.Add(self.txt_opensky_id, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
-        api_vs.Add(wx.StaticText(self.api_page, label="OpenSky client secret:"), 0, wx.LEFT, 8)
+        api_vs.Add(wx.StaticText(self.api_page, label=_("OpenSky client secret:")), 0, wx.LEFT, 8)
         self.txt_opensky_secret = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
         api_vs.Add(self.txt_opensky_secret, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
-        api_vs.Add(wx.adv.HyperlinkCtrl(self.api_page, label="Register a free OpenSky account",
+        api_vs.Add(wx.adv.HyperlinkCtrl(self.api_page, label=_("Register a free OpenSky account"),
             url="https://opensky-network.org/index.php?option=com_users&view=registration"),
             0, wx.LEFT | wx.BOTTOM, 8)
 
         api_vs.Add(wx.StaticLine(self.api_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        api_vs.Add(wx.StaticText(self.api_page, label="RapidAPI key — optional flight search and hotel search (F12 tools):"), 0, wx.LEFT, 8)
+        api_vs.Add(wx.StaticText(self.api_page, label=_("RapidAPI key - optional flight search and hotel search (F12 tools):")), 0, wx.LEFT, 8)
         self.txt_rapidapi_key = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
         api_vs.Add(self.txt_rapidapi_key, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
         hs_rapid = wx.BoxSizer(wx.HORIZONTAL)
-        hs_rapid.Add(wx.adv.HyperlinkCtrl(self.api_page, label="Sign up for RapidAPI",
+        hs_rapid.Add(wx.adv.HyperlinkCtrl(self.api_page, label=_("Sign up for RapidAPI"),
             url="https://rapidapi.com/auth/sign-up"), 0, wx.RIGHT, 16)
-        hs_rapid.Add(wx.adv.HyperlinkCtrl(self.api_page, label="Subscribe: Priceline API",
+        hs_rapid.Add(wx.adv.HyperlinkCtrl(self.api_page, label=_("Subscribe: Priceline API"),
             url="https://rapidapi.com/tipsters/api/priceline-com-provider"), 0, wx.RIGHT, 16)
-        hs_rapid.Add(wx.adv.HyperlinkCtrl(self.api_page, label="Subscribe: Timetable Lookup API",
+        hs_rapid.Add(wx.adv.HyperlinkCtrl(self.api_page, label=_("Subscribe: Timetable Lookup API"),
             url="https://rapidapi.com/obryan.sw/api/timetable-lookup"), 0)
         api_vs.Add(hs_rapid, 0, wx.LEFT | wx.BOTTOM, 8)
 
         self.api_page.SetSizer(api_vs)
 
         log = settings.get("logging", {})
-        self.cb_log_errors    = wx.CheckBox(self.logging_page, label="Errors — exceptions, API failures, missing data")
-        self.cb_log_street    = wx.CheckBox(self.logging_page, label="Street/POI data — Overpass queries, cache hits/misses")
-        self.cb_log_snap      = wx.CheckBox(self.logging_page, label="Street snap — jump/search snap decisions and arrow key movement")
-        self.cb_log_api       = wx.CheckBox(self.logging_page, label="HERE/Mistral API calls — requests and responses")
-        self.cb_log_challenge = wx.CheckBox(self.logging_page, label="Challenge sessions — player, country, time, score")
-        self.cb_log_features  = wx.CheckBox(self.logging_page, label="Feature usage — keys pressed, lookups made")
-        self.cb_log_nav       = wx.CheckBox(self.logging_page, label="Navigation events — country entries, crossings, jumps")
-        self.cb_log_verbose   = wx.CheckBox(self.logging_page, label="Verbose diagnostics — key sequences and extra traces written to miab.log")
-        log_vs.Add(wx.StaticText(self.logging_page, label="Logging (miab.log):"), 0, wx.ALL, 8)
+        self.cb_log_errors    = wx.CheckBox(self.logging_page, label=_("Errors - exceptions, API failures, missing data"))
+        self.cb_log_street    = wx.CheckBox(self.logging_page, label=_("Street/POI data - Overpass queries, cache hits/misses"))
+        self.cb_log_snap      = wx.CheckBox(self.logging_page, label=_("Street snap - jump/search snap decisions and arrow key movement"))
+        self.cb_log_api       = wx.CheckBox(self.logging_page, label=_("HERE/Mistral API calls - requests and responses"))
+        self.cb_log_challenge = wx.CheckBox(self.logging_page, label=_("Challenge sessions - player, country, time, score"))
+        self.cb_log_features  = wx.CheckBox(self.logging_page, label=_("Feature usage - keys pressed, lookups made"))
+        self.cb_log_nav       = wx.CheckBox(self.logging_page, label=_("Navigation events - country entries, crossings, jumps"))
+        self.cb_log_verbose   = wx.CheckBox(self.logging_page, label=_("Verbose diagnostics - key sequences and extra traces written to miab.log"))
+        log_vs.Add(wx.StaticText(self.logging_page, label=_("Logging (miab.log):")), 0, wx.ALL, 8)
         self.cb_log_errors.SetValue(log.get("errors",    True))
         self.cb_log_street.SetValue(log.get("street",    False))
         self.cb_log_snap.SetValue(log.get("snap",        False))
@@ -384,10 +386,10 @@ class SettingsDialog(wx.Dialog):
         self.logging_page.SetSizer(log_vs)
 
         hs = wx.BoxSizer(wx.HORIZONTAL)
-        ok_btn     = wx.Button(panel, wx.ID_OK,     "Save")
-        cancel_btn = wx.Button(panel, wx.ID_CANCEL, "Cancel")
-        btn_home   = wx.Button(panel, label="Set Home Location")
-        btn_folder = wx.Button(panel, label="Open Settings Folder")
+        ok_btn     = wx.Button(panel, wx.ID_OK,     _("Save"))
+        cancel_btn = wx.Button(panel, wx.ID_CANCEL, _("Cancel"))
+        btn_home   = wx.Button(panel, label=_("Set Home Location"))
+        btn_folder = wx.Button(panel, label=_("Open Settings Folder"))
         hs.Add(ok_btn, 0, wx.RIGHT, 8)
         hs.Add(cancel_btn, 0, wx.RIGHT, 8)
         hs.Add(btn_home, 0, wx.RIGHT, 8)

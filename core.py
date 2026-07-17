@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 
 from logging_utils import miab_log
+from i18n import _, set_language
 from wx_utils import IS_MAC, _log_key_event, _primary_down
 from lookups import LookupsMixin
 from nav import NavMixin
@@ -895,6 +896,7 @@ DEFAULT_SETTINGS = {
     "ors_api_key":            "",
     "weather_temperature_unit": "auto",  # "auto", "celsius", or "fahrenheit"
     "poi_source":             "osm",   # "osm" or "here"
+    "language":               "",      # empty means system/default language
     "gnaf_enabled":           True,    # Australian address point overlay
     "jump_history":           [],      # last 5 J-key destinations [{label,lat,lon}]
     "logging": {
@@ -2169,6 +2171,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._geo_features_prefetched = set()
         self._geo_features_prefetching = set()
         self.settings = load_settings()
+        set_language(self.settings.get("language") or None)
         self.settings["_log_path"] = os.path.join(USER_DIR, "miab.log")
 
         root = wx.Panel(self)
@@ -2245,8 +2248,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             announce_cb = lambda msg: wx.CallAfter(self._status_update, msg, True),
             direction_mode_cb = lambda: self.settings.get("challenge_direction_mode", "map"),
             position_tone_cb = self._play_challenge_position_tone,
+            country_info_cb = self._challenge_country_info,
             log_cb      = lambda msg: miab_log("challenges", msg, self.settings),
         )
+        self._game._current_continent_cb = lambda: getattr(self, 'current_continent', '')
+        self._game._current_subregion_cb = lambda: getattr(self, '_current_subregion', '')
         self._session           = None   # ChallengeSession when active
         self._free_mode         = False
         self._free_engine       = FreeExploreEngine()
@@ -11659,9 +11665,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                              f"Entered country: {country}"
                              + (f" (continent: {continent})" if continent else ""),
                              self.settings)
-                    cached = getattr(self, '_rest_countries_cache', {}).get(country)
-                    if cached:
-                        self._current_subregion = cached.get('subregion', '')
+                    self._current_subregion = ""
 
             wx.CallAfter(self.map_panel.set_position, self.lat, self.lon,
                          self.street_mode, self.street_label)
@@ -11757,6 +11761,14 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._game._current_continent_cb = lambda: getattr(self, 'current_continent', '')
         self._game._current_subregion_cb = lambda: getattr(self, '_current_subregion', '')
         self._session.start(self.df, self.lat, self.lon)
+
+    def _challenge_country_info(self, country):
+        """Return local (continent, subregion) data for challenge milestones."""
+        canonical = COUNTRY_ALIASES.get(country, country).lower()
+        for info in self.facts.values():
+            if info.get('name', '').lower() in (canonical, country.lower()):
+                return info.get('continent', ''), info.get('subregion', '')
+        return "", ""
 
     def _on_session_complete(self):
         self._session = None

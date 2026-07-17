@@ -26,9 +26,11 @@ https://github.com/sjtaylor82/MapInABox/releases
 
 On Windows, download and run `MapInABox-<version>-setup.exe`. The installer creates Start Menu entries for the app and for uninstalling it. You can also uninstall Map in a Box from Windows Settings or Control Panel.
 
+Windows portable zip builds are also published for users who cannot use an installer. Extract the zip to a folder you can write to, then run `MapInABox.exe` from inside the extracted `MapInABox` folder.
+
 On macOS, download `MapInABox-macOS.zip`, extract it, and follow the included `README.txt` and `install-macos.sh` instructions. To uninstall the macOS build, remove `MapInABox.app` from Applications or from the folder where you placed it.
 
-Free code signing for Windows releases is provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+Release checksum files are published as `SHA256SUMS.txt` so downloaded artifacts can be checked for corruption or tampering.
 
 ## Privacy and network access
 
@@ -61,17 +63,17 @@ Optional features are only contacted when the user supplies the relevant key or 
 
 ## Code signing policy
 
-After project approval, signed releases will use this notice: "Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/)".
+Windows releases are not currently code-signed. The project is evaluating the least-friction signing path for accessible public distribution.
 
 The Map in a Box code signing policy is:
 
-- Signed artifacts must be built from this public source repository using GitHub Actions.
+- Signed artifacts must be built from the project release workflow.
 - The release workflow must run on GitHub-hosted runners.
 - Signed Windows artifacts are expected to include the Windows installer, `MapInABox-<version>-setup.exe`, and any executable files inside that installer that are produced by the project build.
 - Release signing requests must be manually approved by a project approver before publication.
 - Signing must only be used for Map in a Box artifacts built from this repository. Upstream third-party binaries must not be signed as if they were Map in a Box binaries.
 - The product name in signed artifact metadata must be `Map in a Box`, and product version metadata must match the release version.
-- Maintainers must use multi-factor authentication on GitHub and SignPath accounts used for release or signing access.
+- Maintainers must use multi-factor authentication on accounts used for release or signing access.
 
 Project roles:
 
@@ -81,5 +83,3 @@ Project roles:
 ## Development and releases
 
 The release workflow builds Windows and macOS artifacts from GitHub Actions. Windows packaging uses PyInstaller and Inno Setup; macOS packaging creates a zipped app bundle with the install helper script.
-
-SignPath integration is not committed with live organization or signing-policy values because those values are only issued after SignPath Foundation approval and SignPath project setup.
