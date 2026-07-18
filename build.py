@@ -51,13 +51,14 @@ if not DO_MAC_APP:
     iss = re.sub(r'(#define AppVersion\s+")[^"]+(")', rf'\g<1>{VERSION}\2', iss)
     iss = re.sub(r'(AppVersion=).*',                       rf'\g<1>{VERSION}', iss)
     iss = re.sub(r'(OutputBaseFilename=MapInABox-)[\d.]+', rf'\g<1>{VERSION}', iss)
+    iss = iss.replace('Open the &Manual', 'Open the Manual')
     manual_run = (
         '; Offer to open the manual after install\n'
         'Filename: "{app}\\_internal\\manual.html"; \\\n'
-        '    Description: "Open the &Manual"; \\\n'
+        '    Description: "Open the Manual"; \\\n'
         '    Flags: postinstall shellexec skipifsilent\n'
     )
-    if 'Open the &Manual' not in iss:
+    if 'Open the Manual' not in iss and 'Open the &Manual' not in iss:
         launch_block = (
             '[Run]\n'
             '; Offer to launch after install\n'

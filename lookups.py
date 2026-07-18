@@ -353,7 +353,8 @@ class LookupsMixin:
 
         imperial = self._weather_uses_fahrenheit()
         unit_sym = "°F" if imperial else "°C"
-        cache_key = (round(self.lat, 2), round(self.lon, 2), imperial)
+        city = self._weather_place_label()
+        cache_key = (round(self.lat, 2), round(self.lon, 2), imperial, city)
         cache = getattr(self, "_weather_cache", {})
         import time as _time
         cached = cache.get(cache_key)
@@ -364,7 +365,6 @@ class LookupsMixin:
             )
             return
 
-        city = self._weather_place_label()
         self._announce_transient("Fetching weather...")
         lat, lon = self.lat, self.lon
 
@@ -990,25 +990,37 @@ class LookupsMixin:
         return COUNTRY_ALIASES
 
     def _weather_place_label(self) -> str:
-        """Return a city-first label for weather announcements."""
-        city = str(getattr(self, "last_city_found", "") or "").strip()
-        if city and city.lower() != "nan":
-            return city
+        """Return a place label based on the current map position."""
+        country = str(getattr(self, "last_country_found", "") or "").strip()
+        aliases = self._country_aliases() if hasattr(self, "_country_aliases") else {}
+        canonical_country = aliases.get(country, country).strip().lower()
         try:
             from core import _nearest_city
             _dist, idx = _nearest_city(self._city_lats, self._city_lons, self.lat, self.lon)
             row = self.df.iloc[idx]
             city = str(row.get("city", "")).strip()
-            if city and city.lower() != "nan":
+            city_country = str(row.get("country", "")).strip()
+            canonical_city_country = aliases.get(city_country, city_country).strip().lower()
+            city_matches_country = (
+                not canonical_country
+                or canonical_city_country == canonical_country
+            )
+            if city_matches_country and _dist * 111.0 <= 5.0 and city and city.lower() != "nan":
                 return city
             region = str(row.get("admin_name", "")).strip()
-            country = str(row.get("country", "")).strip()
-            parts = [p for p in (region, country) if p and p.lower() != "nan"]
-            if parts:
-                return ", ".join(parts)
+            if city_matches_country:
+                fallback_country = country or city_country
+                parts = [
+                    p for p in (region, fallback_country)
+                    if p and p.lower() != "nan"
+                ]
+                if parts:
+                    return ", ".join(parts)
+            if country:
+                return country
         except Exception:
             pass
-        return str(getattr(self, "last_country_found", "") or "").strip()
+        return country
 
     def _announce_nearby_features(self):
         """G key (world map) — show nearby geographic features from CSV."""

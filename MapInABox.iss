@@ -7,13 +7,13 @@
 ;      iscc MapInABox.iss
 
 #define AppName    "Map in a Box"
-#define AppVersion "1.0.0.18"
+#define AppVersion "1.0.19"
 #define AppExe     "MapInABox.exe"
 #define AppDir     "dist\MapInABox"
 
 [Setup]
 AppName={#AppName}
-AppVersion=1.0.0.18
+AppVersion=1.0.19
 AppVerName={#AppName} {#AppVersion}
 AppPublisher=Sam Taylor
 AppPublisherURL=https://github.com/sjtaylor82/MapInABox
@@ -43,7 +43,7 @@ DisableWelcomePage=no
 DisableDirPage=no
 
 ; Versioning (lets Windows/Add-Remove Programs detect upgrades)
-VersionInfoVersion={#AppVersion}.0.0
+VersionInfoVersion={#AppVersion}.0
 VersionInfoDescription={#AppName}
 VersionInfoProductName={#AppName}
 VersionInfoCompany=Sam Taylor
@@ -75,7 +75,7 @@ Filename: "{app}\{#AppExe}"; \
     Flags: nowait postinstall skipifsilent
 ; Offer to open the manual after install
 Filename: "{app}\_internal\manual.html"; \
-    Description: "Open the &Manual"; \
+    Description: "Open the Manual"; \
     Flags: postinstall shellexec skipifsilent
 
 [UninstallDelete]
