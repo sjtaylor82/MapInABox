@@ -2192,6 +2192,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self.last_location_str  = ""
         self.last_city_found    = ""
         self.last_state_found   = ""
+        self._update_dialog_active = False
         self._suppress_focus_repeat_until = 0.0
         self._tools_workflow_active = False
         self._poi_fetch_lat         = None   # location where POIs were last fetched
@@ -2381,16 +2382,72 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self._updater.start()
 
     def _on_update_found(self, latest_version: str) -> None:
+        self._update_dialog_active = True
         dlg = wx.MessageDialog(
             self,
             f"Version {latest_version} of Map in a Box is available.\n\nWould you like to update now?",
             "Update Available",
             wx.YES_NO | wx.YES_DEFAULT | wx.ICON_INFORMATION,
         )
-        if dlg.ShowModal() == wx.ID_YES:
-            self._status_update("Downloading update...", force=True)
+        try:
+            result = dlg.ShowModal()
+        finally:
+            self._update_dialog_active = False
+            dlg.Destroy()
+
+        if result == wx.ID_YES:
+            self._show_update_progress_dialog()
             self._update_last_announced_pct = -1
             threading.Thread(target=self._run_update_download, daemon=True).start()
+
+    def _show_update_progress_dialog(self) -> None:
+        """Show a native progress bar so screen readers can report progress."""
+        self._update_dialog_active = True
+        dlg = wx.Dialog(
+            self,
+            title="Downloading Update",
+            style=wx.DEFAULT_DIALOG_STYLE,
+        )
+        panel = wx.Panel(dlg)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        label = wx.StaticText(panel, label="Downloading update...")
+        gauge = wx.Gauge(panel, range=100, style=wx.GA_HORIZONTAL)
+        try:
+            gauge.SetName("Update download progress")
+        except Exception:
+            pass
+        sizer.Add(label, 0, wx.ALL, 12)
+        sizer.Add(gauge, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+        panel.SetSizer(sizer)
+        dlg_sizer = wx.BoxSizer(wx.VERTICAL)
+        dlg_sizer.Add(panel, 1, wx.EXPAND)
+        dlg.SetSizerAndFit(dlg_sizer)
+        dlg.SetSize((360, dlg.GetSize().height))
+        dlg.CentreOnParent()
+        self._update_progress_dialog = dlg
+        self._update_progress_gauge = gauge
+        dlg.Show()
+        wx.CallAfter(gauge.SetFocus)
+
+    def _set_update_progress(self, pct: int) -> None:
+        gauge = getattr(self, "_update_progress_gauge", None)
+        if gauge is None:
+            return
+        try:
+            gauge.SetValue(max(0, min(100, int(pct))))
+        except Exception:
+            pass
+
+    def _close_update_progress_dialog(self) -> None:
+        dlg = getattr(self, "_update_progress_dialog", None)
+        self._update_progress_dialog = None
+        self._update_progress_gauge = None
+        self._update_dialog_active = False
+        if dlg is not None:
+            try:
+                dlg.Destroy()
+            except Exception:
+                pass
 
     def _run_update_download(self) -> None:
         """Runs on a background thread — download_and_install() does blocking
@@ -2398,14 +2455,10 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         made the app look frozen/"Not Responding" during the download)."""
 
         def _progress(pct: int) -> None:
-            # Announce every 20% so the screen reader isn't spammed with
-            # near-continuous updates during a large download.
-            last = getattr(self, "_update_last_announced_pct", -1)
-            if pct - last >= 20 or (pct == 100 and last != 100):
-                self._update_last_announced_pct = pct
-                wx.CallAfter(self._status_update, f"Downloading update: {pct}%.", True)
+            wx.CallAfter(self._set_update_progress, pct)
 
         success = self._updater.download_and_install(progress_cb=_progress)
+        wx.CallAfter(self._close_update_progress_dialog)
         if success:
             # On Windows the installer is launching — close the app cleanly
             import sys as _sys
@@ -2418,7 +2471,6 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 "Update Failed",
                 wx.OK | wx.ICON_ERROR,
             )
-        dlg.Destroy()
 
     def _build_info_panel(self, parent):
         """Create the sighted-user information panel. It never takes focus."""
@@ -3548,7 +3600,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._clear_street_survey_cache()
         wx.CallAfter(self.map_panel.set_position, self.lat, self.lon, False, "")
         if prev_country and prev_country != "Open Water":
-            self.sound.play_location_sound(prev_country, prev_continent)
+            self._play_location_sound_if_allowed(prev_country, prev_continent)
         self._return_focus_to_map(repeat=repeat_location, delay_ms=0)
 
     def _confirm_fetch_streets(self, suburb_name) -> bool:
@@ -9184,7 +9236,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         """Play the normal map-position tone while challenge mode is active."""
         if not getattr(self, "sounds_enabled", True):
             return
-        self.sound.play_spatial_tone(lat, lon, self._spatial_tone_bounds())
+        self._play_spatial_tone_if_allowed(lat, lon, self._spatial_tone_bounds())
 
     def _current_map_place(self):
         """Return current coordinates and a readable nearest-place label.
@@ -9553,6 +9605,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
     def _status_update(self, msg, force=False):
         """Transient background status (loading, connecting) — AO2 only."""
         msg_text = str(msg)
+        if getattr(self, "_update_dialog_active", False):
+            self._verbose_trace(f"status suppressed while update dialog is active: {msg!r}")
+            return
         if (not force
                 and time.time() < getattr(self, '_suppress_status_until', 0)
                 and not str(msg).startswith("Looking up address")
@@ -9561,6 +9616,23 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             return
         _speak(msg)
 
+    def _map_sound_allowed(self) -> bool:
+        """True when map-driven ambient/spatial sounds may play."""
+        return (getattr(self, "sounds_enabled", True)
+                and not getattr(self, "_update_dialog_active", False))
+
+    def _play_location_sound_if_allowed(self, country, continent="") -> None:
+        if not self._map_sound_allowed():
+            self._verbose_trace("location sound suppressed while update dialog is active.")
+            return
+        self.sound.play_location_sound(country, continent)
+
+    def _play_spatial_tone_if_allowed(self, lat, lon, bounds=None) -> None:
+        if not self._map_sound_allowed():
+            self._verbose_trace("spatial tone suppressed while update dialog is active.")
+            return
+        self.sound.play_spatial_tone(lat, lon, bounds)
+
     def _emit_speech(self, text, braille_text=None, interrupt: bool = True,
                      second_braille: bool = True) -> None:
         """Speak + braille through the shared dispatcher."""
@@ -9568,6 +9640,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _announce_transient(self, msg, braille_msg=None) -> None:
         """Speak and braille a transient announcement without touching the listbox."""
+        if getattr(self, "_update_dialog_active", False):
+            self._verbose_trace(f"transient suppressed while update dialog is active: {msg!r}")
+            return
         self.speech.transient(msg, braille_msg)
 
     def _announce_mode_change(self, msg) -> None:
@@ -9576,6 +9651,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _announce_transient_then_return(self, msg, delay_ms=2000, focus_target=None) -> None:
         """Announce a warning, then return focus after a short pause."""
+        if getattr(self, "_update_dialog_active", False):
+            self._verbose_trace(f"transient-return suppressed while update dialog is active: {msg!r}")
+            return
         self._announce_transient(msg)
         target = focus_target
         if target is None:
@@ -9591,6 +9669,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _announce_after_map_focus(self, msg, delay_ms=350) -> None:
         """Return map focus first, then speak so the frame title cannot cut in."""
+        if getattr(self, "_update_dialog_active", False):
+            self._verbose_trace(f"map-focus announcement suppressed while update dialog is active: {msg!r}")
+            return
         self._return_focus_to_map(repeat=False)
         wx.CallLater(delay_ms, lambda: self._announce_transient(msg))
 
@@ -9602,6 +9683,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _map_focus_repeat_allowed(self) -> bool:
         """True only when focus has really settled back on the map surface."""
+        if getattr(self, "_update_dialog_active", False):
+            return False
         if time.time() < getattr(self, "_suppress_focus_repeat_until", 0.0):
             return False
         if getattr(self, "_suppress_location_restore", False):
@@ -9647,6 +9730,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         restore flows or while the user is browsing a POI list.
         """
         msg_text = str(msg)
+        if getattr(self, "_update_dialog_active", False):
+            self._verbose_trace(f"update_ui suppressed while update dialog is active: {msg!r}")
+            return
         if not force and getattr(self, '_poi_explore_stack', []):
             self._verbose_trace(f"update_ui suppressed during POI browse: {msg!r}")
             return
@@ -9678,6 +9764,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         no MSAA selection event and no double-speak.
         """
         msg_text = str(msg)
+        if getattr(self, "_update_dialog_active", False):
+            self._verbose_trace(f"_announce_location suppressed while update dialog is active: {msg!r}")
+            return
         if getattr(self, "_suppress_location_restore", False):
             self._verbose_trace(f"_announce_location suppressed while location restore is active: {msg!r}")
             return
@@ -9706,6 +9795,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
     def _update_location_focus(self, msg):
         """Update the focused location row, for real position changes."""
         msg_text = self._set_current_location_title(msg)
+        if getattr(self, "_update_dialog_active", False):
+            self._verbose_trace(f"_update_location_focus suppressed while update dialog is active: {msg!r}")
+            return
         if getattr(self, "_suppress_location_restore", False):
             self._verbose_trace(f"_update_location_focus suppressed while location restore is active: {msg!r}")
             return
@@ -9821,6 +9913,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         NVDA" for mode-change announcements. Briefly moving focus to the
         frame and back creates two real transitions instead of a no-op.
         """
+        if getattr(self, "_update_dialog_active", False):
+            self._verbose_trace("_force_listbox_refocus suppressed while update dialog is active.")
+            return
         try:
             self.SetFocus()
         except Exception:
@@ -9829,6 +9924,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _focus_map_window_silently(self) -> None:
         """Focus the map command target through one shared path."""
+        if getattr(self, "_update_dialog_active", False):
+            self._verbose_trace("_focus_map_window_silently suppressed while update dialog is active.")
+            return
         target = self.listbox
         try:
             count = target.GetCount()
@@ -9853,10 +9951,16 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
     def _return_focus_to_map(self, repeat=True, delay_ms: int = 25,
                              restore_focus=True) -> None:
         """Restore map focus through one path, then optionally repeat like F2."""
+        if getattr(self, "_update_dialog_active", False):
+            self._verbose_trace("_return_focus_to_map suppressed while update dialog is active.")
+            return
         self._map_return_generation = getattr(self, "_map_return_generation", 0) + 1
         generation = self._map_return_generation
 
         def _restore():
+            if getattr(self, "_update_dialog_active", False):
+                self._verbose_trace("delayed map focus restore suppressed while update dialog is active.")
+                return
             if generation != getattr(self, "_map_return_generation", None):
                 return
             if not restore_focus:
@@ -10255,8 +10359,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     # ── Cross-platform system sound helpers ──────────────────────────────────
 
-    @staticmethod
-    def _play_system_sound(kind: str = "default") -> None:
+    def _play_system_sound(self, kind: str = "default") -> None:
         """Play a brief system notification sound, cross-platform.
 
         Parameters
@@ -10266,6 +10369,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             Falls back to a pygame beep if the platform-specific call
             fails (e.g. on macOS, or Windows without the WAV files).
         """
+        if getattr(self, "_update_dialog_active", False):
+            self._verbose_trace(f"system sound suppressed while update dialog is active: {kind!r}")
+            return
         import platform
         sys_name = platform.system()
 
@@ -11012,7 +11118,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 self._road_fetch_lon = self.lon
                 self.street_label = test_label
                 self._announce_transient(f"Entered {current_suburb}. {test_label}")
-                self.sound.play_spatial_tone(
+                self._play_spatial_tone_if_allowed(
                     self.lat, self.lon, self._spatial_tone_bounds())
                 wx.CallAfter(self.map_panel.set_position, self.lat, self.lon, True, test_label)
                 return True
@@ -11858,7 +11964,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
             # Spatial tone only for world map, not street/walking mode
             if not self._game.active and not self.street_mode and not getattr(self, '_walking_mode', False):
-                self.sound.play_spatial_tone(
+                self._play_spatial_tone_if_allowed(
                     self.lat, self.lon, self._spatial_tone_bounds())
             
             # Street mode: check cache validity and trigger fetch if needed
@@ -11997,7 +12103,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     wx.CallAfter(self._refresh_info_panel)
                     wx.CallAfter(self._update_location_focus, "Antarctica")
                     if getattr(self, 'sounds_enabled', True) and not self._game.active:
-                        self.sound.play_location_sound("Antarctica", "Antarctica")
+                        self._play_location_sound_if_allowed("Antarctica", "Antarctica")
                 wx.CallAfter(self.map_panel.set_position, self.lat, self.lon,
                              self.street_mode, self.street_label)
                 if self._game.active:
@@ -12010,14 +12116,14 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                                      f"Session win: country={country} time={elapsed:.1f}s",
                                      self.settings)
                             wx.CallAfter(self._session.on_win, elapsed, self.df, self.lat, self.lon)
-                            wx.CallAfter(lambda c=country: wx.CallLater(2000, lambda: self.sound.play_location_sound(c)))
+                            wx.CallAfter(lambda c=country: wx.CallLater(2000, lambda: self._play_location_sound_if_allowed(c)))
                         else:
                             miab_log("challenges",
                                      f"Solo win: country={country} time={elapsed:.1f}s "
                                      f"score={max(0, 180 - int(elapsed))}",
                                      self.settings)
                             wx.CallAfter(self._game.on_win)
-                            wx.CallAfter(lambda c=country: wx.CallLater(2000, lambda: self.sound.play_location_sound(c)))
+                            wx.CallAfter(lambda c=country: wx.CallLater(2000, lambda: self._play_location_sound_if_allowed(c)))
                     else:
                         self._game.on_move(self.lat, self.lon)
                 return
@@ -12226,14 +12332,14 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                                  f"Session win: country={country} time={elapsed:.1f}s",
                                  self.settings)
                         wx.CallAfter(self._session.on_win, elapsed, self.df, self.lat, self.lon)
-                        wx.CallAfter(lambda c=country: wx.CallLater(2000, lambda: self.sound.play_location_sound(c)))
+                        wx.CallAfter(lambda c=country: wx.CallLater(2000, lambda: self._play_location_sound_if_allowed(c)))
                     else:
                         miab_log("challenges",
                                  f"Solo win: country={country} time={elapsed:.1f}s "
                                  f"score={max(0, 180 - int(elapsed))}",
                                  self.settings)
                         wx.CallAfter(self._game.on_win)
-                        wx.CallAfter(lambda c=country: wx.CallLater(2000, lambda: self.sound.play_location_sound(c)))
+                        wx.CallAfter(lambda c=country: wx.CallLater(2000, lambda: self._play_location_sound_if_allowed(c)))
                 else:
                     self._game.on_move(self.lat, self.lon)
             else:
@@ -12254,7 +12360,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     wx.CallAfter(self._refresh_info_panel)
                     self._prefetch_geo_features_for_point(self.lat, self.lon)
                     if getattr(self, 'sounds_enabled', True):
-                        self.sound.play_location_sound(country if country != "Open Water" else "ocean", continent)
+                        self._play_location_sound_if_allowed(
+                            country if country != "Open Water" else "ocean", continent)
                     miab_log("navigation",
                              f"Entered country: {country}"
                              + (f" (continent: {continent})" if continent else ""),
@@ -12408,13 +12515,16 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             return
         # Only the map surface should make these sounds — not while a dialog
         # (tools menu, journey results, accessible route) is still in front.
+        if getattr(self, "_update_dialog_active", False):
+            self._verbose_trace("_resume_location_sound suppressed while update dialog is active.")
+            return
         if isinstance(wx.GetActiveWindow(), wx.Dialog):
             self._verbose_trace("_resume_location_sound suppressed: a dialog is in front.")
             return
         country = getattr(self, 'last_country_found', '')
         continent = getattr(self, 'current_continent', '')
         if country and country != "Open Water":
-            self.sound.play_location_sound(country, continent)
+            self._play_location_sound_if_allowed(country, continent)
         # Restore the current location announcement through AO2.
         label = getattr(self, 'last_location_str', '')
         if label:
