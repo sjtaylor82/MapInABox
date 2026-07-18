@@ -80,7 +80,7 @@ class OverpassClient:
 
     def __init__(
         self,
-        cooldown_secs: float = 8.0,
+        cooldown_secs: float = 2.0,
         mirrors: list[str] | None = None,
     ) -> None:
         # 2, not 1: street-data fetches and the background POI fetch share
@@ -96,6 +96,7 @@ class OverpassClient:
         # pile on.
         self._sem = threading.Semaphore(2)
         self._last_request = 0.0
+        self._last_request_by_mirror: dict[int, float] = {}
         self._cooldown = cooldown_secs
         self._mirrors = list(mirrors or OVERPASS_MIRRORS)
         # Labels parallel to _mirrors for user-facing announcements.
@@ -105,6 +106,8 @@ class OverpassClient:
         self.status_cb = None  # optional callable(str) set by caller
         self._last_successful_mirror = 0  # Rotate between servers
         self._rate_limited_until: dict[int, float] = {}  # mirror index -> epoch time
+        self._in_flight_mirrors: set[int] = set()
+        self._mirror_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Public API
@@ -116,6 +119,7 @@ class OverpassClient:
         timeout: int = 15,
         mirrors: list[str] | None = None,
         start_index: int | None = None,
+        max_mirrors: int | None = None,
     ) -> dict | None:
         """Send an Overpass QL query and return the parsed JSON response.
 
@@ -141,8 +145,6 @@ class OverpassClient:
         # server's own concurrency limits and causing timeouts on both,
         # rather than just queuing safely one at a time.
         with self._sem:
-            self._wait()
-
             if start_index is None:
                 # Start with the next server after the last known-good mirror.
                 # This spreads load across mirrors while still preserving the
@@ -154,11 +156,37 @@ class OverpassClient:
             # immediately re-hit a host that just told us to back off.
             now = time.time()
             ordered_indices = [(start_index + offset) % n_mirrors for offset in range(n_mirrors)]
-            ordered_indices.sort(key=lambda i: 1 if self._rate_limited_until.get(i, 0) > now else 0)
+            available_indices = [
+                i for i in ordered_indices
+                if self._rate_limited_until.get(i, 0) <= now
+            ]
+            if available_indices:
+                ordered_indices = available_indices
+            else:
+                ordered_indices.sort(key=lambda i: self._rate_limited_until.get(i, 0))
+            if max_mirrors is not None:
+                ordered_indices = ordered_indices[:max(1, int(max_mirrors))]
 
             for index in ordered_indices:
+                with self._mirror_lock:
+                    if index in self._in_flight_mirrors:
+                        alternatives = [
+                            i for i in ordered_indices
+                            if i != index
+                            and i not in self._in_flight_mirrors
+                            and self._rate_limited_until.get(i, 0) <= time.time()
+                        ]
+                        if alternatives:
+                            miab_log(
+                                "verbose",
+                                f"[Overpass] Skipping {label_list[index]} for concurrent request; already in use.",
+                                getattr(self, "settings", None),
+                            )
+                            continue
+                    self._in_flight_mirrors.add(index)
                 url = mirror_list[index]
                 label = label_list[index]
+                self._wait(index)
 
                 msg = f"Connecting to street server {index + 1} of {n_mirrors}: {label}..."
                 miab_log("verbose", f"[Overpass] {msg}", getattr(self, "settings", None))
@@ -200,6 +228,9 @@ class OverpassClient:
                 except urllib.error.HTTPError as exc:
                     if exc.code == 429:
                         self._rate_limited_until[index] = time.time() + RATE_LIMIT_COOLDOWN_SECS
+                        if not custom_mirrors and index in (0, 1):
+                            self._rate_limited_until[0] = time.time() + RATE_LIMIT_COOLDOWN_SECS
+                            self._rate_limited_until[1] = time.time() + RATE_LIMIT_COOLDOWN_SECS
                     elif exc.code >= 500:
                         self._rate_limited_until[index] = time.time() + TRANSIENT_FAIL_COOLDOWN_SECS
                     miab_log("errors", f"[Overpass] {label} failed: {exc}", getattr(self, "settings", None))
@@ -214,6 +245,9 @@ class OverpassClient:
                     miab_log("errors", f"[Overpass] {label} failed: {exc}", getattr(self, "settings", None))
                     # Try next server
                     continue
+                finally:
+                    with self._mirror_lock:
+                        self._in_flight_mirrors.discard(index)
 
             # All servers failed
             return None
@@ -280,16 +314,25 @@ class OverpassClient:
         self,
         query_data: bytes,
         timeout: int = 15,
+        max_mirrors: int | None = None,
     ) -> dict | None:
         """Large radius queries with standard timeout."""
-        return self.request(query_data, timeout=timeout)
+        return self.request(query_data, timeout=timeout, max_mirrors=max_mirrors)
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 
-    def _wait(self) -> None:
-        """Enforce the inter-request cooldown (called inside the semaphore)."""
-        elapsed = time.time() - self._last_request
+    def _wait(self, mirror_index: int | None = None) -> None:
+        """Enforce a cooldown, per mirror when a mirror is known."""
+        now = time.time()
+        if mirror_index is None:
+            last = self._last_request
+        else:
+            last = self._last_request_by_mirror.get(mirror_index, 0.0)
+        elapsed = now - last
         if elapsed < self._cooldown:
             time.sleep(self._cooldown - elapsed)
-        self._last_request = time.time()
+        now = time.time()
+        self._last_request = now
+        if mirror_index is not None:
+            self._last_request_by_mirror[mirror_index] = now

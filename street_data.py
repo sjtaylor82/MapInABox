@@ -857,7 +857,7 @@ class StreetFetcher:
                 "out tags;\n"
             )
             data = urllib.parse.urlencode({"data": probe_query}).encode()
-            probe = self._overpass.large_request(data, timeout=10)
+            probe = self._overpass.large_request(data, timeout=8, max_mirrors=1)
             if not probe:
                 miab_log(
                     "street",
@@ -908,7 +908,7 @@ class StreetFetcher:
                 "(area.a)", 35, bbox=bbox_str,
                 prefix=f"{type_prefix}({osm_id});\nmap_to_area->.a;\n")
             data = urllib.parse.urlencode({"data": id_query}).encode()
-            result = self._overpass.large_request(data, timeout=40)
+            result = self._overpass.large_request(data, timeout=18, max_mirrors=2)
             if result and result.get("elements"):
                 used_boundary = True
                 miab_log(
@@ -942,7 +942,7 @@ class StreetFetcher:
                 boundary_query = _street_core_query(
                     "(area.a)", 35, bbox=bbox_str, prefix=f"{area_filter}\n")
                 data   = urllib.parse.urlencode({"data": boundary_query}).encode()
-                result = self._overpass.large_request(data, timeout=40)
+                result = self._overpass.large_request(data, timeout=18, max_mirrors=1)
                 if result and result.get("elements"):
                     used_boundary = True
                     miab_log("street", f"[Street] Name-based query succeeded for {suburb_name!r}: {len(result['elements'])} ways", getattr(self, "settings", None))

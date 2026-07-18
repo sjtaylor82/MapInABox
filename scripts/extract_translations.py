@@ -32,7 +32,6 @@ SOURCES = [
     "poi_fetch.py",
     "priceline.py",
     "route_tools.py",
-    "sea_routes.py",
     "street_data.py",
     "streetview.py",
     "timetable.py",

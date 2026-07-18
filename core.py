@@ -67,7 +67,10 @@ import mall_directory
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0.0.16'
+APP_VERSION   = '1.0.17'
+
+POI_LIVE_COOLDOWN_SECS = 3.0
+POI_BACKGROUND_WAIT_SECS = 2.0
 
 # Bundled read-only resources — inside the exe (_MEIPASS) or next to the script.
 BASE_DIR      = getattr(_sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -2199,6 +2202,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._poi_live_last_completed_at = 0.0
         self._pending_poi_live_search = None
         self._pending_poi_live_generation = 0
+        self._poi_context_generation = 0
+        self._pending_pois_ready_sound = False
         self.street_mode        = False
         self.street_label       = ""
         self._road_segments     = []
@@ -2217,6 +2222,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._personal_pois     = _load_personal_pois()
         self._all_pois          = []
         self._poi_live_cache    = {}
+        self._street_survey_cache = {}
+        self._street_survey_current_poi = None
         self.sounds_enabled     = True
         self._transit           = TransitLookup(script_dir=CACHE_DIR, resource_dir=BASE_DIR)
         self._game              = ChallengeGame(
@@ -3437,6 +3444,13 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         # _try_enter_street_mode/_try_enter_new_area; keep them for the fetch.
         # Increment fetch ID to invalidate any stale background threads
         self._street_fetch_id = getattr(self, '_street_fetch_id', 0) + 1
+        self._pending_poi_live_search = None
+        self._pending_poi_live_generation += 1
+        self._poi_context_generation += 1
+        self._poi_fetch_in_progress = False
+        self._poi_live_last_completed_at = 0.0
+        self._pending_pois_ready_sound = False
+        self._clear_street_survey_cache()
         self._poi_list          = []
         self._poi_index         = 0
         self._poi_explore_stack = []
@@ -3526,6 +3540,12 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._street_fetch_lon = None
         self._empty_cache_announced = False
         self._clear_poi_state()
+        self._pending_poi_live_search = None
+        self._pending_poi_live_generation += 1
+        self._poi_context_generation += 1
+        self._poi_fetch_in_progress = False
+        self._pending_pois_ready_sound = False
+        self._clear_street_survey_cache()
         wx.CallAfter(self.map_panel.set_position, self.lat, self.lon, False, "")
         if prev_country and prev_country != "Open Water":
             self.sound.play_location_sound(prev_country, prev_continent)
@@ -3672,6 +3692,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             if getattr(self, "_quiet_gnaf_reload", False):
                 self._street_loading_announced = True
             elif not getattr(self, "_street_loading_announced", False):
+                self._street_loading_announced = True
                 wx.CallAfter(self._status_update, f"Loading streets for {suburb}...")
 
         def _street_fetch_status(msg):
@@ -3679,9 +3700,10 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 return
             if (getattr(self, "_street_loading_announced", False)
                     and str(msg).lower().startswith("loading streets")):
-                self._street_loading_announced = False
                 miab_log("street", f"[Street] Suppressed duplicate status: {msg}", None)
                 return
+            if str(msg).lower().startswith("loading streets"):
+                self._street_loading_announced = True
             wx.CallAfter(self._status_update, msg)
 
         def _street_stage1_done():
@@ -3835,6 +3857,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self._natural_features = natural_features  # Store natural features from fetch
             self._interpolations = interpolations  # Store address interpolation data
             self._address_points = addrs
+            self._clear_street_survey_cache()
             fetch_origin_lat = fetch_lat if fetch_lat is not None else self.lat
             fetch_origin_lon = fetch_lon if fetch_lon is not None else self.lon
             self._cache_center_lat = fetch_origin_lat  # Track cache center for validity
@@ -3922,6 +3945,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             wx.CallAfter(self.map_panel.set_position, self.lat, self.lon, True, label)
             wx.CallAfter(self._update_street_display)
             wx.CallAfter(self._play_roads_ready_sound)
+            if getattr(self, "_pending_pois_ready_sound", False):
+                self._pending_pois_ready_sound = False
+                wx.CallAfter(self._play_pois_ready_sound)
 
             pending_nav = getattr(self, "_pending_nav_after_street_load", None)
             if pending_nav:
@@ -3965,6 +3991,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                             return
                         self._road_segments  = merged
                         self._address_points = full_addrs or self._address_points
+                        self._clear_street_survey_cache()
                         try:
                             self._free_engine.set_segments(merged)
                         except Exception:
@@ -4760,7 +4787,36 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                if still_in_progress else
                "One moment before the next search starts...")
         wx.CallAfter(self._status_update, msg, True)
+        self._start_pending_poi_feedback(generation)
         self._schedule_pending_poi_live_search(generation)
+
+    def _start_pending_poi_feedback(self, generation):
+        self._loading = True
+        self._last_street_loading_beep_at = 0.0
+
+        def _feedback_tick():
+            params = getattr(self, "_pending_poi_live_search", None)
+            if not params or generation != getattr(self, "_pending_poi_live_generation", 0):
+                return
+            if not (getattr(self, "street_mode", False) or getattr(self, "_free_mode", False)):
+                return
+            self._loading = True
+            if getattr(self, "_poi_live_fetch_in_progress", False):
+                wx.CallAfter(self._status_update, "Still working on the last search...", True)
+            else:
+                remaining = POI_LIVE_COOLDOWN_SECS - (
+                    time.time() - getattr(self, "_poi_live_last_completed_at", 0.0)
+                )
+                if remaining <= 0:
+                    return
+                wx.CallAfter(
+                    self._status_update,
+                    f"Next POI search starts in {int(math.ceil(remaining))} seconds...",
+                    True,
+                )
+            wx.CallAfter(wx.CallLater, 5000, _feedback_tick)
+
+        wx.CallAfter(wx.CallLater, 4000, _feedback_tick)
 
     def _poi_live_fetch_started(self):
         self._poi_live_fetch_in_progress = True
@@ -4775,7 +4831,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
     def _schedule_pending_poi_live_search(self, generation=None):
         if generation is None:
             generation = self._pending_poi_live_generation
-        cooldown = 15.0
+        cooldown = POI_LIVE_COOLDOWN_SECS
         remaining = max(0.0, cooldown - (time.time() - getattr(self, "_poi_live_last_completed_at", 0.0)))
         delay_ms = int(max(remaining, 0.25) * 1000)
         # wx.CallLater (unlike wx.CallAfter) creates and starts a wx.Timer
@@ -4796,7 +4852,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         if getattr(self, "_poi_live_fetch_in_progress", False):
             self._schedule_pending_poi_live_search(generation)
             return
-        remaining = 15.0 - (time.time() - getattr(self, "_poi_live_last_completed_at", 0.0))
+        remaining = POI_LIVE_COOLDOWN_SECS - (time.time() - getattr(self, "_poi_live_last_completed_at", 0.0))
         if remaining > 0:
             self._schedule_pending_poi_live_search(generation)
             return
@@ -4806,10 +4862,12 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             if dist_metres(self.lat, self.lon, queued_lat, queued_lon) > POI_BACKGROUND_RADIUS_METRES:
                 miab_log("verbose", "p dropped queued live POI search because the map moved away.", self.settings)
                 self._pending_poi_live_search = None
+                self._loading = False
                 return
         if not (getattr(self, "street_mode", False) or getattr(self, "_free_mode", False)):
             miab_log("verbose", "p dropped queued live POI search because map browsing is inactive.", self.settings)
             self._pending_poi_live_search = None
+            self._loading = False
             return
         self._pending_poi_live_search = None
         threading.Thread(target=self._fetch_pois, kwargs=params, daemon=True).start()
@@ -4824,6 +4882,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         import threading
         self._loading             = True
         self._poi_fetch_in_progress = True
+        poi_context_generation = getattr(self, "_poi_context_generation", 0)
         category_key = (category_key or "all").lower()
         name_filter  = (name_filter or "").strip().lower()
         street_filter = (street_filter or "").strip().lower()
@@ -4887,6 +4946,21 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             cached_presented = False
             cached_pois = []
 
+            def _poi_context_is_current():
+                return poi_context_generation == getattr(self, "_poi_context_generation", 0)
+
+            def _discard_if_poi_context_changed(stage):
+                if _poi_context_is_current():
+                    return False
+                miab_log(
+                    "verbose",
+                    f"p discarded {stage} POI result because the browsing context changed.",
+                    self.settings,
+                )
+                self._loading = False
+                self._poi_fetch_in_progress = False
+                return True
+
             def _prepare_pois(raw_pois, radius_m=None):
                 _suppressed = _load_suppressed()
                 _renamed    = _load_renamed()
@@ -4910,7 +4984,40 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 prepared.sort(key=lambda x: x.get("dist", float("inf")))
                 return prepared
 
+            if ((name_filter or street_filter)
+                    and source in ("osm", "here")
+                    and getattr(self, "_background_poi_fetch_in_progress", False)):
+                miab_log(
+                    "verbose",
+                    "p keyword search waiting for in-progress background POI list.",
+                    self.settings,
+                )
+                wx.CallAfter(self._status_update, "Checking loaded POIs...", True)
+                wait_started = time.time()
+                while (getattr(self, "_background_poi_fetch_in_progress", False)
+                       and time.time() - wait_started < POI_BACKGROUND_WAIT_SECS):
+                    if not _poi_context_is_current():
+                        self._loading = False
+                        self._poi_fetch_in_progress = False
+                        return
+                    time.sleep(0.25)
+
             background = list(getattr(self, "_all_pois", []) or [])
+            if ((name_filter or street_filter)
+                    and source in ("osm", "here")
+                    and not background):
+                disk_bg = self._poi_fetcher.load_cached_pois(self.lat, self.lon)
+                if disk_bg:
+                    self._all_pois = self._merge_personal_pois(disk_bg)
+                    self._poi_grid = self._build_poi_grid(self._all_pois)
+                    self._poi_fetch_lat = self.lat
+                    self._poi_fetch_lon = self.lon
+                    background = list(self._all_pois)
+                    miab_log(
+                        "verbose",
+                        f"p loaded {len(background)} background POIs from disk for keyword search.",
+                        self.settings,
+                    )
             if background and source in ("osm", "here"):
                 fetch_lat = getattr(self, "_poi_fetch_lat", None)
                 fetch_lon = getattr(self, "_poi_fetch_lon", None)
@@ -4928,11 +5035,83 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 source_matches = not sources or source in sources
                 location_matches = background_distance <= POI_BACKGROUND_RADIUS_METRES
                 radius_covered = max(search_radii) <= POI_BACKGROUND_RADIUS_METRES
+                if name_filter or street_filter:
+                    miab_log(
+                        "verbose",
+                        f"p keyword cache check: background={len(background)} "
+                        f"sources={sorted(sources)} source={source} "
+                        f"distance={background_distance:.0f}m "
+                        f"radius={max(search_radii)}m "
+                        f"source_matches={source_matches} "
+                        f"location_matches={location_matches} "
+                        f"radius_covered={radius_covered}.",
+                        self.settings,
+                    )
                 if source_matches and location_matches and radius_covered:
                     cached_pois = filter_pois_by_category(background, category_key)
                     cached_pois = [p for p in cached_pois if _name_match(p) and _street_match(p)]
                     cached_pois = _prepare_pois(cached_pois, radius_m=max(search_radii))
+                    if name_filter or street_filter:
+                        if cached_pois:
+                            if not _poi_context_is_current():
+                                miab_log(
+                                    "verbose",
+                                    "p discarded cached POI result because the browsing context changed.",
+                                    self.settings,
+                                )
+                                self._loading = False
+                                self._poi_fetch_in_progress = False
+                                return
+                            self._poi_list = cached_pois
+                            self._poi_index = 0
+                            filters = []
+                            if name_filter:
+                                filters.append(f"name '{name_filter}'")
+                            if street_filter:
+                                filters.append(f"street '{street_filter}'")
+                            miab_log(
+                                "verbose",
+                                f"p served keyword search from loaded background POIs: "
+                                f"{len(cached_pois)} {category_key} matching "
+                                f"{', '.join(filters)} via {source}; live search skipped.",
+                                self.settings,
+                            )
+                            wx.CallAfter(self._present_poi_list)
+                        else:
+                            miab_log(
+                                "verbose",
+                                f"p loaded background POIs cover this area; no cached "
+                                f"{category_key} result matching name='{name_filter}' "
+                                f"street='{street_filter}'. Live search skipped.",
+                                self.settings,
+                            )
+                            filters = []
+                            if name_filter:
+                                filters.append(f"'{name_filter}'")
+                            if street_filter:
+                                filters.append(f"on {street_filter}")
+                            what = " ".join(filters) if filters else category_label.lower()
+                            wx.CallAfter(
+                                self._retry_poi_name_search,
+                                category_key,
+                                name_filter,
+                                street_filter,
+                                source,
+                                max(search_radii),
+                            )
+                        self._loading = False
+                        self._poi_fetch_in_progress = False
+                        return
                     if cached_pois:
+                        if not _poi_context_is_current():
+                            miab_log(
+                                "verbose",
+                                "p discarded cached POI result because the browsing context changed.",
+                                self.settings,
+                            )
+                            self._loading = False
+                            self._poi_fetch_in_progress = False
+                            return
                         self._poi_list     = cached_pois
                         self._poi_index    = 0
                         cached_presented = True
@@ -5060,7 +5239,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
             if not bypass_live_guard:
                 fetch_actually_running = getattr(self, "_poi_live_fetch_in_progress", False)
-                cooldown_remaining = 15.0 - (
+                cooldown_remaining = POI_LIVE_COOLDOWN_SECS - (
                     time.time() - getattr(self, "_poi_live_last_completed_at", 0.0)
                 )
                 if fetch_actually_running or cooldown_remaining > 0:
@@ -5134,6 +5313,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     raw = self._fetch_google_pois(
                         category_key, radius=attempt_radius,
                         name_filter=name_filter)
+                    if _discard_if_poi_context_changed("Google live"):
+                        return
                     raw = filter_pois_by_category(raw, category_key)
                     pois = [p for p in raw if _name_match(p) and _street_match(p)]
                     pois.sort(key=lambda x: x.get("dist", float("inf")))
@@ -5153,6 +5334,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         if live_raw_pois is not None:
                             raw_pois = live_raw_pois
                             _live_cache_set("category", source, category_key, attempt_radius, raw_pois)
+                    if _discard_if_poi_context_changed("HERE live"):
+                        return
                     pois = [p for p in raw_pois if _name_match(p) and _street_match(p)]
                     if name_filter or street_filter:
                         _collect(pois)
@@ -5177,9 +5360,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                             except Exception:
                                 pass
                         # Before hitting Overpass at the exact radius, check
-                        # whether the 2000m background disk cache already covers
-                        # this request.  This prevents repeated Overpass calls
-                        # when the user tries different radii ≤ 2000m.
+                        # whether the background disk cache already covers
+                        # this request. This prevents repeated Overpass calls
+                        # for requests within the loaded POI radius.
                         if not name_filter and attempt_radius <= POI_BACKGROUND_RADIUS_METRES:
                             disk_bg = self._poi_fetcher.load_cached_pois(self.lat, self.lon)
                             if disk_bg:
@@ -5209,6 +5392,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                             if live_raw_pois is not None:
                                 raw_pois = live_raw_pois
                                 _live_cache_set("category", source, category_key, attempt_radius, raw_pois)
+                    if _discard_if_poi_context_changed("OSM live"):
+                        self._poi_fetcher.set_here_key(here_key)
+                        return
                     self._poi_fetcher.set_here_key(here_key)
                     pois = [p for p in raw_pois if _name_match(p) and _street_match(p)]
                     if name_filter or street_filter:
@@ -5254,6 +5440,16 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
             if getattr(self, "_poi_explore_stack", []):
                 self._loading = False
+                return
+
+            if not _poi_context_is_current():
+                miab_log(
+                    "verbose",
+                    "p discarded live POI result because the browsing context changed.",
+                    self.settings,
+                )
+                self._loading = False
+                self._poi_fetch_in_progress = False
                 return
 
             pois = _prepare_pois(pois)
@@ -5313,7 +5509,19 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                          True)
         finally:
             if live_started:
-                self._poi_live_fetch_finished()
+                if '_poi_context_is_current' in locals() and _poi_context_is_current():
+                    self._poi_live_fetch_finished()
+                else:
+                    self._poi_live_fetch_in_progress = False
+                    miab_log(
+                        "verbose",
+                        "p stale live POI fetch finished after context changed; no cooldown applied.",
+                        self.settings,
+                    )
+                    if getattr(self, "_pending_poi_live_search", None):
+                        self._schedule_pending_poi_live_search(
+                            getattr(self, "_pending_poi_live_generation", 0)
+                        )
             if 'poi_wait_stop' in locals():
                 poi_wait_stop.set()
             if search_beep_started:
@@ -5349,7 +5557,12 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _poi_detail(self, key_num: int):
         poi = None
-        if getattr(self, '_poi_list', []) and 0 <= getattr(self, '_poi_index', -1) < len(self._poi_list):
+        focused = wx.Window.FindFocus()
+        list_active = (
+            getattr(self, '_poi_list', [])
+            and (focused == self.listbox or focused == self)
+        )
+        if list_active and 0 <= getattr(self, '_poi_index', -1) < len(self._poi_list):
             poi = self._poi_list[self._poi_index]
         elif getattr(self, '_poi_explore_stack', []):
             stack = self._poi_explore_stack[-1]
@@ -5357,6 +5570,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             idx   = stack.get('index', 0)
             if items and 0 <= idx < len(items):
                 poi = items[idx]
+        if poi is None:
+            poi = self._current_street_survey_poi()
 
         if poi is None:
             self._poi_detail_announce("No POI selected."); return
@@ -7819,12 +8034,35 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _open_poi_website(self):
         """Ctrl+W — open the website of the currently selected POI in the browser."""
-        if not self._poi_list or self._poi_index >= len(self._poi_list):
+        focused = wx.Window.FindFocus()
+        list_active = (
+            getattr(self, '_poi_list', [])
+            and (focused == self.listbox or focused == self)
+        )
+        if (not list_active or self._poi_index >= len(self._poi_list)):
+            if self._open_current_street_poi_website():
+                return
             self._announce_transient_then_return("No point of interest selected.")
             return
         self._sync_poi_selection_from_listbox()
         poi = self._poi_list[self._poi_index]
         self._open_poi_website_for(poi)
+
+    def _open_current_street_poi_website(self):
+        """Open the current street-survey POI website when POI names are enabled."""
+        if not self.street_mode:
+            return False
+        if self._street_survey_address_announce_mode() not in ("poi_names", "poi_only"):
+            return False
+        poi = getattr(self, "_street_survey_current_poi", None)
+        if not poi:
+            poi = self._current_street_survey_poi()
+        if not poi:
+            return False
+        name = (poi.get("name") or poi.get("label") or "point of interest").split(",")[0].strip()
+        self._open_poi_website_for(poi)
+        miab_log("feature_usage", f"Ctrl+W opened current street POI website for {name!r}", self.settings)
+        return True
 
     # Browser-like UA — some sites reject the default urllib agent outright.
     _WEB_CHECK_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -9766,7 +10004,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         if getattr(self, "_poi_live_fetch_in_progress", False):
             self._status_update("POI refresh already in progress.", force=True)
             return True
-        cooldown_remaining = 15.0 - (
+        cooldown_remaining = POI_LIVE_COOLDOWN_SECS - (
             time.time() - getattr(self, "_poi_live_last_completed_at", 0.0)
         )
         if cooldown_remaining > 0:
@@ -9888,6 +10126,18 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
         try:
             self._background_poi_fetch_in_progress = True
+            if (getattr(self, "_street_data_fetch_in_progress", False)
+                    and not getattr(self, "_road_fetched", False)):
+                miab_log(
+                    "verbose",
+                    "Background POI fetch yielding first Overpass slot to street fetch.",
+                    self.settings,
+                )
+                time.sleep(1.5)
+                if (not self.street_mode
+                        or (fetch_id is not None and self._street_fetch_id != fetch_id)):
+                    miab_log("verbose", "Background POI fetch skipped after yield — street fetch superseded.", self.settings)
+                    return
             pois = self._poi_fetcher.fetch_all_background(
                 poi_lat, poi_lon, address_points,
                 force_refresh=force_refresh,
@@ -9918,7 +10168,15 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 f"Grid index: {len(self._poi_grid)} occupied cells across {len(pois)} POIs.",
                 self.settings,
             )
-            wx.CallAfter(self._play_pois_ready_sound)
+            if getattr(self, "_street_data_fetch_in_progress", False):
+                self._pending_pois_ready_sound = True
+                miab_log(
+                    "verbose",
+                    "Background POIs ready; deferring ready sound until streets finish.",
+                    self.settings,
+                )
+            else:
+                wx.CallAfter(self._play_pois_ready_sound)
             if getattr(self, '_free_mode', False):
                 wx.CallAfter(self._free_announce_poi_update)
             elif force_refresh:
@@ -10092,6 +10350,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _play_pois_ready_sound(self):
         """Notification sound when background POI fetch completes."""
+        miab_log("verbose", "Playing POIs-ready balloon sound.", self.settings)
         self._play_system_sound("balloon")
 
     def _play_roads_ready_sound(self):
@@ -10101,6 +10360,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         if now - last < 2.5:
             return
         self._last_roads_ready_sound_at = now
+        miab_log("street", "[Street] Playing roads-ready sound.", self.settings)
         self._play_system_sound("default")
 
     def _open_city_pack_wizard(self):
@@ -10301,10 +10561,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         invalid = ("No street data nearby", "No street data", "Unknown", "")
         if street not in invalid:
             target = self._street_survey_bare(street)
-            has_loaded_street = any(
-                self._street_survey_bare(re.sub(r"\s*\(.*?\)", "", seg.get("name", "")).strip()) == target
-                for seg in getattr(self, "_road_segments", [])
-            )
+            has_loaded_street = bool(self._street_survey_segments_for(target, already_bare=True))
             if not has_loaded_street:
                 street = ""
         if not street or street in invalid:
@@ -10315,13 +10572,43 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             return ""
         return re.sub(r"\s*\(.*?\)", "", street).strip()
 
-    def _street_survey_project(self, street_name, lat, lon):
-        target = self._street_survey_bare(street_name)
-        best = None
+    def _clear_street_survey_cache(self):
+        self._street_survey_cache = {}
+        self._street_survey_current_poi = None
+
+    def _street_survey_cache_key(self, prefix, street_name, *extra):
+        return (
+            prefix,
+            self._street_survey_bare(street_name),
+            len(getattr(self, "_road_segments", []) or []),
+            len(getattr(self, "_address_points", []) or []),
+            len(getattr(self, "_all_pois", []) or []),
+            self._street_survey_address_announce_mode(),
+            self._street_survey_number_filter(),
+            *extra,
+        )
+
+    def _street_survey_segments_for(self, street_name, already_bare=False):
+        target = street_name if already_bare else self._street_survey_bare(street_name)
+        cache = getattr(self, "_street_survey_cache", None)
+        if cache is None:
+            cache = {}
+            self._street_survey_cache = cache
+        key = ("segments", target, len(getattr(self, "_road_segments", []) or []))
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+        segments = []
         for seg in getattr(self, "_road_segments", []):
             raw = re.sub(r"\s*\(.*?\)", "", seg.get("name", "")).strip()
-            if self._street_survey_bare(raw) != target:
-                continue
+            if self._street_survey_bare(raw) == target:
+                segments.append(seg)
+        cache[key] = segments
+        return segments
+
+    def _street_survey_project(self, street_name, lat, lon):
+        best = None
+        for seg in self._street_survey_segments_for(street_name):
             coords = seg.get("coords", [])
             if len(coords) < 2:
                 continue
@@ -10343,7 +10630,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         target = self._street_survey_bare(street_name)
         out = []
 
-        def add_candidate(number, street, lat, lon, source="", name=""):
+        def add_candidate(number, street, lat, lon, source="", name="", poi=None):
             if not number or lat is None or lon is None:
                 return
             if self._street_survey_bare(street or "") != target:
@@ -10356,6 +10643,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     "lon": float(lon),
                     "source": source,
                     "name": str(name or "").split(",")[0].strip(),
+                    "poi": poi if isinstance(poi, dict) else None,
                 })
             except (TypeError, ValueError):
                 return
@@ -10367,7 +10655,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             number = poi.get("number") or tags.get("addr:housenumber")
             street = poi.get("street") or tags.get("addr:street")
             name = poi.get("name") or poi.get("label") or tags.get("name") or ""
-            add_candidate(number, street, poi.get("lat"), poi.get("lon"), "poi", name)
+            add_candidate(number, street, poi.get("lat"), poi.get("lon"), "poi", name, poi=poi)
 
         for ap in getattr(self, "_address_points", []):
             if not self._address_point_source_enabled(ap):
@@ -10414,10 +10702,24 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 "snap_dist": proj[0],
                 "name": name,
                 "source": "poi_near_street",
+                "poi": poi,
             })
         return out
 
     def _street_survey_addresses(self, street_name, include_pois_near_street=False):
+        cache = getattr(self, "_street_survey_cache", None)
+        if cache is None:
+            cache = {}
+            self._street_survey_cache = cache
+        cache_key = self._street_survey_cache_key(
+            "addresses",
+            street_name,
+            bool(include_pois_near_street),
+        )
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return list(cached)
+
         out = []
         seen = set()
         for ap in self._street_survey_address_candidates(street_name):
@@ -10436,6 +10738,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 "snap_dist": proj[0],
                 "name": ap.get("name", ""),
                 "source": ap.get("source", ""),
+                "poi": ap.get("poi"),
             })
         if include_pois_near_street:
             for poi in self._street_survey_poi_candidates(street_name):
@@ -10456,7 +10759,38 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             )
         except Exception:
             pass
+        cache[cache_key] = tuple(sorted_out)
         return sorted_out
+
+    def _current_street_survey_poi(self):
+        if not getattr(self, "street_mode", False):
+            return None
+        if self._street_survey_address_announce_mode() not in ("poi_names", "poi_only"):
+            return None
+        poi = getattr(self, "_street_survey_current_poi", None)
+        if isinstance(poi, dict):
+            return poi
+        street = self._street_survey_current_street()
+        if not street:
+            return None
+        number = self._street_survey_current_number(street)
+        if not number:
+            return None
+        current_key = self._street_survey_number_key(number)
+        best = None
+        best_dist = float("inf")
+        for addr in self._street_survey_addresses(street, include_pois_near_street=False):
+            poi = addr.get("poi")
+            if not isinstance(poi, dict):
+                continue
+            if self._street_survey_number_key(addr.get("number")) != current_key:
+                continue
+            d = dist_metres(self.lat, self.lon, addr.get("lat"), addr.get("lon"))
+            if d < best_dist:
+                best_dist = d
+                best = poi
+        self._street_survey_current_poi = best
+        return best
 
     def _street_survey_current_number(self, street):
         pinned_num = getattr(self, "_jump_address_number", None)
@@ -10508,7 +10842,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         address_mode = self._street_survey_address_announce_mode()
         addresses = self._street_survey_addresses(
             street,
-            include_pois_near_street=(address_mode == "poi_only"),
+            include_pois_near_street=False,
         )
         if not addresses:
             self._announce_transient(f"No known house numbers loaded for {street}.")
@@ -10536,21 +10870,10 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 return True
         if address_mode == "poi_only":
             addresses = [a for a in addresses if a.get("name")]
-            addresses.sort(key=lambda item: item.get("along", 0.0))
-            here = self._street_survey_project(street, self.lat, self.lon)
-            here_along = here[1] if here else 0.0
             if not addresses:
                 self._announce_transient(f"No POI house numbers loaded for {street}.")
                 return True
-        if address_mode == "poi_only":
-            if direction > 0:
-                choices = [a for a in addresses if a.get("along", 0.0) > here_along + 2.0]
-                target = choices[0] if choices else None
-            else:
-                choices = [a for a in addresses if a.get("along", 0.0) < here_along - 2.0]
-                target = choices[-1] if choices else None
-            edge_msg = f"No {'higher' if direction > 0 else 'lower'} POI on {street}."
-        elif direction > 0:
+        if direction > 0:
             choices = [a for a in addresses if self._street_survey_number_key(a["number"]) > current_key]
             target = choices[0] if choices else None
             edge_msg = (
@@ -10581,6 +10904,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._jump_street_pin_lon = self.lon
         self._jump_address_number = target["number"]
         self._jump_address_street = street
+        self._street_survey_current_poi = (
+            target.get("poi")
+            if address_mode in ("poi_names", "poi_only") and target.get("name")
+            else None
+        )
         self._street_survey_last_direction = direction
         wx.CallAfter(self.map_panel.set_position, self.lat, self.lon, True, street)
         name = target.get("name", "") if address_mode in ("poi_names", "poi_only") else ""
@@ -11215,6 +11543,14 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         if primary and alt and not shift:
             alt_map = {ord('1'): 1, ord('2'): 2, ord('3'): 3,
                        ord('4'): 4, ord('5'): 5, ord('6'): 6}
+            alt_map.update({
+                getattr(wx, "WXK_NUMPAD1", None): 1,
+                getattr(wx, "WXK_NUMPAD2", None): 2,
+                getattr(wx, "WXK_NUMPAD3", None): 3,
+                getattr(wx, "WXK_NUMPAD4", None): 4,
+                getattr(wx, "WXK_NUMPAD5", None): 5,
+                getattr(wx, "WXK_NUMPAD6", None): 6,
+            })
             if key in alt_map:
                 self._poi_detail(alt_map[key]); return True
             if key == ord('P') or key == ord('p'):
@@ -11513,6 +11849,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self.lon = new_lon
             moved = True
         if moved:
+            self._street_survey_current_poi = None
             # Keep the visual map and coordinate panel responsive while the
             # slower place/country lookup runs in the background.
             self.map_panel.set_position(

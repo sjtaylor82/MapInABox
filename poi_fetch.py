@@ -36,7 +36,7 @@ from geo import (
 # Shared constants
 # ---------------------------------------------------------------------------
 
-POI_BACKGROUND_RADIUS_METRES = 2000
+POI_BACKGROUND_RADIUS_METRES = 1000
 
 POI_CATEGORY_CHOICES: list[tuple[str, str]] = [
     ("all",            "All nearby"),
@@ -1697,8 +1697,9 @@ class PoiFetcher:
             return all_pois
 
         # ── OSM / Overpass path ──────────────────────────────────────────
-        # Keep the automatic background request broad enough for useful
-        # ambient POIs, but not so broad that dense suburbs time out.
+        # Match the default POI browse/search radius. Keyword searches use
+        # this loaded list as authoritative, so the automatic fetch should
+        # not pull a wider area than the user asked to browse.
         query_radii = [radius]
         if radius > 1000:
             query_radii.append(1000)
