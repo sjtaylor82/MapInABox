@@ -111,12 +111,22 @@ class UpdateChecker:
             # Never raise — update check should be completely silent on failure
             miab_log("errors", f"[Updater] Check failed (non-fatal): {e}", getattr(self, "settings", None))
 
-    def download_and_install(self) -> bool:
+    def download_and_install(self, progress_cb=None) -> bool:
         """Download the release asset and launch it.  Returns False on error.
 
         On Windows: downloads the .exe installer, launches it, app should exit.
         On macOS:   opens the release page in the browser (replacing a running
                     .app is not safe to do in-process).
+
+        This method does blocking network I/O (potentially large files) and
+        is meant to be called from a background thread — never call it
+        directly on the wx main thread, or the UI will look like it has
+        frozen ("Not Responding") for the whole download.
+
+        progress_cb, if given, is called as progress_cb(percent: int) from
+        whatever thread this method is running on — the caller is
+        responsible for hopping back to the main thread (e.g. wx.CallAfter)
+        before touching any UI from inside it.
         """
         import webbrowser
 
@@ -140,9 +150,18 @@ class UpdateChecker:
         filename = asset["name"]
         dest     = os.path.join(tempfile.gettempdir(), filename)
 
+        def _reporthook(block_num, block_size, total_size):
+            if not progress_cb or total_size <= 0:
+                return
+            pct = min(100, int(block_num * block_size * 100 / total_size))
+            try:
+                progress_cb(pct)
+            except Exception:
+                pass
+
         try:
             miab_log("verbose", f"[Updater] Downloading {url} ...", getattr(self, "settings", None))
-            urllib.request.urlretrieve(url, dest)
+            urllib.request.urlretrieve(url, dest, reporthook=_reporthook)
             miab_log("verbose", f"[Updater] Launching {dest}", getattr(self, "settings", None))
             os.startfile(dest)   # Windows only — we only reach here on Windows
             return True

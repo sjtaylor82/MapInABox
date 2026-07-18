@@ -2381,17 +2381,35 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         )
         if dlg.ShowModal() == wx.ID_YES:
             self._status_update("Downloading update...", force=True)
-            if self._updater.download_and_install():
-                # On Windows the installer is launching — close the app cleanly
-                import sys as _sys
-                if _sys.platform != "darwin":
-                    self.Close()
-            else:
-                wx.MessageBox(
-                    "Update download failed. Please visit the website to download manually.",
-                    "Update Failed",
-                    wx.OK | wx.ICON_ERROR,
-                )
+            self._update_last_announced_pct = -1
+            threading.Thread(target=self._run_update_download, daemon=True).start()
+
+    def _run_update_download(self) -> None:
+        """Runs on a background thread — download_and_install() does blocking
+        network I/O, so it must never run on the wx main thread (that's what
+        made the app look frozen/"Not Responding" during the download)."""
+
+        def _progress(pct: int) -> None:
+            # Announce every 20% so the screen reader isn't spammed with
+            # near-continuous updates during a large download.
+            last = getattr(self, "_update_last_announced_pct", -1)
+            if pct - last >= 20 or (pct == 100 and last != 100):
+                self._update_last_announced_pct = pct
+                wx.CallAfter(self._status_update, f"Downloading update: {pct}%.", True)
+
+        success = self._updater.download_and_install(progress_cb=_progress)
+        if success:
+            # On Windows the installer is launching — close the app cleanly
+            import sys as _sys
+            if _sys.platform != "darwin":
+                wx.CallAfter(self.Close)
+        else:
+            wx.CallAfter(
+                wx.MessageBox,
+                "Update download failed. Please visit the website to download manually.",
+                "Update Failed",
+                wx.OK | wx.ICON_ERROR,
+            )
         dlg.Destroy()
 
     def _build_info_panel(self, parent):
