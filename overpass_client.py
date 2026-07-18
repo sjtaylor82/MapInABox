@@ -52,6 +52,16 @@ OVERPASS_MIRRORS: list[str] = [
 # (Kumi Systems / France) than to burn another timeout re-trying them.
 RATE_LIMIT_COOLDOWN_SECS = 120.0
 
+# How long to avoid retrying a mirror after ANY other failure (5xx server
+# errors, connection errors, timeouts). A single street-mode entry can fire
+# several separate request() calls in a row (id-based boundary probe, then
+# a boundary probe, then the full name-based query) — without this, a
+# mirror that just failed with a 504 moments ago gets hit again in the very
+# next call with no memory of the failure, doubling or tripling the total
+# wait for no benefit. Shorter than the 429 cooldown since these tend to be
+# more transient (momentary overload) than a hard rate-limit block.
+TRANSIENT_FAIL_COOLDOWN_SECS = 30.0
+
 
 # ---------------------------------------------------------------------------
 # Client
@@ -63,7 +73,7 @@ class OverpassClient:
     Parameters
     ----------
     cooldown_secs:
-        Minimum seconds between requests (default 6).
+        Minimum seconds between requests (default 8).
     mirrors:
         Override the default mirror list if desired.
     """
@@ -73,7 +83,18 @@ class OverpassClient:
         cooldown_secs: float = 8.0,
         mirrors: list[str] | None = None,
     ) -> None:
-        self._sem = threading.Semaphore(1)
+        # 2, not 1: street-data fetches and the background POI fetch share
+        # this one client, and Semaphore(1) forced them to run strictly
+        # back-to-back — a POI fetch queued behind a slow/retrying street
+        # fetch (or vice versa) could not even start until the other
+        # finished its own full mirror-retry loop, compounding the total
+        # wait badly. 2 lets one street request and one POI request be in
+        # flight at the same time, which matches the public Overpass
+        # instances' own published fair-use guidance of about 2 concurrent
+        # slots per client — enough to fix the serialization without
+        # opening the door to unbounded concurrent load if more callers
+        # pile on.
+        self._sem = threading.Semaphore(2)
         self._last_request = 0.0
         self._cooldown = cooldown_secs
         self._mirrors = list(mirrors or OVERPASS_MIRRORS)
@@ -179,10 +200,17 @@ class OverpassClient:
                 except urllib.error.HTTPError as exc:
                     if exc.code == 429:
                         self._rate_limited_until[index] = time.time() + RATE_LIMIT_COOLDOWN_SECS
+                    elif exc.code >= 500:
+                        self._rate_limited_until[index] = time.time() + TRANSIENT_FAIL_COOLDOWN_SECS
                     miab_log("errors", f"[Overpass] {label} failed: {exc}", getattr(self, "settings", None))
                     # Try next server
                     continue
                 except Exception as exc:
+                    # Socket timeouts, connection errors, etc. — also
+                    # deprioritize briefly so a subsequent request() call
+                    # (boundary probe, full query) doesn't immediately
+                    # re-hit the same mirror that just failed.
+                    self._rate_limited_until[index] = time.time() + TRANSIENT_FAIL_COOLDOWN_SECS
                     miab_log("errors", f"[Overpass] {label} failed: {exc}", getattr(self, "settings", None))
                     # Try next server
                     continue

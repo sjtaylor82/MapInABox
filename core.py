@@ -67,7 +67,7 @@ import mall_directory
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0.0.15'
+APP_VERSION   = '1.0.0.16'
 
 # Bundled read-only resources — inside the exe (_MEIPASS) or next to the script.
 BASE_DIR      = getattr(_sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -2193,7 +2193,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._tools_workflow_active = False
         self._poi_fetch_lat         = None   # location where POIs were last fetched
         self._poi_fetch_lon         = None
-        self._poi_fetch_in_progress = False  # guard against duplicate background fetches
+        self._poi_fetch_in_progress = False
+        self._background_poi_fetch_in_progress = False
         self._poi_live_fetch_in_progress = False
         self._poi_live_last_completed_at = 0.0
         self._pending_poi_live_search = None
@@ -2469,6 +2470,13 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         if ctrl.GetLabel() != value:
             ctrl.SetLabel(value)
             ctrl.Wrap(max(180, ctrl.GetParent().GetSize().GetWidth() - 24))
+
+    def _set_status_text(self, text):
+        """Update the visual status panel without speech or focus changes."""
+        if hasattr(self, "_info_status"):
+            self._set_info_label(self._info_status, text)
+            self.info_panel.Layout()
+            self.info_panel.Refresh()
 
     def _format_info_coord(self, value, positive, negative):
         try:
@@ -3208,6 +3216,16 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             wx.CallAfter(self._status_update, f"Streets already cached for {place}. Checking POIs...")
         else:
             wx.CallAfter(self._status_update, f"Downloading streets and POIs for {place}...")
+        poi_future = None
+        poi_executor = None
+        cached_pois = self._poi_fetcher.load_cached_pois(clat, clon)
+        if cached_pois is None and not streets_cached:
+            import concurrent.futures
+            wx.CallAfter(self._status_update, f"Downloading POIs for {place}...")
+            poi_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            poi_future = poi_executor.submit(
+                self._poi_fetcher.fetch_all_background, clat, clon, [])
+
         try:
             if not streets_cached:
                 _segs, addrs, _from_cache, _snap_lat, _snap_lon, _skip_stage2, _natural, _interps = \
@@ -3224,10 +3242,12 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         osm_id=osm_id,
                     )
 
-            cached_pois = self._poi_fetcher.load_cached_pois(clat, clon)
             if cached_pois is None:
-                wx.CallAfter(self._status_update, f"Downloading POIs for {place}...")
-                pois = self._poi_fetcher.fetch_all_background(clat, clon, addrs)
+                if poi_future is not None:
+                    pois = poi_future.result()
+                else:
+                    wx.CallAfter(self._status_update, f"Downloading POIs for {place}...")
+                    pois = self._poi_fetcher.fetch_all_background(clat, clon, addrs)
                 poi_note = f"{len(pois)} POIs"
             else:
                 poi_note = f"{len(cached_pois)} cached POIs"
@@ -3240,6 +3260,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             wx.CallAfter(self._announce_transient_then_return,
                 f"Could not prepare {place}. Server may be busy.")
         finally:
+            if poi_executor is not None:
+                poi_executor.shutdown(wait=False)
             self._prefetch_in_progress = False
 
     def toggle_street_mode(self):
@@ -3258,7 +3280,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             if getattr(self, "_suppress_next_street_loading_status", False):
                 self._suppress_next_street_loading_status = False
             else:
-                self._status_update("Loading streets...", force=True)
+                self._set_status_text("Loading streets...")
             threading.Thread(target=self._try_enter_street_mode, daemon=True).start()
 
     def _try_enter_street_mode(self):
@@ -3393,14 +3415,16 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self.lat = request_lat
         self.lon = request_lon
         self.street_mode    = True
+        self._suppress_map_focus_repeat(1200)
+        self._last_focus_return_repeat_label = "Street mode"
+        self._last_focus_return_repeat_at = time.time()
         # Set content before focusing — a focus event fires as soon as
         # SetFocus() is called, so the screen reader reads whatever the
         # listbox already contains at that moment. Setting the text first
         # means the focus event picks up "Street mode" immediately, instead
         # of whatever was left over from before (which can read as blank
         # or "unknown").
-        self.listbox.set_single("Street mode")
-        self._force_listbox_refocus()
+        self._listbox_set_single("Street mode")
         self._road_segments  = []
         self._natural_features = []
         self._address_points = []
@@ -3456,14 +3480,27 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self.sound._ch.fadeout(500)
         self.sound._current = None
         threading.Thread(target=self._fetch_road_data, daemon=True).start()
+        initial_poi_lat = getattr(self, "_street_fetch_lat", None) or request_lat
+        initial_poi_lon = getattr(self, "_street_fetch_lon", None) or request_lon
+        # Start POI loading right now, in parallel with the street fetch,
+        # instead of waiting for street data (and its address points) to
+        # finish first — that wait was the entire reason POI results only
+        # ever started appearing after streets had fully loaded.
+        threading.Thread(
+            target=self._prefetch_background_pois,
+            args=(initial_poi_lat, initial_poi_lon, [], self._street_fetch_id),
+            daemon=True,
+        ).start()
 
     def _exit_street_mode(self, repeat_location=True):
         prev_country = getattr(self, "last_country_found", "")
         prev_continent = getattr(self, "current_continent", "")
         self.street_mode  = False
+        self._suppress_map_focus_repeat(1200)
+        self._last_focus_return_repeat_label = "Map mode"
+        self._last_focus_return_repeat_at = time.time()
         # Content before focus — see matching comment in _enter_street_mode.
-        self.listbox.set_single("Map mode")
-        self._force_listbox_refocus()
+        self._listbox_set_single("Map mode")
         self.street_label = ""
         self._street_auto_land_done = False
         self._jump_street_label = None
@@ -3652,6 +3689,21 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 return
             if getattr(self, "_quiet_gnaf_reload", False):
                 return
+            bg_lat = fetch_lat if fetch_lat is not None else request_lat
+            bg_lon = fetch_lon if fetch_lon is not None else request_lon
+            if (not getattr(self, "_poi_fetch_in_progress", False)
+                    and not getattr(self, "_background_poi_fetch_in_progress", False)):
+                miab_log(
+                    "verbose",
+                    f"Starting background POI fetch alongside address fetch at "
+                    f"({bg_lat:.5f},{bg_lon:.5f}).",
+                    self.settings,
+                )
+                threading.Thread(
+                    target=self._fetch_all_pois_background,
+                    args=([], False, bg_lat, bg_lon, my_fetch_id),
+                    daemon=True,
+                ).start()
             wx.CallAfter(self._announce_transient, "Nearly Done.")
 
         try:
@@ -3881,49 +3933,18 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             threading.Thread(target=self._gnaf_preload_addresses,
                              args=(_glat, _glon), daemon=True).start()
 
-            # Pre-populate _all_pois from disk cache; fetch live if cache is empty
-            def _try_load_poi_cache():
-                try:
-                    cached = self._poi_fetcher.load_cached_pois(_glat, _glon)
-                    if cached is not None:
-                        _suppressed = _load_suppressed()
-                        _renamed    = _load_renamed()
-                        pois = _apply_renames(
-                            [p for p in cached if not _is_suppressed(p, _suppressed)],
-                            _renamed)
-                        self._all_pois = self._merge_personal_pois(pois)
-                        self._poi_grid = self._build_poi_grid(self._all_pois)
-                        self._poi_fetch_lat = _glat
-                        self._poi_fetch_lon = _glon
-                        try:
-                            self._free_engine.set_pois(pois)
-                        except Exception:
-                            pass
-                        miab_log("verbose", f"Pre-loaded {len(pois)} POIs from cache.", self.settings)
-                        # Only refresh live if the cache is stale (> 6 h).
-                        # Fresh caches are served as-is to avoid hammering
-                        # Overpass on every street-mode entry.
-                        _age_h = self._poi_fetcher.cached_background_age_hours(_glat, _glon)
-                        if _age_h is None or _age_h > 6:
-                            miab_log("verbose",
-                                     f"Background POI cache age {_age_h:.1f}h — refreshing live." if _age_h else
-                                     "Background POI cache age unknown — refreshing live.",
-                                     self.settings)
-                            threading.Thread(
-                                target=self._fetch_all_pois_background,
-                                args=(self._address_points,),
-                                daemon=True,
-                            ).start()
-                        else:
-                            miab_log("verbose",
-                                     f"Background POI cache age {_age_h:.1f}h — skipping live refresh.",
-                                     self.settings)
-                    else:
-                        miab_log("verbose", "No disk cache — fetching live.", self.settings)
-                        self._fetch_all_pois_background(self._address_points)
-                except Exception as exc:
-                    miab_log("errors", f"POI cache pre-load error: {exc}", self.settings)
-            threading.Thread(target=_try_load_poi_cache, daemon=True).start()
+            # POI loading was already kicked off in parallel back in
+            # _enter_street_mode (see _prefetch_background_pois). Calling it
+            # again here — now with real address points for label enrichment
+            # — is a safe no-op in the common case (the earlier call's
+            # _poi_fetch_in_progress guard skips a duplicate live fetch) and
+            # a useful fallback if that earlier attempt hasn't run yet or
+            # found nothing cached.
+            threading.Thread(
+                target=self._prefetch_background_pois,
+                args=(_glat, _glon, self._address_points, my_fetch_id),
+                daemon=True,
+            ).start()
 
             # ── Stage 2 — full radius background fetch ────────────────
             # _loading stays True so progress beeps continue until done.
@@ -4709,8 +4730,16 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             name_filter=name_filter,
         )
 
-    def _queue_poi_live_search(self, **params):
-        """Queue the newest live POI search until the live-fetch cooldown expires."""
+    def _queue_poi_live_search(self, still_in_progress=False, **params):
+        """Queue the newest live POI search until the live-fetch cooldown expires.
+
+        still_in_progress distinguishes two different situations that both
+        land here: an actual live fetch is still running right now, versus
+        the previous fetch already finished and this is just the brief
+        pacing cooldown before another request is allowed. Saying "still
+        working on the last search" in the second case is simply wrong —
+        the last search is done — so it gets its own accurate wording.
+        """
         params["lat"] = self.lat
         params["lon"] = self.lon
         self._pending_poi_live_search = params
@@ -4727,11 +4756,10 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         # fire during this wait either, so a queued search gave zero
         # audible feedback until the eventual completion chime. Announce
         # it immediately instead.
-        wx.CallAfter(
-            self._status_update,
-            "Still working on the last search — this one will run next.",
-            True,
-        )
+        msg = ("Still working on the last search — this one will run next."
+               if still_in_progress else
+               "One moment before the next search starts...")
+        wx.CallAfter(self._status_update, msg, True)
         self._schedule_pending_poi_live_search(generation)
 
     def _poi_live_fetch_started(self):
@@ -5031,11 +5059,13 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         cache.pop(old_key, None)
 
             if not bypass_live_guard:
+                fetch_actually_running = getattr(self, "_poi_live_fetch_in_progress", False)
                 cooldown_remaining = 15.0 - (
                     time.time() - getattr(self, "_poi_live_last_completed_at", 0.0)
                 )
-                if getattr(self, "_poi_live_fetch_in_progress", False) or cooldown_remaining > 0:
+                if fetch_actually_running or cooldown_remaining > 0:
                     self._queue_poi_live_search(
+                        still_in_progress=fetch_actually_running,
                         category_key=category_key,
                         radius=radius,
                         timeout=timeout,
@@ -5049,6 +5079,23 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     return
             self._poi_live_fetch_started()
             live_started = True
+
+            # A live fetch can take anywhere from a couple of seconds to
+            # 20+ seconds (Overpass mirror retries, slow HERE/Google calls).
+            # Without any feedback in that gap the app reads as hung. This
+            # just speaks a periodic reassurance — it doesn't touch the
+            # fetch, the sound, or anything else, and stays quiet if a
+            # cached result was already shown (that case is a silent
+            # "just in case" supplementary check the user isn't waiting on,
+            # same reasoning as the alarm-sound guard just below).
+            poi_wait_stop = threading.Event()
+            if not cached_presented:
+                def _poi_wait_ticker():
+                    if poi_wait_stop.wait(4.0):
+                        return
+                    while not poi_wait_stop.wait(6.0):
+                        wx.CallAfter(self._status_update, "Still working, please wait...", True)
+                threading.Thread(target=_poi_wait_ticker, daemon=True).start()
 
             pois = []
             collected_name_pois = []
@@ -5248,7 +5295,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
         except Exception as e:
             miab_log("errors", f"POI fetch error: {e}", self.settings)
-            self._loading = False
+            if not getattr(self, "_street_data_fetch_in_progress", False):
+                self._loading = False
             self._poi_fetch_in_progress = False
             self._poi_fetcher.set_here_key(here_key)
             if getattr(self, "_poi_explore_stack", []):
@@ -5266,6 +5314,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         finally:
             if live_started:
                 self._poi_live_fetch_finished()
+            if 'poi_wait_stop' in locals():
+                poi_wait_stop.set()
             if search_beep_started:
                 try:
                     self.sound.stop()
@@ -6354,8 +6404,10 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _close_poi_list(self, repeat_after_return: bool = True):
         self._clear_poi_state()
-        self._listbox_set_single(
-            self._last_landed_object_label() or self._map_focus_fallback_label())
+        # Always the static mode label here, never the real location — the
+        # MSAA object must read "Street mode"/"Map mode" at idle, with AO2
+        # (not the listbox) owning the spoken real-content announcement.
+        self._listbox_set_single(self._map_focus_fallback_label())
         wx.CallAfter(self.listbox.SetFocus)
         if repeat_after_return:
             self._repeat_current_location_after_return(250)
@@ -6365,11 +6417,12 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         Append+Select+Delete cycle so screen readers announce it once."""
         self._poi_populating = True
         try:
-            n_before = self.listbox.GetCount()
-            self.listbox.Append(str(text))
-            self.listbox.SetSelection(n_before)
-            for i in range(n_before - 1, -1, -1):
-                self.listbox.Delete(i)
+            text = str(text)
+            if (self.listbox.GetCount() == 1
+                    and self.listbox.GetSelection() == 0
+                    and self.listbox.GetString(0) == text):
+                return
+            self.listbox.set_single(text)
         finally:
             self._poi_populating = False
 
@@ -6385,11 +6438,24 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
     def _announce_and_restore_poi_list(self, msg, delay_ms=1200):
         """Speak a transient message via AO2, then restore the current POI list."""
         _speak(msg)
-        if self._poi_list:
-            def restore():
-                if self._poi_list:
-                    self._show_poi_in_listbox()
-            wx.CallLater(delay_ms, restore)
+        def restore():
+            if self._poi_list:
+                self._show_poi_in_listbox()
+            else:
+                fallback = self._map_focus_fallback_label()
+                already_showing = False
+                try:
+                    already_showing = (
+                        self.listbox.GetCount() == 1
+                        and self.listbox.GetSelection() == 0
+                        and self.listbox.GetString(0) == fallback
+                    )
+                except Exception:
+                    already_showing = False
+                if not already_showing:
+                    self._listbox_set_single(fallback)
+                    self._force_listbox_refocus()
+        wx.CallLater(delay_ms, restore)
 
     def _selected_poi_for_favourite(self):
         if not getattr(self, "_poi_list", []):
@@ -7168,6 +7234,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self.street_label = label
             wx.CallAfter(self.map_panel.set_position, self.lat, self.lon, True, label)
             wx.CallAfter(self._update_street_display)
+            wx.CallAfter(self._listbox_set_single, self._map_focus_fallback_label())
+            wx.CallAfter(self._force_listbox_refocus)
             
             # Force fetch to ensure data is current for this location
             # Fetch fresh data — guard against concurrent fetches
@@ -7261,6 +7329,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 self.street_label = test_label
                 wx.CallAfter(self.map_panel.set_position, lat, lon, True, test_label)
                 wx.CallAfter(self._update_street_display)
+                wx.CallAfter(self._listbox_set_single, self._map_focus_fallback_label())
+                wx.CallAfter(self._force_listbox_refocus)
                 threading.Thread(target=self._fetch_poi_intersection,
                                args=(lat, lon, poi_name, known_street), daemon=True).start()
             else:
@@ -7289,6 +7359,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         self.street_label = test_label
                         wx.CallAfter(self.map_panel.set_position, lat, lon, True, test_label)
                         wx.CallAfter(self._update_street_display)
+                        wx.CallAfter(self._listbox_set_single, self._map_focus_fallback_label())
+                        wx.CallAfter(self._force_listbox_refocus)
                         threading.Thread(target=self._fetch_poi_intersection,
                                          args=(lat, lon, poi_name, known_street), daemon=True).start()
                         return
@@ -8629,8 +8701,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self._show_poi_in_listbox()
             wx.CallAfter(self.listbox.SetFocus)
         else:
-            self._listbox_set_single(
-                self._last_landed_object_label() or self._map_focus_fallback_label())
+            self._listbox_set_single(self._map_focus_fallback_label())
             wx.CallAfter(_speak, "No more points of interest.")
             wx.CallAfter(self.listbox.SetFocus)
 
@@ -9526,8 +9597,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             sel = target.GetSelection()
             text = target.GetString(sel).strip() if sel != wx.NOT_FOUND else ""
             if not count or sel == wx.NOT_FOUND or not text:
-                label = self._last_landed_object_label() or self._map_focus_fallback_label()
-                self._listbox_set_single(label)
+                self._listbox_set_single(self._map_focus_fallback_label())
         except Exception:
             pass
         try:
@@ -9690,6 +9760,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         if getattr(self, "_poi_fetch_in_progress", False):
             self._status_update("POI refresh already in progress.", force=True)
             return True
+        if getattr(self, "_background_poi_fetch_in_progress", False):
+            self._status_update("POI refresh already in progress.", force=True)
+            return True
         if getattr(self, "_poi_live_fetch_in_progress", False):
             self._status_update("POI refresh already in progress.", force=True)
             return True
@@ -9711,17 +9784,99 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         ).start()
         return True
 
-    def _fetch_all_pois_background(self, address_points=None, force_refresh=False):
+    def _prefetch_background_pois(
+        self,
+        lat: float,
+        lon: float,
+        address_points=None,
+        fetch_id=None,
+    ) -> None:
+        """Load POIs for (lat, lon), live if the disk cache is missing/stale.
+
+        address_points is only used for optional label enrichment inside
+        the fetch, never a hard dependency — so this is safe to call
+        immediately when entering a new area, in parallel with the street
+        data fetch, rather than waiting for the street fetch's address
+        points to be ready first. That wait was the actual reason POI
+        loading always started only after streets fully finished loading:
+        not semaphore contention, just that nothing kicked it off any
+        earlier. _fetch_all_pois_background's own _poi_fetch_in_progress
+        guard makes it safe to also call this again later with fresher
+        address points (see _fetch_road_data) — it just no-ops if a fetch
+        from this earlier call is already running or done.
+        """
+        if fetch_id is not None and self._street_fetch_id != fetch_id:
+            miab_log("verbose", "POI prefetch skipped — street fetch superseded.", self.settings)
+            return
+        if address_points is None:
+            address_points = getattr(self, "_address_points", [])
+        try:
+            cached = self._poi_fetcher.load_cached_pois(lat, lon)
+            if cached is not None:
+                _suppressed = _load_suppressed()
+                _renamed    = _load_renamed()
+                pois = _apply_renames(
+                    [p for p in cached if not _is_suppressed(p, _suppressed)],
+                    _renamed)
+                self._all_pois = self._merge_personal_pois(pois)
+                self._poi_grid = self._build_poi_grid(self._all_pois)
+                self._poi_fetch_lat = lat
+                self._poi_fetch_lon = lon
+                try:
+                    self._free_engine.set_pois(pois)
+                except Exception:
+                    pass
+                miab_log("verbose", f"Pre-loaded {len(pois)} POIs from cache.", self.settings)
+                # Only refresh live if the cache is stale (> 6 h). Fresh
+                # caches are served as-is to avoid hammering Overpass on
+                # every street-mode entry.
+                _age_h = self._poi_fetcher.cached_background_age_hours(lat, lon)
+                if _age_h is None or _age_h > 6:
+                    miab_log("verbose",
+                             f"Background POI cache age {_age_h:.1f}h — refreshing live." if _age_h else
+                             "Background POI cache age unknown — refreshing live.",
+                             self.settings)
+                    threading.Thread(
+                        target=self._fetch_all_pois_background,
+                        args=(address_points, False, lat, lon, fetch_id),
+                        daemon=True,
+                    ).start()
+                else:
+                    miab_log("verbose",
+                             f"Background POI cache age {_age_h:.1f}h — skipping live refresh.",
+                             self.settings)
+            else:
+                miab_log("verbose", "No disk cache — fetching live.", self.settings)
+                self._fetch_all_pois_background(address_points, False, lat, lon, fetch_id)
+        except Exception as exc:
+            miab_log("errors", f"POI cache pre-load error: {exc}", self.settings)
+
+    def _fetch_all_pois_background(
+        self,
+        address_points=None,
+        force_refresh=False,
+        fetch_lat=None,
+        fetch_lon=None,
+        fetch_id=None,
+    ):
         """Background POI fetch for walk-announce. Delegates to PoiFetcher."""
         if getattr(self, "_recentring", False):
             return
         if not self.street_mode:
             return
-        if getattr(self, "_poi_fetch_in_progress", False):
+        if fetch_id is not None and self._street_fetch_id != fetch_id:
+            miab_log("verbose", "Background POI fetch skipped — street fetch superseded.", self.settings)
+            return
+        if getattr(self, "_background_poi_fetch_in_progress", False):
             miab_log("verbose", "Background fetch already in progress — skipping duplicate.", self.settings)
+            return
+        if getattr(self, "_poi_fetch_in_progress", False):
+            miab_log("verbose", "User POI search already in progress — skipping background fetch.", self.settings)
             return
         if address_points is None:
             address_points = getattr(self, "_address_points", [])
+        poi_lat = self.lat if fetch_lat is None else fetch_lat
+        poi_lon = self.lon if fetch_lon is None else fetch_lon
 
         # Respect poi_source setting — only use HERE if explicitly chosen
         poi_source = self.settings.get("poi_source", "osm")
@@ -9731,23 +9886,18 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         else:
             self._poi_fetcher.set_here_key("")
 
-        live_started = False
         try:
-            self._loading = True
-            self._poi_fetch_in_progress = True
-            self._poi_live_fetch_started()
-            live_started = True
+            self._background_poi_fetch_in_progress = True
             pois = self._poi_fetcher.fetch_all_background(
-                self.lat, self.lon, address_points,
+                poi_lat, poi_lon, address_points,
                 force_refresh=force_refresh,
             )
-            self._loading = False
-            self._poi_fetch_in_progress = False
             # Discard if street mode was cancelled while fetching
-            if not self.street_mode:
+            if (not self.street_mode
+                    or (fetch_id is not None and self._street_fetch_id != fetch_id)):
                 miab_log(
                     "verbose",
-                    "Background fetch complete but street mode cancelled — discarding.",
+                    "Background fetch complete but street mode cancelled or superseded — discarding.",
                     self.settings,
                 )
                 return
@@ -9757,8 +9907,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 [p for p in pois if not _is_suppressed(p, _suppressed)],
                 _renamed))
             self._poi_grid = self._build_poi_grid(self._all_pois)
-            self._poi_fetch_lat = self.lat
-            self._poi_fetch_lon = self.lon
+            self._poi_fetch_lat = poi_lat
+            self._poi_fetch_lon = poi_lon
             try:
                 self._free_engine.set_pois(self._all_pois)
             except Exception:
@@ -9778,12 +9928,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     True,
                 )
         except Exception as e:
-            self._loading = False
-            self._poi_fetch_in_progress = False
             miab_log("errors", f"Background POI fetch error: {e}", self.settings)
         finally:
-            if live_started:
-                self._poi_live_fetch_finished()
+            self._background_poi_fetch_in_progress = False
 
     def _free_announce_poi_update(self):
         """Announce that free-mode POIs have been refreshed."""
@@ -12510,13 +12657,19 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     JUMP_HISTORY_CAP = 5
 
+    # ~30 metres — named-place search results can render the same real
+    # place with slightly different label text between searches (extra
+    # disambiguation, different phrasing), so location proximity is a more
+    # reliable "is this the same place" check than exact label text.
+    JUMP_HISTORY_LOC_TOL = 3e-4
+
     def _record_jump(self, label: str, lat: float, lon: float) -> None:
         """Add an entry to the jump-history list and persist.
 
-        Entries are deduped by label (case-insensitive); the most recent
-        match is moved to the top. The list is capped at JUMP_HISTORY_CAP.
-        Called from both the named-place and coord-only completion paths
-        of show_jump_dialog.
+        Entries are deduped by label (case-insensitive) OR by being at
+        essentially the same location; the most recent match is moved to
+        the top. The list is capped at JUMP_HISTORY_CAP. Called from both
+        the named-place and coord-only completion paths of show_jump_dialog.
         """
         try:
             lat = float(lat); lon = float(lon)
@@ -12525,14 +12678,23 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         label = (label or "").strip()
         if not label:
             label = f"{lat:.4f}, {lon:.4f}"
+
+        def _same_place(h) -> bool:
+            if not isinstance(h, dict):
+                return False
+            if (h.get("label") or "").strip().lower() == label.lower():
+                return True
+            try:
+                return (abs(float(h.get("lat")) - lat) < self.JUMP_HISTORY_LOC_TOL
+                        and abs(float(h.get("lon")) - lon) < self.JUMP_HISTORY_LOC_TOL)
+            except (TypeError, ValueError):
+                return False
+
         history = list(self.settings.get("jump_history") or [])
-        # Drop any prior entry with the same label (case-insensitive) so
-        # the new one moves to the front.
-        history = [
-            h for h in history
-            if isinstance(h, dict)
-            and (h.get("label") or "").strip().lower() != label.lower()
-        ]
+        # Drop any prior entry for the same place (by label or location) so
+        # the new one moves to the front instead of leaving a stale
+        # duplicate sitting in its old spot.
+        history = [h for h in history if not _same_place(h)]
         history.insert(0, {"label": label, "lat": lat, "lon": lon})
         del history[self.JUMP_HISTORY_CAP:]
         self.settings["jump_history"] = history
@@ -12593,7 +12755,6 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             return
         label = str(entry.get("label") or f"{lat:.4f}, {lon:.4f}")
         miab_log("navigation", f"Jump from history: {label} ({lat:.3f}, {lon:.3f})", self.settings)
-        was_street_mode = bool(self.street_mode)
         if self.street_mode:
             self._exit_street_mode(repeat_location=False)
         self.lat = lat
@@ -12615,66 +12776,16 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._last_jump_display_until = time.time() + 1.5
         # Move to top of history without re-saving twice — just touch.
         self._record_jump(label, lat, lon)
-        if was_street_mode:
-            self.last_city_found = ""
-            self._force_geocode_suburb_once = True
-            self._street_auto_land_done = False
-            self._suppress_next_street_loading_status = True
-            wx.CallAfter(self.toggle_street_mode)
-            return
-        threading.Thread(
-            target=self._try_load_history_street_cache,
-            args=(lat, lon, label),
-            daemon=True,
-        ).start()
+        # Land in map mode and stop there — even if cached streets exist for
+        # this spot, entering street mode automatically takes the choice
+        # away from the user, who may want to do something else first (use
+        # a tool, browse POIs, etc.). Street mode stays an explicit choice
+        # (F11), same as jumping via search or coordinates.
         wx.CallAfter(self.map_panel.set_position, self.lat, self.lon,
                      self.street_mode, self.street_label)
         threading.Thread(target=self._lookup, daemon=True).start()
         # Confirm the landing once the lookup has had a moment to resolve.
         self._return_focus_to_map(repeat=True, delay_ms=250)
-
-    def _try_load_history_street_cache(self, lat: float, lon: float, label: str) -> None:
-        """Enter street mode from jump history only when cached streets exist."""
-        try:
-            from street_data import geocode_location, _load_road_cache
-            geo = geocode_location(lat, lon)
-            if not geo:
-                return
-            suburb = (geo.get("suburb") or "").strip()
-            bbox = geo.get("bbox")
-            fetch_lat, fetch_lon = lat, lon
-            if bbox:
-                minlat, maxlat, minlon, maxlon = bbox
-                fetch_lat = (minlat + maxlat) / 2
-                fetch_lon = (minlon + maxlon) / 2
-            entry = _load_road_cache(
-                self._street_fetcher._cache_dir,
-                fetch_lat,
-                fetch_lon,
-                suburb_name=suburb or None,
-            )
-            if not entry or not entry.get("segments"):
-                return
-            if dist_metres(self.lat, self.lon, lat, lon) > 20:
-                return
-            miab_log(
-                "navigation",
-                f"Jump history found cached streets for {label}: {suburb or 'unnamed area'}",
-                self.settings,
-            )
-            wx.CallAfter(self._enter_history_cached_street_mode, lat, lon, label)
-        except Exception as exc:
-            miab_log("errors", f"History street cache probe failed: {exc}", self.settings)
-
-    def _enter_history_cached_street_mode(self, lat: float, lon: float, label: str) -> None:
-        if self.street_mode or dist_metres(self.lat, self.lon, lat, lon) > 20:
-            return
-        self.last_city_found = ""
-        self._force_geocode_suburb_once = True
-        self._street_auto_land_done = False
-        self._suppress_next_street_loading_status = True
-        self._status_update(f"Loading cached streets for {label}.", force=True)
-        self.toggle_street_mode()
 
     def show_jump_dialog(self, initial_value=""):
         # Suppress background location announcements for the entire jump session,

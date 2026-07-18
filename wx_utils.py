@@ -34,9 +34,9 @@ class MSAAListBox(wx.ListBox):
     def set_single(self, text: str) -> None:
         """Replace contents with one selected item, read exactly once."""
         n = self.GetCount()
-        self.Append(str(text))
-        self.SetSelection(n)
-        for i in range(n - 1, -1, -1):
+        self.Insert(str(text), 0)
+        self.SetSelection(0)
+        for i in range(n, 0, -1):
             self.Delete(i)
 
     def set_many(self, items, sel: int = 0) -> None:
@@ -44,17 +44,31 @@ class MSAAListBox(wx.ListBox):
 
         Use this instead of ``Set(labels)`` + ``SetSelection(idx)``. ``sel`` is
         clamped to a valid index for the new list.
+
+        New items are inserted at the front (indices 0..len(items)-1)
+        rather than appended after the leftover old ones. That matters:
+        the old implementation appended new items *after* the old ones,
+        selected the new item, and only then deleted the old items sitting
+        *before* it — which silently shifts the selected index down as
+        each earlier item is removed, with no fresh selection event to go
+        with it. NVDA would end up querying a now-stale index and read the
+        newly selected item as blank/"unknown". Inserting the new items at
+        the front means every old item being deleted sits *above* the
+        selected index, so the selection is never touched by the cleanup.
         """
         items = list(items)
         if not items:
             self.set_single("")
             return
         n = self.GetCount()
-        for it in items:
-            self.Append(str(it))
+        for offset, it in enumerate(items):
+            self.Insert(str(it), offset)
         new_idx = max(0, min(int(sel), len(items) - 1))
-        self.SetSelection(n + new_idx)
-        for i in range(n - 1, -1, -1):
+        self.SetSelection(new_idx)
+        # Old items now sit at [len(items), len(items)+n-1]. Delete from the
+        # highest index down so removing one never renumbers another that
+        # still needs deleting.
+        for i in range(len(items) + n - 1, len(items) - 1, -1):
             self.Delete(i)
 
     def update_focused(self, text: str) -> None:
