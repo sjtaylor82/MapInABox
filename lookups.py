@@ -283,9 +283,9 @@ class LookupsMixin:
     def _resolve_timezone(self):
         """Return (IANA name, ZoneInfo) for the current location."""
         try:
-            from timezonefinder import TimezoneFinder
+            from tzfpy import get_tz
             from zoneinfo import ZoneInfo
-            tz_name = TimezoneFinder().timezone_at(lat=self.lat, lng=self.lon)
+            tz_name = get_tz(self.lon, self.lat)  # tzfpy takes (lon, lat)
             if not tz_name:
                 return None, None
             try:

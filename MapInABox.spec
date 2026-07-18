@@ -18,7 +18,6 @@ if sys.platform == "darwin":
 
 # ── Collect packages whose internals PyInstaller can't fully auto-detect ─────
 
-pyarrow_d,   pyarrow_b,   pyarrow_h   = collect_all('pyarrow')
 shapely_d,   shapely_b,   shapely_h   = collect_all('shapely')
 
 # h3 Cython extensions — collect_all misses some native modules on Windows
@@ -34,9 +33,9 @@ ao2_d,       ao2_b,       ao2_h       = collect_all('accessible_output2')
 pygame_d,    pygame_b,    pygame_h    = collect_all('pygame')
 certifi_d,   certifi_b,   certifi_h   = collect_all('certifi')
 
-all_datas    = pyarrow_d   + shapely_d  + genai_d   + apicore_d + proto_d + ao2_d + pygame_d + certifi_d + h3_d
-all_binaries = pyarrow_b   + shapely_b  + genai_b   + apicore_b + proto_b + ao2_b + pygame_b + certifi_b + h3_b
-all_hidden   = pyarrow_h   + shapely_h  + genai_h   + apicore_h + proto_h + ao2_h + pygame_h + certifi_h + h3_h
+all_datas    = shapely_d  + genai_d   + apicore_d + proto_d + ao2_d + pygame_d + certifi_d + h3_d
+all_binaries = shapely_b  + genai_b   + apicore_b + proto_b + ao2_b + pygame_b + certifi_b + h3_b
+all_hidden   = shapely_h  + genai_h   + apicore_h + proto_h + ao2_h + pygame_h + certifi_h + h3_h
 
 a = Analysis(
     ['core.py'],
@@ -80,15 +79,20 @@ a = Analysis(
         # wx
         'wx._xml',
         'wx.lib.agw',
-        # timezonefinder uses data files; make sure the module is found
-        'timezonefinder',
+        # tzfpy (Rust extension) — make sure the compiled module is found
+        'tzfpy',
         # pycountry uses data files bundled with the package
         'pycountry',
     ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=['rthook_pyarrow_stub.py'],
+    runtime_hooks=[],
     excludes=[
+        # ── Not used directly; nothing in the app imports it, only pulled
+        # in as an optional pandas backend that we don't need ───────────
+        'pyarrow',
+        # ── Replaced by tzfpy (much smaller Rust-backed data) ────────────
+        'timezonefinder',
         # ── Machine-learning stack (not used) ────────────────────────────
         'torch', 'torchvision', 'torchaudio',
         'transformers', 'huggingface_hub', 'tokenizers', 'safetensors',

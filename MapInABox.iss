@@ -7,13 +7,13 @@
 ;      iscc MapInABox.iss
 
 #define AppName    "Map in a Box"
-#define AppVersion "1.0.0.9"
+#define AppVersion "1.0.0.13"
 #define AppExe     "MapInABox.exe"
 #define AppDir     "dist\MapInABox"
 
 [Setup]
 AppName={#AppName}
-AppVersion=1.0.0.9
+AppVersion=1.0.0.13
 AppVerName={#AppName} {#AppVersion}
 AppPublisher=Sam Taylor
 AppPublisherURL=https://github.com/sjtaylor82/MapInABox

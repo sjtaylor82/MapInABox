@@ -67,7 +67,7 @@ import mall_directory
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0.0.12'
+APP_VERSION   = '1.0.0.13'
 
 # Bundled read-only resources — inside the exe (_MEIPASS) or next to the script.
 BASE_DIR      = getattr(_sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
