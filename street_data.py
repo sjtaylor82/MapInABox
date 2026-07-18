@@ -29,6 +29,7 @@ import urllib.request
 from logging_utils import miab_log
 
 from geo import (
+    dist_metres,
     dist_to_segment_metres,
     GENERIC_STREET_TYPES, LOW_PRIORITY_HIGHWAY,
 )
@@ -426,7 +427,12 @@ def _resolve_friendly_name(lat: float, lon: float) -> str:
     return _index_key(lat, lon)
 
 
-def _load_road_cache_by_coord(cache_dir: str, lat: float, lon: float) -> dict:
+def _load_road_cache_by_coord(
+    cache_dir: str,
+    lat: float,
+    lon: float,
+    include_named_suburb_entries: bool = True,
+) -> dict:
     """Load cached road data by coordinate grid cell (no suburb constraint).
     Checks the exact cell, then adjacent cells (±0.1 degrees = ~11km),
     validating any adjacent-cell hit is within 7km of the target so it
@@ -522,6 +528,8 @@ def _load_road_cache_by_coord(cache_dir: str, lat: float, lon: float) -> dict:
     for cand_key, (clat, clon) in centers.items():
         if cand_key == key:
             continue  # already checked above
+        if not include_named_suburb_entries and cand_key.startswith("suburb_"):
+            continue
         dlat_m = (lat - clat) * 111000
         dlon_m = (lon - clon) * 111000 * math.cos(math.radians(lat))
         dist = math.sqrt(dlat_m ** 2 + dlon_m ** 2)
@@ -560,6 +568,25 @@ def _load_road_cache(cache_dir: str, lat: float, lon: float,
                     with open(path, encoding="utf-8") as f:
                         data = json.load(f)
                     if data.get("_version") == _CACHE_VERSION:
+                        cache_lat = data.get("cache_center_lat")
+                        cache_lon = data.get("cache_center_lon")
+                        indexed_center = _load_centers_index(cache_dir).get(suburb_key)
+                        if (
+                            indexed_center
+                            and cache_lat is not None
+                            and cache_lon is not None
+                            and dist_metres(
+                                indexed_center[0], indexed_center[1],
+                                cache_lat, cache_lon,
+                            ) > 250
+                        ):
+                            miab_log(
+                                "street",
+                                f"[Street] Ignoring suburb cache for {suburb_name!r}; "
+                                "stored centre disagrees with cache index.",
+                                None,
+                            )
+                            return {}
                         return data
                 except Exception:
                     pass
@@ -569,7 +596,8 @@ def _load_road_cache(cache_dir: str, lat: float, lon: float,
         # cache rather than giving up and re-hitting Overpass every time;
         # the distance check in _load_road_cache_by_coord still guards
         # against silently returning a distant/unrelated area's data.
-        coord_hit = _load_road_cache_by_coord(cache_dir, lat, lon)
+        coord_hit = _load_road_cache_by_coord(
+            cache_dir, lat, lon, include_named_suburb_entries=False)
         if coord_hit:
             return coord_hit
         return {}
@@ -600,9 +628,9 @@ def _save_road_cache(cache_dir: str, lat: float, lon: float, entry: dict,
                 n += 1
             index[key] = fname
             _save_index(cache_dir, index)
-            centers = _load_centers_index(cache_dir)
-            centers[key] = [lat, lon]
-            _save_centers_index(cache_dir, centers)
+        centers = _load_centers_index(cache_dir)
+        centers[key] = [lat, lon]
+        _save_centers_index(cache_dir, centers)
         entry["_version"] = _CACHE_VERSION
         with open(os.path.join(cache_dir, fname), "w", encoding="utf-8") as f:
             json.dump(entry, f, ensure_ascii=False)
@@ -893,6 +921,7 @@ class StreetFetcher:
 
         # Boundary-only mode with radius fallback
         skip_boundary = False
+        id_boundary_failed = False
 
         # ── Fast path: build the area directly from a known OSM id ────
         # If geocode_location already told us which relation/way this
@@ -908,13 +937,21 @@ class StreetFetcher:
                 "(area.a)", 35, bbox=bbox_str,
                 prefix=f"{type_prefix}({osm_id});\nmap_to_area->.a;\n")
             data = urllib.parse.urlencode({"data": id_query}).encode()
-            result = self._overpass.large_request(data, timeout=18, max_mirrors=2)
+            result = self._overpass.large_request(data, timeout=18, max_mirrors=3)
             if result and result.get("elements"):
                 used_boundary = True
                 miab_log(
                     "street",
                     f"[Street] ID-based area query succeeded for {suburb_name!r} "
                     f"({osm_type} {osm_id}): {len(result['elements'])} ways",
+                    getattr(self, "settings", None),
+                )
+            elif result is None:
+                id_boundary_failed = True
+                miab_log(
+                    "street",
+                    f"[Street] ID-based area query for {suburb_name!r} ({osm_type} {osm_id}) "
+                    "timed out; skipping slower name-based boundary retry.",
                     getattr(self, "settings", None),
                 )
             else:
@@ -926,7 +963,7 @@ class StreetFetcher:
                 )
 
         # ── Name-based boundary query (fallback, or when no id known) ──
-        if suburb_name and not skip_boundary and not used_boundary:
+        if suburb_name and not skip_boundary and not used_boundary and not id_boundary_failed:
             status(f"Loading streets for {suburb_name}...")
             boundary_filters = {
                 "boundary_admin": f'area["name"="{suburb_name}"]["boundary"="administrative"]->.a;',
