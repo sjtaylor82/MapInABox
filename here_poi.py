@@ -18,6 +18,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from logging_utils import miab_log
 
 _POI_CACHE_DAYS  = 30
 
@@ -55,12 +56,12 @@ class HereClient:
 
     def fetch_poi_detail(self, name: str, lat: float, lon: float) -> dict:
         """Return address, phone, website and opening hours for a POI."""
-        print(f"[HERE] fetch_poi_detail called for '{name}' at ({lat}, {lon})")
+        miab_log("api_calls", f"[HERE] fetch_poi_detail called for '{name}' at ({lat}, {lon})", getattr(self, "settings", None))
         cache_key = f"detail_{name.lower().replace(' ','_')}_{round(lat,4)}_{round(lon,4)}"
         with self._lock:
             cached = self._poi_cache.get(cache_key)
         if cached and (time.time() - cached.get("ts", 0)) < _POI_CACHE_DAYS * 86400:
-            print(f"[HERE] Cache hit for '{name}'")
+            miab_log("api_calls", f"[HERE] Cache hit for '{name}'", getattr(self, "settings", None))
             return cached.get("detail", {})
         try:
             params = urllib.parse.urlencode({
@@ -78,7 +79,7 @@ class HereClient:
                 data = json.loads(r.read().decode())
             items = data.get("items", [])
             if not items:
-                print(f"[HERE] No results returned for '{name}'")
+                miab_log("api_calls", f"[HERE] No results returned for '{name}'", getattr(self, "settings", None))
                 return {}
 
             # Pick best matching result — reject fuzzy mismatches and distant results
@@ -93,15 +94,15 @@ class HereClient:
                 dlat = (clat - lat) * 111_000
                 dlon = (clon - lon) * 111_000 * math.cos(math.radians(lat))
                 dist_m = math.sqrt(dlat * dlat + dlon * dlon)
-                print(f"[HERE] Candidate '{cand_name}' score={score:.2f} dist={dist_m:.0f}m for query '{name}'")
+                miab_log("api_calls", f"[HERE] Candidate '{cand_name}' score={score:.2f} dist={dist_m:.0f}m for query '{name}'", getattr(self, "settings", None))
                 if score >= 0.4 and dist_m <= 150:
                     item = candidate
-                    print(f"[HERE] Accepted '{cand_name}'")
+                    miab_log("api_calls", f"[HERE] Accepted '{cand_name}'", getattr(self, "settings", None))
                     break
                 elif score >= 0.4:
-                    print(f"[HERE] Rejected '{cand_name}' — too far ({dist_m:.0f}m)")
+                    miab_log("api_calls", f"[HERE] Rejected '{cand_name}' — too far ({dist_m:.0f}m)", getattr(self, "settings", None))
             if item is None:
-                print(f"[HERE] No close match for '{name}' — skipping")
+                miab_log("api_calls", f"[HERE] No close match for '{name}' — skipping", getattr(self, "settings", None))
                 return {}
 
             addr_obj   = item.get("address", {})
@@ -137,7 +138,7 @@ class HereClient:
                 self._save_json(self._poi_cache_path, self._poi_cache)
             return detail
         except Exception as exc:
-            print(f"[HERE] fetch_poi_detail failed for {name}: {exc}")
+            miab_log("errors", f"[HERE] fetch_poi_detail failed for {name}: {exc}", getattr(self, "settings", None))
             return {}
 
     @staticmethod
@@ -156,4 +157,4 @@ class HereClient:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False)
         except Exception as exc:
-            print(f"[HERE] save_json {path} failed: {exc}")
+            miab_log("errors", f"[HERE] save_json {path} failed: {exc}", None)

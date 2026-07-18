@@ -17,7 +17,9 @@ import os
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
+from logging_utils import miab_log
 
 # ---------------------------------------------------------------------------
 # Mirror list — read from overpass_cache_url.txt if present, else defaults.
@@ -30,12 +32,25 @@ _BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 OVERPASS_MIRROR_LABELS: list[str] = [
     "Germany (main)",
     "Germany (CDN)",
+    "France",
 ]
 
 OVERPASS_MIRRORS: list[str] = [
     "https://overpass-api.de/api/interpreter",
     "https://z.overpass-api.de/api/interpreter",
+    "https://overpass.openstreetmap.fr/api/interpreter",
 ]
+# Kumi Systems (overpass.kumi.systems) was tried as a fourth mirror but
+# consistently hung for 20-45s before timing out in every observed test
+# run, never once succeeding — worse than not having it, since it delays
+# fallback to a working mirror. Dropped rather than kept as dead weight.
+
+# How long to avoid retrying a mirror after it returns HTTP 429 (rate
+# limited). "Germany (main)" and "Germany (CDN)" are the same operator's
+# cluster and share a rate limit, so a 429 on one usually means the other
+# is limited too — better to jump straight to an independent provider
+# (Kumi Systems / France) than to burn another timeout re-trying them.
+RATE_LIMIT_COOLDOWN_SECS = 120.0
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +83,7 @@ class OverpassClient:
             self._labels.append(f"Server {len(self._labels) + 1}")
         self.status_cb = None  # optional callable(str) set by caller
         self._last_successful_mirror = 0  # Rotate between servers
+        self._rate_limited_until: dict[int, float] = {}  # mirror index -> epoch time
 
     # ------------------------------------------------------------------
     # Public API
@@ -112,14 +128,19 @@ class OverpassClient:
                 # last working choice as a fallback point.
                 start_index = (self._last_successful_mirror + 1) % n_mirrors
 
-            # Try servers sequentially, starting with rotated position
-            for offset in range(n_mirrors):
-                index = (start_index + offset) % n_mirrors
+            # Order servers: rotated position first, but push any mirror
+            # that was recently 429'd to the back of the queue so we don't
+            # immediately re-hit a host that just told us to back off.
+            now = time.time()
+            ordered_indices = [(start_index + offset) % n_mirrors for offset in range(n_mirrors)]
+            ordered_indices.sort(key=lambda i: 1 if self._rate_limited_until.get(i, 0) > now else 0)
+
+            for index in ordered_indices:
                 url = mirror_list[index]
                 label = label_list[index]
 
                 msg = f"Connecting to street server {index + 1} of {n_mirrors}: {label}..."
-                print(f"[Overpass] {msg}")
+                miab_log("verbose", f"[Overpass] {msg}", getattr(self, "settings", None))
                 if self.status_cb:
                     try:
                         self.status_cb(msg)
@@ -139,24 +160,30 @@ class OverpassClient:
 
                     # Overpass returns a remark on runtime error
                     if "remark" in result and not result.get("elements"):
-                        print(f"[Overpass] {label} error remark: {result['remark']}")
+                        miab_log("errors", f"[Overpass] {label} error remark: {result['remark']}", getattr(self, "settings", None))
                         continue
 
                     # Success - update rotation tracker
                     if result.get("elements"):
-                        print(f"[Overpass] {label} succeeded")
+                        miab_log("verbose", f"[Overpass] {label} succeeded", getattr(self, "settings", None))
                         if not custom_mirrors:
                             self._last_successful_mirror = index
                         return result
 
                     # Empty but valid
-                    print(f"[Overpass] {label} returned empty result")
+                    miab_log("verbose", f"[Overpass] {label} returned empty result", getattr(self, "settings", None))
                     if not custom_mirrors:
                         self._last_successful_mirror = index
                     return result
 
+                except urllib.error.HTTPError as exc:
+                    if exc.code == 429:
+                        self._rate_limited_until[index] = time.time() + RATE_LIMIT_COOLDOWN_SECS
+                    miab_log("errors", f"[Overpass] {label} failed: {exc}", getattr(self, "settings", None))
+                    # Try next server
+                    continue
                 except Exception as exc:
-                    print(f"[Overpass] {label} failed: {exc}")
+                    miab_log("errors", f"[Overpass] {label} failed: {exc}", getattr(self, "settings", None))
                     # Try next server
                     continue
 
@@ -181,7 +208,7 @@ class OverpassClient:
         with self._sem:
             self._wait()
         tag = label or url
-        print(f"[Overpass] Trying {tag} ...")
+        miab_log("verbose", f"[Overpass] Trying {tag} ...", getattr(self, "settings", None))
         if self.status_cb:
             try:
                 self.status_cb(f"Connecting to {tag}...")
@@ -198,12 +225,12 @@ class OverpassClient:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 result = json.loads(resp.read().decode())
             if "remark" in result and not result.get("elements"):
-                print(f"[Overpass] {tag} error remark: {result['remark']}")
+                miab_log("errors", f"[Overpass] {tag} error remark: {result['remark']}", getattr(self, "settings", None))
                 return None
-            print(f"[Overpass] {tag} succeeded ({len(result.get('elements', []))} elements)")
+            miab_log("verbose", f"[Overpass] {tag} succeeded ({len(result.get('elements', []))} elements)", getattr(self, "settings", None))
             return result
         except Exception as exc:
-            print(f"[Overpass] {tag} failed: {exc}")
+            miab_log("errors", f"[Overpass] {tag} failed: {exc}", getattr(self, "settings", None))
             return None
 
     def poi_request(

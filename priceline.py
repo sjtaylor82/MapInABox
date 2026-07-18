@@ -6,6 +6,7 @@ import urllib.error
 import urllib.request
 import ssl
 import gzip
+from logging_utils import miab_log
 
 
 API_BASE = "https://priceline-com-provider.p.rapidapi.com"
@@ -66,7 +67,7 @@ class PricelineClient:
             with open(self.cache_file, 'w') as f:
                 json.dump(self._location_cache, f, indent=2)
         except Exception as e:
-            print(f"[Priceline] Cache save failed: {e}")
+            miab_log("errors", f"[Priceline] Cache save failed: {e}", getattr(self, "settings", None))
 
     def _load_hotel_cache(self) -> dict:
         if os.path.exists(self._hotel_cache_file):
@@ -82,7 +83,7 @@ class PricelineClient:
             with open(self._hotel_cache_file, 'w') as f:
                 json.dump(self._hotel_cache, f, indent=2)
         except Exception as e:
-            print(f"[Priceline] Hotel cache save failed: {e}")
+            miab_log("errors", f"[Priceline] Hotel cache save failed: {e}", getattr(self, "settings", None))
 
     @property
     def configured(self) -> bool:
@@ -90,7 +91,7 @@ class PricelineClient:
 
     def _request(self, path, params):
         url = f"{API_BASE}{path}?{urllib.parse.urlencode(params)}"
-        print(f"[Priceline] GET {url}")
+        miab_log("verbose", f"[Priceline] GET {url}", getattr(self, "settings", None))
         req = urllib.request.Request(url, headers={
             "x-rapidapi-key": self._key,
             "x-rapidapi-host": API_HOST,
@@ -110,7 +111,7 @@ class PricelineClient:
                 body = raw.decode("utf-8", errors="ignore")[:500]
             except Exception:
                 pass
-            print(f"[Priceline] HTTP {e.code} from {path}: {body}")
+            miab_log("errors", f"[Priceline] HTTP {e.code} from {path}: {body}", getattr(self, "settings", None))
             raise
 
 
@@ -152,7 +153,7 @@ class PricelineClient:
             return choices if choices else None
 
         except Exception as e:
-            print(f"[Priceline] Location lookup error: {e}")
+            miab_log("errors", f"[Priceline] Location lookup error: {e}", getattr(self, "settings", None))
 
         return None
 
@@ -177,7 +178,7 @@ class PricelineClient:
         if cache_entry and cache_entry.get("version") == self._HOTEL_CACHE_VERSION:
             age_days = (_time.time() - cache_entry.get("ts", 0)) / 86400
             if age_days < self._HOTEL_CACHE_DAYS:
-                print(f"[Priceline] Hotel cache hit for {cache_key}")
+                miab_log("verbose", f"[Priceline] Hotel cache hit for {cache_key}", getattr(self, "settings", None))
                 return cache_entry.get("hotels", [])
 
         try:
@@ -245,7 +246,7 @@ class PricelineClient:
             return filtered
 
         except Exception as e:
-            print(f"[Priceline] Hotel search error: {e}")
+            miab_log("errors", f"[Priceline] Hotel search error: {e}", getattr(self, "settings", None))
             return []
 
 
@@ -356,6 +357,6 @@ def _parse_hotels(data):
             })
 
         except Exception as e:
-            print(f"[Priceline] Hotel parse error: {e}")
+            miab_log("errors", f"[Priceline] Hotel parse error: {e}", None)
 
     return hotels

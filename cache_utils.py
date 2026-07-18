@@ -3,6 +3,7 @@
 import json
 import os
 import time
+from logging_utils import miab_log
 
 
 def _load_cache(cache_path: str) -> dict:
@@ -12,7 +13,7 @@ def _load_cache(cache_path: str) -> dict:
             with open(cache_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
-            print(f"[Cache] Cache load failed for {cache_path}: {e}")
+            miab_log("errors", f"[Cache] Cache load failed for {cache_path}: {e}", None)
     return {}
 
 
@@ -22,7 +23,7 @@ def _save_cache(cache_path: str, cache: dict) -> None:
         with open(cache_path, "w", encoding="utf-8") as f:
             json.dump(cache, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"[Cache] Cache save failed for {cache_path}: {e}")
+        miab_log("errors", f"[Cache] Cache save failed for {cache_path}: {e}", None)
 
 
 def _get_cached(cache: dict, key: str, ttl_days: int) -> str | None:

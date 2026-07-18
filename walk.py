@@ -11,6 +11,7 @@ import threading
 import wx
 
 from geo import GENERIC_STREET_TYPES, bearing_between_nodes, bearing_deg, compass_name
+from logging_utils import miab_log
 
 
 class WalkMixin:
@@ -334,7 +335,7 @@ class WalkMixin:
         try:
             self._walk_graph = self._build_walk_graph()
         except Exception as exc:
-            print(f"[Walk] Graph build failed: {exc}")
+            miab_log("errors", f"[Walk] Graph build failed: {exc}", getattr(self, "settings", None))
             import traceback; traceback.print_exc()
             self._status_update(f"Walking graph failed: {exc}", force=True)
             return
@@ -692,7 +693,7 @@ class WalkMixin:
                 if offset_m > 50:
                     self._street_fetch_lat = bbox_clat
                     self._street_fetch_lon = bbox_clon
-                    print(f"[Street] bbox centre {offset_m:.0f}m from position, using it")
+                    miab_log("street", f"[Street] bbox centre {offset_m:.0f}m from position, using it", getattr(self, "settings", None))
                 else:
                     self._street_fetch_lat = None
                     self._street_fetch_lon = None
@@ -705,6 +706,6 @@ class WalkMixin:
                 self._current_country_code = data.get("address", {}).get("country_code", "")
                 wx.CallAfter(self._status_update, f"Entering {place}. Loading streets...")
         except Exception as e:
-            print(f"[Street] Suburb geocode failed, using defaults: {e}")
+            miab_log("errors", f"[Street] Suburb geocode failed, using defaults: {e}", getattr(self, "settings", None))
             wx.CallAfter(self._status_update, "Loading streets...")
         self._fetch_road_data()

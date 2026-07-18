@@ -8,6 +8,7 @@ import urllib.request
 import ssl
 import xml.etree.ElementTree as ET
 import datetime
+from logging_utils import miab_log
 
 API_BASE = "https://timetable-lookup.p.rapidapi.com"
 API_HOST = "timetable-lookup.p.rapidapi.com"
@@ -51,7 +52,7 @@ def _parse_ota(xml_str: str) -> list:
         xml_str = xml_str.replace(' xmlns="http://www.opentravel.org/OTA/2003/05"', '')
         root = ET.fromstring(xml_str)
     except ET.ParseError as exc:
-        print(f"[Timetable] XML parse error: {exc}")
+        miab_log("errors", f"[Timetable] XML parse error: {exc}", None)
         return []
 
     itineraries = []
@@ -100,7 +101,7 @@ def _parse_ota(xml_str: str) -> list:
         if legs:
             itineraries.append({"Flights": legs, "ElapsedTime": dur})
 
-    print(f"[Timetable] Parsed {len(itineraries)} itineraries")
+    miab_log("verbose", f"[Timetable] Parsed {len(itineraries)} itineraries", None)
     return itineraries
 
 

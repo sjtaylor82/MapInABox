@@ -2675,7 +2675,7 @@ class ToolsMixin:
             places.extend(self._fetch_google_pois("transport", radius=1500))
             places.extend(self._fetch_google_pois("trains", radius=1500))
         except Exception as exc:
-            print(f"[GTFS] Google station discovery failed: {exc}")
+            miab_log("errors", f"[GTFS] Google station discovery failed: {exc}", getattr(self, "settings", None))
             return []
 
         seen = set()
@@ -2855,8 +2855,8 @@ class ToolsMixin:
                 short = (rinfo.get("short") or "").strip().lower()
                 if short == line_lower:
                     if not _mode_ok(rinfo, skip_mode_check):
-                        print(f"[GTFS] Rejected '{short}' — type '{rinfo.get('type')}' "
-                              f"incompatible with HERE mode '{here_mode}'")
+                        miab_log("api_calls", f"[GTFS] Rejected '{short}' — type '{rinfo.get('type')}' "
+                              f"incompatible with HERE mode '{here_mode}'", None)
                         continue
                     candidates.append(rid)
 
@@ -2925,9 +2925,9 @@ class ToolsMixin:
                                     fwd = len(q_hs_words & c_words) / len(q_hs_words)
                                     rev = len(q_hs_words & c_words) / len(c_words)
                                     if max(fwd, rev) >= 0.5:
-                                        print(f"[GTFS] Fuzzy headsign match: "
+                                        miab_log("api_calls", f"[GTFS] Fuzzy headsign match: "
                                               f"'{headsign}' ~ '{hs_key}' "
-                                              f"(score={max(fwd,rev):.2f})")
+                                              f"(score={max(fwd,rev):.2f})", None)
                                         found_hs = True
                                         break
                     if not found_hs:
@@ -2938,8 +2938,8 @@ class ToolsMixin:
                     return stops
 
             if require_headsign and hs_lower:
-                print(f"[GTFS] Route '{line}' found in feed {feed_id} "
-                      f"but no variant has headsign matching '{headsign}'")
+                miab_log("api_calls", f"[GTFS] Route '{line}' found in feed {feed_id} "
+                      f"but no variant has headsign matching '{headsign}'", None)
             return None
 
         # ── Step 1: Search local feeds (by station coordinates) ──────
@@ -2962,8 +2962,8 @@ class ToolsMixin:
             for feed_id in feed_ids:
                 result = _search_feed(feed_id, skip_mode_check=True, require_headsign=True)
                 if result:
-                    print(f"[GTFS] Found '{line}' in feed {feed_id} "
-                          f"(mode check relaxed)")
+                    miab_log("api_calls", f"[GTFS] Found '{line}' in feed {feed_id} "
+                          f"(mode check relaxed)", getattr(self, "settings", None))
                     return result
 
         # ── Step 2: Search by operator name ──────────────────────────
@@ -2976,7 +2976,7 @@ class ToolsMixin:
             op_map = self._load_operator_map()
             cached_fid = op_map.get(op_lower)
             if cached_fid:
-                print(f"[GTFS] Operator map: '{operator}' → feed {cached_fid}")
+                miab_log("api_calls", f"[GTFS] Operator map: '{operator}' → feed {cached_fid}", getattr(self, "settings", None))
                 # Ensure the feed is loaded
                 catalog = self._transit._catalog_df_full
                 if catalog is not None:
@@ -2994,8 +2994,8 @@ class ToolsMixin:
                 # Cached mapping didn't work — fall through to catalog search
 
             # 2b. Catalog search
-            print(f"[GTFS] No local match for '{line}' ({here_mode}). "
-                  f"Searching catalog for operator '{operator}'...")
+            miab_log("api_calls", f"[GTFS] No local match for '{line}' ({here_mode}). "
+                  f"Searching catalog for operator '{operator}'...", getattr(self, "settings", None))
             try:
                 catalog = self._transit._catalog_df_full
                 if catalog is None:
@@ -3025,23 +3025,23 @@ class ToolsMixin:
                         if tried >= 3:
                             break
                         tried += 1
-                        print(f"[GTFS] Trying operator feed {fid} "
-                              f"({row.get('provider', 'unknown')})")
+                        miab_log("api_calls", f"[GTFS] Trying operator feed {fid} "
+                              f"({row.get('provider', 'unknown')})", getattr(self, "settings", None))
                         try:
                             _fid, _data = self._transit._gtfs_ensure(fid, url)
                         except Exception as exc:
-                            print(f"[GTFS] Feed {fid} load failed: {exc}")
+                            miab_log("errors", f"[GTFS] Feed {fid} load failed: {exc}", getattr(self, "settings", None))
                             continue
                         if not _data:
                             continue
                         result = _search_feed(fid, skip_mode_check=True, require_headsign=True)
                         if result:
-                            print(f"[GTFS] Found route '{line}' in feed {fid}")
+                            miab_log("api_calls", f"[GTFS] Found route '{line}' in feed {fid}", getattr(self, "settings", None))
                             # Save mapping for next time
                             self._save_operator_map(op_lower, fid)
                             return result
             except Exception as exc:
-                print(f"[GTFS] Operator catalog search failed: {exc}")
+                miab_log("errors", f"[GTFS] Operator catalog search failed: {exc}", getattr(self, "settings", None))
 
         # ── Extract destination city words from headsign ──────────────
         _DEST_SKIP = frozenset({
@@ -3218,18 +3218,18 @@ class ToolsMixin:
                     return [f"No timetable data found for this service."]
 
         candidates.sort(key=lambda c: -c["score"])
-        print(f"[GTFS] Candidate scan: {len(candidates)} direction(s) "
-              f"match headsign '{headsign}'")
+        miab_log("api_calls", f"[GTFS] Candidate scan: {len(candidates)} direction(s) "
+              f"match headsign '{headsign}'", getattr(self, "settings", None))
 
         # ── Return ────────────────────────────────────────────────────
         if len(candidates) == 1:
             stop_names = [s.get("name", s.get("stop_name", "Unknown"))
                           for s in candidates[0]["stop_list"]]
-            print(f"[GTFS] Single candidate — auto-picking: {candidates[0]['label']}")
+            miab_log("api_calls", f"[GTFS] Single candidate — auto-picking: {candidates[0]['label']}", getattr(self, "settings", None))
             return stop_names
 
         if candidates:
-            print(f"[GTFS] Returning {len(candidates)} candidates for user choice")
+            miab_log("api_calls", f"[GTFS] Returning {len(candidates)} candidates for user choice", getattr(self, "settings", None))
             return {"__candidates__": candidates}
 
         here_info = "No timetable data found for this service."
@@ -3375,7 +3375,7 @@ class ToolsMixin:
                         results=15,
                         sort="Duration")
                 except Exception as e:
-                    print(f"[FlightSearch] Timetable API error: {e}")
+                    miab_log("errors", f"[FlightSearch] Timetable API error: {e}", None)
 
                 if not timetable_results:
                     wx.CallAfter(self._status_update,
@@ -3647,7 +3647,7 @@ class ToolsMixin:
                 lines.append("TripAdvisor reviews need a free subscription at "
                              "rapidapi.com/ntd119/api/tripadvisor-com1.")
             except Exception as exc:
-                print(f"[HotelReviews] TripAdvisor failed: {exc}")
+                miab_log("errors", f"[HotelReviews] TripAdvisor failed: {exc}", getattr(self, "settings", None))
 
         if ta_reviews:
             lines.append(f"TripAdvisor reviews for {name}")
@@ -3808,8 +3808,8 @@ class ToolsMixin:
 
                 points = _decode_polyline(encoded)  # list of (lat, lon)
                 if len(points) < 2:
-                    print(f"[FindFood] Polyline decoded to {len(points)} point(s) "
-                          f"(dist={parsed.get('distance_m',0)}m) — using straight line fallback.")
+                    miab_log("verbose", f"[FindFood] Polyline decoded to {len(points)} point(s) "
+                          f"(dist={parsed.get('distance_m',0)}m) — using straight line fallback.", None)
                     points = [(origin_lat, origin_lon), (dest_lat, dest_lon)]
 
                 dist_km = parsed.get("distance_m", 0) / 1000.0
@@ -4023,7 +4023,7 @@ class ToolsMixin:
             from core import _overpass
             result = _overpass.poi_request(query, timeout=45)
         except Exception as exc:
-            print(f"[FindFood] motorway classification query failed: {exc}")
+            miab_log("errors", f"[FindFood] motorway classification query failed: {exc}", getattr(self, "settings", None))
             return flags
 
         if not result or not result.get("elements"):

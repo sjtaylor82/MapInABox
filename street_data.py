@@ -26,6 +26,7 @@ import re
 import time
 import urllib.parse
 import urllib.request
+from logging_utils import miab_log
 
 from geo import (
     dist_to_segment_metres,
@@ -75,7 +76,7 @@ def _save_geocode_cache(cache: dict):
         with open(_GEOCODE_CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(cache, f, indent=2)
     except Exception as e:
-        print(f"[Geocode] Failed to save cache: {e}")
+        miab_log("errors", f"[Geocode] Failed to save cache: {e}", None)
 
 def geocode_location(lat: float, lon: float) -> dict | None:
     """Geocode lat/lon to suburb, bbox, and radius.
@@ -92,25 +93,33 @@ def geocode_location(lat: float, lon: float) -> dict | None:
         entry = cache[cache_key]
         age_days = (time.time() - entry.get("timestamp", 0)) / 86400
         if age_days < _GEOCODE_CACHE_DAYS:
-            print(f"[Geocode] Cache hit (age: {age_days:.0f} days): {entry.get('suburb')}")
+            miab_log("verbose", f"[Geocode] Cache hit (age: {age_days:.0f} days): {entry.get('suburb')}", None)
             return {
                 "suburb": entry.get("suburb"),
                 "bbox": tuple(entry.get("bbox", [])) if entry.get("bbox") else None,
                 "radius": entry.get("radius"),
                 "country_code": entry.get("country_code"),
+                # osm_type/osm_id let fetch_road_data build the Overpass
+                # boundary area directly from the known relation/way instead
+                # of scanning area["name"=...] — much cheaper on public
+                # Overpass servers. Older cache entries won't have these
+                # (get() returns None), which just means the slower
+                # name-based probe runs instead — no behaviour change.
+                "osm_type": entry.get("osm_type"),
+                "osm_id": entry.get("osm_id"),
             }
     
     # Try remote cache (if configured)
     if _GEOCODE_REMOTE_URL:
         try:
-            print(f"[Geocode] Checking remote cache: {_GEOCODE_REMOTE_URL}")
+            miab_log("verbose", f"[Geocode] Checking remote cache: {_GEOCODE_REMOTE_URL}", None)
             req = urllib.request.Request(_GEOCODE_REMOTE_URL, 
                                          headers={"User-Agent": "MapInABox/1.0"})
             with urllib.request.urlopen(req, timeout=3) as resp:
                 remote_cache = json.loads(resp.read().decode())
             if cache_key in remote_cache:
                 entry = remote_cache[cache_key]
-                print(f"[Geocode] Remote cache hit: {entry.get('suburb')}")
+                miab_log("verbose", f"[Geocode] Remote cache hit: {entry.get('suburb')}", None)
                 # Save to local cache
                 cache[cache_key] = {
                     **entry,
@@ -122,13 +131,15 @@ def geocode_location(lat: float, lon: float) -> dict | None:
                     "bbox": tuple(entry.get("bbox", [])) if entry.get("bbox") else None,
                     "radius": entry.get("radius"),
                     "country_code": entry.get("country_code"),
+                    "osm_type": entry.get("osm_type"),
+                    "osm_id": entry.get("osm_id"),
                 }
         except Exception as e:
-            print(f"[Geocode] Remote cache failed: {e}")
+            miab_log("errors", f"[Geocode] Remote cache failed: {e}", None)
     
     # Fall back to Nominatim
     try:
-        print(f"[Geocode] Querying Nominatim for {lat:.4f},{lon:.4f}")
+        miab_log("verbose", f"[Geocode] Querying Nominatim for {lat:.4f},{lon:.4f}", None)
         params = urllib.parse.urlencode({
             "lat": lat, "lon": lon,
             "format": "json", "zoom": 14, "addressdetails": 1,
@@ -158,26 +169,39 @@ def geocode_location(lat: float, lon: float) -> dict | None:
                   addr.get("town") or addr.get("village") or
                   addr.get("municipality") or addr.get("city", "this area"))
         country_code = addr.get("country_code", "")
-        
+
+        # Nominatim's reverse response identifies the actual OSM
+        # relation/way it matched (at zoom=14, normally the suburb/
+        # neighbourhood boundary itself). Keeping this lets fetch_road_data
+        # build the Overpass area directly from the known id instead of
+        # scanning area["name"=...], which is one of the more expensive
+        # query shapes on public Overpass servers.
+        osm_type = data.get("osm_type")
+        osm_id = data.get("osm_id")
+
         # Save to cache
         cache[cache_key] = {
             "suburb": suburb,
             "bbox": [minlat, maxlat, minlon, maxlon] if bb else None,
             "radius": radius,
             "country_code": country_code,
+            "osm_type": osm_type,
+            "osm_id": osm_id,
             "timestamp": time.time()
         }
         _save_geocode_cache(cache)
-        print(f"[Geocode] Nominatim success, cached: {suburb}")
-        
+        miab_log("verbose", f"[Geocode] Nominatim success, cached: {suburb}", None)
+
         return {
             "suburb": suburb,
             "bbox": tuple([minlat, maxlat, minlon, maxlon]) if bb else None,
             "radius": radius,
             "country_code": country_code,
+            "osm_type": osm_type,
+            "osm_id": osm_id,
         }
     except Exception as e:
-        print(f"[Geocode] Nominatim failed: {e}")
+        miab_log("errors", f"[Geocode] Nominatim failed: {e}", None)
         return None
 
 
@@ -438,7 +462,7 @@ def _load_road_cache_by_coord(cache_dir: str, lat: float, lon: float) -> dict:
                                 dist = math.sqrt(dlat_m**2 + dlon_m**2)
                                 # Only use if within 7km (typical cache radius)
                                 if dist < 7000:
-                                    print(f"[Street] Found cache in adjacent cell {adj_key}, {dist:.0f}m from center")
+                                    miab_log("street", f"[Street] Found cache in adjacent cell {adj_key}, {dist:.0f}m from center", None)
                                     if data.get("_version") == _CACHE_VERSION:
                                         return data
                         except Exception:
@@ -512,7 +536,7 @@ def _load_road_cache_by_coord(cache_dir: str, lat: float, lon: float) -> dict:
                     with open(path, encoding="utf-8") as f:
                         data = json.load(f)
                     if data.get("_version") == _CACHE_VERSION:
-                        print(f"[Street] Found cache via centre-index scan ({best_key}), {best_dist:.0f}m away")
+                        miab_log("street", f"[Street] Found cache via centre-index scan ({best_key}), {best_dist:.0f}m away", None)
                         return data
                 except Exception:
                     pass
@@ -560,7 +584,7 @@ def _save_road_cache(cache_dir: str, lat: float, lon: float, entry: dict,
     try:
         os.makedirs(cache_dir, exist_ok=True)
         key = _index_key(lat, lon, suburb_name, used_boundary)
-        print(f"[Street] Saving cache to {cache_dir} key={key}")
+        miab_log("street", f"[Street] Saving cache to {cache_dir} key={key}", None)
         index = _load_index(cache_dir)
         # Reuse existing filename if already indexed, else resolve a friendly name
         fname = index.get(key)
@@ -583,7 +607,7 @@ def _save_road_cache(cache_dir: str, lat: float, lon: float, entry: dict,
         with open(os.path.join(cache_dir, fname), "w", encoding="utf-8") as f:
             json.dump(entry, f, ensure_ascii=False)
     except Exception as _e:
-        print(f"[Street] Cache save FAILED: {_e}")
+        miab_log("errors", f"[Street] Cache save FAILED: {_e}", None)
 
 
 def _cache_is_stale(entry: dict) -> bool:
@@ -637,6 +661,8 @@ class StreetFetcher:
         suburb_name: str | None = None,
         country_code: str | None = None,
         use_gnaf: bool = True,
+        osm_type: str | None = None,
+        osm_id: int | None = None,
     ) -> tuple:
         """Fetch road segments and address points for the area around (lat, lon).
 
@@ -652,6 +678,11 @@ class StreetFetcher:
             Optional callable(str) for progress messages.
         stage1_done_cb:
             Optional zero-argument callback invoked when stage 1 completes.
+        osm_type, osm_id:
+            Optional OSM relation/way identifying suburb_name's boundary
+            (from geocode_location's Nominatim result). When given, the
+            boundary area is built directly from this id instead of the
+            slower area["name"=...] scan.
 
         Returns
         -------
@@ -661,7 +692,7 @@ class StreetFetcher:
         def status(msg):
             if status_cb:
                 status_cb(msg)
-            print(f"[Street] {msg}")
+            miab_log("street", f"[Street] {msg}", None)
 
         centre_lat = fetch_lat or lat
         centre_lon = fetch_lon or lon
@@ -674,9 +705,7 @@ class StreetFetcher:
             segs  = entry.get("segments", [])
             addrs = entry.get("addresses", [])
             if suburb_name and len(segs) < 150 and not entry.get("boundary_supplemented"):
-                print(
-                    f"[Street] small suburb cache — {len(segs)} segments, refreshing with radius supplement"
-                )
+                miab_log("street", f"[Street] small suburb cache — {len(segs)} segments, refreshing with radius supplement", getattr(self, "settings", None))
                 entry = {}
 
         if entry:
@@ -709,11 +738,11 @@ class StreetFetcher:
             interpolations = entry.get("interpolations", [])
             stale = _cache_is_stale(entry)
             if not stale:
-                print(f"[Street] cache hit — {len(segs)} segments, {len(natural_features)} natural features, {len(interpolations)} interpolations")
+                miab_log("street", f"[Street] cache hit — {len(segs)} segments, {len(natural_features)} natural features, {len(interpolations)} interpolations", getattr(self, "settings", None))
                 return segs, addrs, True, snap[0], snap[1], False, natural_features, interpolations
             else:
                 # Stale but usable — return immediately, refresh in background
-                print(f"[Street] stale cache — {len(segs)} segments, {len(natural_features)} natural features, {len(interpolations)} interpolations, serving now, refreshing background")
+                miab_log("street", f"[Street] stale cache — {len(segs)} segments, {len(natural_features)} natural features, {len(interpolations)} interpolations, serving now, refreshing background", getattr(self, "settings", None))
                 # Kick off background refresh without blocking
                 import threading as _threading
                 def _bg_refresh():
@@ -723,6 +752,8 @@ class StreetFetcher:
                             suburb_name=suburb_name,
                             country_code=country_code,
                             use_gnaf=use_gnaf,
+                            osm_type=osm_type,
+                            osm_id=osm_id,
                         )
                     except Exception:
                         pass
@@ -736,7 +767,9 @@ class StreetFetcher:
                                     stage1_done_cb=stage1_done_cb,
                                     suburb_name=suburb_name,
                                     country_code=country_code,
-                                    use_gnaf=use_gnaf)
+                                    use_gnaf=use_gnaf,
+                                    osm_type=osm_type,
+                                    osm_id=osm_id)
         except RuntimeError:
             if stale_entry:
                 segs  = stale_entry.get("segments", [])
@@ -764,6 +797,8 @@ class StreetFetcher:
         suburb_name: str | None = None,
         country_code: str | None = None,
         use_gnaf: bool = True,
+        osm_type: str | None = None,
+        osm_id: int | None = None,
     ) -> tuple:
         """Fetch streets using OSM admin boundary if available, else radius.
 
@@ -777,9 +812,9 @@ class StreetFetcher:
         def status(msg):
             if status_cb:
                 status_cb(msg)
-            print(f"[Street] {msg}")
+            miab_log("street", f"[Street] {msg}", None)
 
-        print(f"[Street] Fetching at centre: {centre_lat:.5f}, {centre_lon:.5f} radius {radius}m suburb={suburb_name!r}")
+        miab_log("street", f"[Street] Fetching at centre: {centre_lat:.5f}, {centre_lon:.5f} radius {radius}m suburb={suburb_name!r}", getattr(self, "settings", None))
         # status_cb set on overpass only for radius fallback — boundary loop
         # announces once via status() and suppresses per-server messages to avoid double-speak.
         self._overpass.status_cb = None
@@ -787,111 +822,177 @@ class StreetFetcher:
         result = None
         used_boundary = False
 
+        def _street_core_query(
+            scope: str,
+            timeout_secs: int,
+            bbox: str = "",
+            prefix: str = "",
+        ) -> str:
+            bbox_clause = f"[bbox:{bbox}]" if bbox else ""
+            return (
+                f"[out:json][timeout:{timeout_secs}]{bbox_clause};\n"
+                f"{prefix}"
+                "(\n"
+                f'  way["highway"~"primary|secondary|tertiary|residential|unclassified|living_street|trunk|motorway"]{scope};\n'
+                f'  way["highway"~"footway|cycleway|path|service"]["name"]{scope};\n'
+                f'  way["addr:interpolation"]{scope};\n'
+                ");\n"
+                "out geom;\n"
+                "(\n"
+                "  way._[\"addr:interpolation\"];\n"
+                "  node(w)[\"addr:housenumber\"];\n"
+                ");\n"
+                "out;\n"
+            )
+
+        def _probe_boundary_shape() -> list[tuple[str, str]]:
+            if not suburb_name:
+                return []
+            probe_query = (
+                f"[out:json][timeout:8][bbox:{bbox_str}];\n"
+                "(\n"
+                f'  area["name"="{suburb_name}"]["boundary"="administrative"];\n'
+                f'  area["name"="{suburb_name}"]["place"~"suburb|town|village|municipality|locality|quarter|neighbourhood"];\n'
+                ");\n"
+                "out tags;\n"
+            )
+            data = urllib.parse.urlencode({"data": probe_query}).encode()
+            probe = self._overpass.large_request(data, timeout=10)
+            if not probe:
+                miab_log(
+                    "street",
+                    f"[Street] Boundary probe for {suburb_name!r} failed or returned no areas; using radius fallback.",
+                    getattr(self, "settings", None),
+                )
+                return []
+
+            found = []
+            for el in probe.get("elements", []):
+                tags = el.get("tags", {}) if isinstance(el, dict) else {}
+                if tags.get("boundary") == "administrative":
+                    found.append("boundary_admin")
+                if tags.get("place"):
+                    found.append("boundary_place")
+            ordered = []
+            for name in ("boundary_admin", "boundary_place"):
+                if name in found and name not in ordered:
+                    ordered.append(name)
+            miab_log(
+                "street",
+                f"[Street] Boundary probe for {suburb_name!r}: "
+                + (", ".join(ordered) if ordered else "no usable area"),
+                getattr(self, "settings", None),
+            )
+            return ordered
+
+        import math as _math
+        _deg_lat = radius / 111000.0
+        _deg_lon = radius / (111000.0 * _math.cos(_math.radians(centre_lat)))
+        bbox_str = (f"{centre_lat - _deg_lat:.5f},{centre_lon - _deg_lon:.5f},"
+                    f"{centre_lat + _deg_lat:.5f},{centre_lon + _deg_lon:.5f}")
+
         # Boundary-only mode with radius fallback
         skip_boundary = False
 
-        # ── Name-based boundary query ─────────────────────────────────
-        if suburb_name and not skip_boundary:
+        # ── Fast path: build the area directly from a known OSM id ────
+        # If geocode_location already told us which relation/way this
+        # suburb is (from Nominatim's reverse lookup), skip the
+        # area["name"=...] scan entirely — that name-scan is one of the
+        # more expensive query shapes on public Overpass servers and a
+        # likely cause of the 504 timeouts seen in practice. A direct
+        # id-based area is essentially free by comparison.
+        if suburb_name and not skip_boundary and osm_type in ("relation", "way") and osm_id:
             status(f"Loading streets for {suburb_name}...")
-            import math as _math
-            _deg_lat = radius / 111000.0
-            _deg_lon = radius / (111000.0 * _math.cos(_math.radians(centre_lat)))
-            bbox_str = (f"{centre_lat - _deg_lat:.5f},{centre_lon - _deg_lon:.5f},"
-                        f"{centre_lat + _deg_lat:.5f},{centre_lon + _deg_lon:.5f}")
-            for area_filter in (
-                f'area["name"="{suburb_name}"]["boundary"="administrative"]->.a;',
-                f'area["name"="{suburb_name}"]["place"~"suburb|town|village|municipality|locality|quarter|neighbourhood"]->.a;',
-            ):
-                boundary_query = (
-                    f"[out:json][timeout:60][bbox:{bbox_str}];\n"
-                    f"{area_filter}\n"
-                    "(\n"
-                    '  way["highway"~"primary|secondary|tertiary|residential|unclassified|living_street|trunk|motorway"](area.a);\n'
-                    '  way["highway"~"footway|cycleway|path|service"]["name"](area.a);\n'
-                    '  way["natural"~"water|wetland|wood|beach|scrub|grassland|heath"](area.a);\n'
-                    '  way["waterway"~"river|stream|canal|drain"](area.a);\n'
-                    '  way["leisure"~"park|nature_reserve|recreation_ground"](area.a);\n'
-                    '  way["landuse"~"farmland|orchard|vineyard|meadow|forest|grass|quarry"](area.a);\n'
-                    '  way["barrier"~"fence|hedge|gate"](area.a);\n'
-                    '  way["addr:interpolation"](area.a);\n'  # Address ranges
-                    ");\n"
-                    "out geom;\n"
-                    "(\n"
-                    "  way._[\"addr:interpolation\"];\n"
-                    "  node(w)[\"addr:housenumber\"];\n"  # Endpoints with house numbers
-                    ");\n"
-                    "out;\n"
+            type_prefix = "rel" if osm_type == "relation" else "way"
+            id_query = _street_core_query(
+                "(area.a)", 35, bbox=bbox_str,
+                prefix=f"{type_prefix}({osm_id});\nmap_to_area->.a;\n")
+            data = urllib.parse.urlencode({"data": id_query}).encode()
+            result = self._overpass.large_request(data, timeout=40)
+            if result and result.get("elements"):
+                used_boundary = True
+                miab_log(
+                    "street",
+                    f"[Street] ID-based area query succeeded for {suburb_name!r} "
+                    f"({osm_type} {osm_id}): {len(result['elements'])} ways",
+                    getattr(self, "settings", None),
                 )
+            else:
+                miab_log(
+                    "street",
+                    f"[Street] ID-based area query for {suburb_name!r} ({osm_type} {osm_id}) "
+                    "returned nothing; falling back to name-based probe.",
+                    getattr(self, "settings", None),
+                )
+
+        # ── Name-based boundary query (fallback, or when no id known) ──
+        if suburb_name and not skip_boundary and not used_boundary:
+            status(f"Loading streets for {suburb_name}...")
+            boundary_filters = {
+                "boundary_admin": f'area["name"="{suburb_name}"]["boundary"="administrative"]->.a;',
+                "boundary_place": f'area["name"="{suburb_name}"]["place"~"suburb|town|village|municipality|locality|quarter|neighbourhood"]->.a;',
+            }
+            boundary_order = _probe_boundary_shape()
+            for strategy_name in boundary_order:
+                area_filter = boundary_filters[strategy_name]
+                status(f"Loading streets for {suburb_name}...")
+                # Keep first-load street queries lean.  Decorative map features
+                # are useful, but they should not make basic street navigation
+                # more likely to time out on public Overpass servers.
+                boundary_query = _street_core_query(
+                    "(area.a)", 35, bbox=bbox_str, prefix=f"{area_filter}\n")
                 data   = urllib.parse.urlencode({"data": boundary_query}).encode()
-                result = self._overpass.large_request(data, timeout=60)
+                result = self._overpass.large_request(data, timeout=40)
                 if result and result.get("elements"):
                     used_boundary = True
-                    print(f"[Street] Name-based query succeeded for {suburb_name!r}: {len(result['elements'])} ways")
+                    miab_log("street", f"[Street] Name-based query succeeded for {suburb_name!r}: {len(result['elements'])} ways", getattr(self, "settings", None))
                     break
                 else:
-                    print(f"[Street] Name-based query returned nothing for {suburb_name!r}, trying next...")
+                    miab_log(
+                        "street",
+                        f"[Street] {strategy_name} query returned nothing for {suburb_name!r}, trying next...",
+                        getattr(self, "settings", None),
+                    )
                     result = None
+            if not boundary_order:
+                miab_log(
+                    "street",
+                    f"[Street] Skipping boundary street query for {suburb_name!r}; probe found no matching area.",
+                    getattr(self, "settings", None),
+                )
+            elif not used_boundary:
+                miab_log(
+                    "street",
+                    f"[Street] Probed boundary areas for {suburb_name!r} did not return streets.",
+                    getattr(self, "settings", None),
+                )
 
         # ── Radius fallback if boundary failed ────────────────────────
         if not used_boundary:
             self._overpass.status_cb = status_cb  # announce server only for fallback
             if suburb_name:
-                print(f"[Street] No boundary found for {suburb_name}, trying radius fallback...")
+                miab_log("street", f"[Street] No boundary found for {suburb_name}, trying radius fallback...", getattr(self, "settings", None))
             else:
-                print(f"[Street] No suburb name, using radius query...")
+                miab_log("street", f"[Street] No suburb name, using radius query...", getattr(self, "settings", None))
             
             # Simple radius query like old version
-            radius_query = (
-                f"[out:json][timeout:30];\n(\n"
-                f'  way["highway"~"primary|secondary|tertiary|residential|unclassified|living_street|trunk|motorway"](around:{radius},{centre_lat},{centre_lon});\n'
-                f'  way["highway"~"footway|cycleway|path|service"]["name"](around:{radius},{centre_lat},{centre_lon});\n'
-                f'  way["natural"~"water|wetland|wood|beach|scrub|grassland|heath"](around:{radius},{centre_lat},{centre_lon});\n'
-                f'  way["waterway"~"river|stream|canal|drain"](around:{radius},{centre_lat},{centre_lon});\n'
-                f'  way["leisure"~"park|nature_reserve|recreation_ground"](around:{radius},{centre_lat},{centre_lon});\n'
-                f'  way["landuse"~"farmland|orchard|vineyard|meadow|forest|grass|quarry"](around:{radius},{centre_lat},{centre_lon});\n'
-                f'  way["barrier"~"fence|hedge|gate"](around:{radius},{centre_lat},{centre_lon});\n'
-                f'  way["addr:interpolation"](around:{radius},{centre_lat},{centre_lon});\n'  # Address ranges
-                f");\n"
-                f"out geom;\n"
-                f"(\n"
-                f"  way._[\"addr:interpolation\"];\n"
-                f"  node(w)[\"addr:housenumber\"];\n"  # Endpoints
-                f");\n"
-                f"out;\n"
-            )
+            radius_scope = f"(around:{radius},{centre_lat},{centre_lon})"
+            radius_query = _street_core_query(radius_scope, 25)
             data = urllib.parse.urlencode({"data": radius_query}).encode()
-            result = self._overpass.large_request(data, timeout=35)
+            result = self._overpass.large_request(data, timeout=30)
             if result and result.get("elements"):
-                print(f"[Street] Radius fallback succeeded: {len(result['elements'])} ways")
+                miab_log("street", f"[Street] Radius fallback succeeded: {len(result['elements'])} ways", getattr(self, "settings", None))
             else:
-                print(f"[Street] Radius fallback also failed")
+                miab_log("errors", f"[Street] Radius fallback also failed", getattr(self, "settings", None))
 
         boundary_supplemented = False
         if used_boundary and result and len(result.get("elements", [])) < 250:
-            print(
-                f"[Street] Boundary result for {suburb_name!r} is small; "
-                "supplementing with radius streets..."
-            )
-            radius_query = (
-                f"[out:json][timeout:30];\n(\n"
-                f'  way["highway"~"primary|secondary|tertiary|residential|unclassified|living_street|trunk|motorway"](around:{radius},{centre_lat},{centre_lon});\n'
-                f'  way["highway"~"footway|cycleway|path|service"]["name"](around:{radius},{centre_lat},{centre_lon});\n'
-                f'  way["natural"~"water|wetland|wood|beach|scrub|grassland|heath"](around:{radius},{centre_lat},{centre_lon});\n'
-                f'  way["waterway"~"river|stream|canal|drain"](around:{radius},{centre_lat},{centre_lon});\n'
-                f'  way["leisure"~"park|nature_reserve|recreation_ground"](around:{radius},{centre_lat},{centre_lon});\n'
-                f'  way["landuse"~"farmland|orchard|vineyard|meadow|forest|grass|quarry"](around:{radius},{centre_lat},{centre_lon});\n'
-                f'  way["barrier"~"fence|hedge|gate"](around:{radius},{centre_lat},{centre_lon});\n'
-                f'  way["addr:interpolation"](around:{radius},{centre_lat},{centre_lon});\n'
-                f");\n"
-                f"out geom;\n"
-                f"(\n"
-                f"  way._[\"addr:interpolation\"];\n"
-                f"  node(w)[\"addr:housenumber\"];\n"
-                f");\n"
-                f"out;\n"
-            )
+            miab_log("street", f"[Street] Boundary result for {suburb_name!r} is small; "
+                "supplementing with radius streets...", getattr(self, "settings", None))
+            radius_scope = f"(around:{radius},{centre_lat},{centre_lon})"
+            radius_query = _street_core_query(radius_scope, 25)
             data = urllib.parse.urlencode({"data": radius_query}).encode()
-            extra = self._overpass.large_request(data, timeout=35)
+            extra = self._overpass.large_request(data, timeout=30)
             if extra and extra.get("elements"):
                 seen = {
                     (el.get("type"), el.get("id"))
@@ -907,9 +1008,9 @@ class StreetFetcher:
                     result["elements"].append(el)
                     added += 1
                 boundary_supplemented = True
-                print(f"[Street] Radius supplement added {added} elements")
+                miab_log("street", f"[Street] Radius supplement added {added} elements", getattr(self, "settings", None))
             else:
-                print("[Street] Radius supplement returned nothing")
+                miab_log("street", "[Street] Radius supplement returned nothing", getattr(self, "settings", None))
 
         self._overpass.status_cb = None
         if not result:
@@ -1012,7 +1113,7 @@ class StreetFetcher:
 
 
         source = "boundary" if used_boundary else "radius"
-        print(f"[Street] Stage 1 complete ({source}): {len(segments)} segments, {len(natural_features)} natural features, {len(interpolations)} interpolations")
+        miab_log("street", f"[Street] Stage 1 complete ({source}): {len(segments)} segments, {len(natural_features)} natural features, {len(interpolations)} interpolations", getattr(self, "settings", None))
         if stage1_done_cb:
             stage1_done_cb()
         
@@ -1043,8 +1144,8 @@ class StreetFetcher:
                 "cache_center_lat": centre_lat,
                 "cache_center_lon": centre_lon,
             }, suburb_name=suburb_name, used_boundary=used_boundary)
-            print(f"[Street] Cached {len(segments)} segments for future use "
-                  f"({'boundary' if used_boundary else 'radius'})")
+            miab_log("street", f"[Street] Cached {len(segments)} segments for future use "
+                  f"({'boundary' if used_boundary else 'radius'})", getattr(self, "settings", None))
             # 7km neighbor prefetch stays disabled to avoid rate limiting and timeouts.
 
         return segments, addresses, False, snap[0], snap[1], True, natural_features, interpolations
@@ -1068,7 +1169,7 @@ class StreetFetcher:
         import time as _time
         _time.sleep(12)  # Let main boundary query + address fetch + cooldown finish
         
-        print(f"[Street] Pre-fetching 7km radius for neighbor caching...")
+        miab_log("street", f"[Street] Pre-fetching 7km radius for neighbor caching...", getattr(self, "settings", None))
         radius_query = (
             "[out:json][timeout:30];\n(\n"
             f'  way["highway"~"primary|secondary|tertiary|residential|unclassified|living_street|trunk|motorway"](around:7000,{centre_lat},{centre_lon});\n'
@@ -1084,7 +1185,7 @@ class StreetFetcher:
         result = self._overpass.large_request(data, timeout=35)
         
         if not result or not result.get("elements"):
-            print("[Street] 7km neighbor pre-fetch failed or empty")
+            miab_log("errors", "[Street] 7km neighbor pre-fetch failed or empty", getattr(self, "settings", None))
             return
         
         # Parse all segments and natural features in radius
@@ -1143,12 +1244,12 @@ class StreetFetcher:
                     })
         
         if len(segments) < 10:
-            print(f"[Street] 7km radius returned only {len(segments)} segments, not caching")
+            miab_log("street", f"[Street] 7km radius returned only {len(segments)} segments, not caching", getattr(self, "settings", None))
             return
         
         # Cache entire radius as a coordinate-based entry (not suburb-based)
         # This gets checked as a fallback when suburb-specific cache misses
-        print(f"[Street] Caching {len(segments)} streets, {len(natural_features)} natural features from 7km radius")
+        miab_log("street", f"[Street] Caching {len(segments)} streets, {len(natural_features)} natural features from 7km radius", getattr(self, "settings", None))
         _save_road_cache(self._cache_dir, centre_lat, centre_lon, {
             "segments": segments,
             "addresses": [],
@@ -1157,7 +1258,7 @@ class StreetFetcher:
             "cache_center_lat": centre_lat,
             "cache_center_lon": centre_lon,
         }, suburb_name=None, used_boundary=False)
-        print(f"[Street] 7km radius pre-fetch complete: {len(segments)} streets, {len(natural_features)} features cached")
+        miab_log("street", f"[Street] 7km radius pre-fetch complete: {len(segments)} streets, {len(natural_features)} features cached", getattr(self, "settings", None))
         
         # Notify completion
         if status_cb:
@@ -1180,7 +1281,7 @@ class StreetFetcher:
         def status(msg):
             if status_cb:
                 status_cb(msg)
-            print(f"[Street] {msg}")
+            miab_log("street", f"[Street] {msg}", None)
 
         outer_query = (
             "[out:json][timeout:20];\n(\n"
@@ -1191,7 +1292,7 @@ class StreetFetcher:
         data   = urllib.parse.urlencode({"data": outer_query}).encode()
         result = self._overpass.large_request(data, timeout=20)
         if not result:
-            print("[Street] Stage 2 outer fetch failed — keeping inner segments")
+            miab_log("errors", "[Street] Stage 2 outer fetch failed — keeping inner segments", getattr(self, "settings", None))
             return existing_segments, []
 
         # Deduplicate by OSM way ID — coords[0] is insufficient because the
@@ -1223,8 +1324,8 @@ class StreetFetcher:
 
         addresses = self._fetch_addresses(centre_lat, centre_lon, radius)
 
-        print(f"[Street] Stage 2 complete: {len(new_segments)} total segments "
-              f"({len(new_segments) - len(existing_segments)} added)")
+        miab_log("street", f"[Street] Stage 2 complete: {len(new_segments)} total segments "
+              f"({len(new_segments) - len(existing_segments)} added)", getattr(self, "settings", None))
 
         # Cache the full merged result (radius-based, use coordinate grid)
         if len(new_segments) >= 10:
@@ -1255,18 +1356,18 @@ class StreetFetcher:
                 data = json.loads(resp.read().decode())
 
             if "error" in data:
-                print(f"[GNAF] Server error: {data['error']}")
+                miab_log("errors", f"[GNAF] Server error: {data['error']}", getattr(self, "settings", None))
                 return []
 
             addresses = data.get("addresses", [])
             for addr in addresses:
                 if isinstance(addr, dict):
                     addr["source"] = "gnaf"
-            print(f"[GNAF] Fetched {len(addresses)} addresses for {suburb}")
+            miab_log("verbose", f"[GNAF] Fetched {len(addresses)} addresses for {suburb}", getattr(self, "settings", None))
             return addresses
 
         except Exception as e:
-            print(f"[GNAF] Fetch failed: {e}")
+            miab_log("errors", f"[GNAF] Fetch failed: {e}", getattr(self, "settings", None))
             return []
 
     def _fetch_addresses(self, lat: float, lon: float, radius: int) -> list:
@@ -1292,10 +1393,10 @@ class StreetFetcher:
         try:
             result = self._overpass.large_request(data, timeout=20)
         except Exception as e:
-            print(f"[Street] Address fetch error at ({lat:.5f},{lon:.5f}) r={radius}: {e}")
+            miab_log("errors", f"[Street] Address fetch error at ({lat:.5f},{lon:.5f}) r={radius}: {e}", getattr(self, "settings", None))
             return []
         if not result:
-            print(f"[Street] Address fetch empty result at ({lat:.5f},{lon:.5f}) r={radius}")
+            miab_log("street", f"[Street] Address fetch empty result at ({lat:.5f},{lon:.5f}) r={radius}", getattr(self, "settings", None))
             return []
         addresses = []
         n_node = n_way = n_rel = 0
@@ -1328,8 +1429,8 @@ class StreetFetcher:
                 "lon":    plon,
                 "source": "osm",
             })
-        print(f"[Street] Fetched {len(addresses)} addresses at ({lat:.5f},{lon:.5f}) "
-              f"r={radius}  (nodes={n_node} ways={n_way} relations={n_rel})")
+        miab_log("street", f"[Street] Fetched {len(addresses)} addresses at ({lat:.5f},{lon:.5f}) "
+              f"r={radius}  (nodes={n_node} ways={n_way} relations={n_rel})", getattr(self, "settings", None))
         return addresses
 
     # ------------------------------------------------------------------

@@ -22,6 +22,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from logging_utils import miab_log
 
 API_BASE = "https://tripadvisor-com1.p.rapidapi.com"
 API_HOST = "tripadvisor-com1.p.rapidapi.com"
@@ -83,12 +84,12 @@ class TripAdvisorClient:
             with open(self._cache_file, "w", encoding="utf-8") as f:
                 json.dump(self._cache, f)
         except Exception as exc:
-            print(f"[TripAdvisor] cache save failed: {exc}")
+            miab_log("errors", f"[TripAdvisor] cache save failed: {exc}", getattr(self, "settings", None))
 
     # ---------------------------------------------------------------- request
     def _request(self, path: str, params: dict):
         url = f"{API_BASE}{path}?{urllib.parse.urlencode(params)}"
-        print(f"[TripAdvisor] GET {url}")
+        miab_log("verbose", f"[TripAdvisor] GET {url}", getattr(self, "settings", None))
         req = urllib.request.Request(url, headers={
             "x-rapidapi-key": self._key,
             "x-rapidapi-host": API_HOST,
@@ -114,9 +115,9 @@ class TripAdvisorClient:
         if entry and (time.time() - entry.get("ts", 0)) / 86400 < _CACHE_TTL_DAYS:
             reviews = self._filter_real_reviews(entry.get("reviews", []))
             if reviews:
-                print(f"[TripAdvisor] review cache hit for {name!r}")
+                miab_log("verbose", f"[TripAdvisor] review cache hit for {name!r}", getattr(self, "settings", None))
                 return reviews[:limit]
-            print(f"[TripAdvisor] ignoring stale non-review cache for {name!r}")
+            miab_log("verbose", f"[TripAdvisor] ignoring stale non-review cache for {name!r}", getattr(self, "settings", None))
             self._cache.pop(cache_key, None)
             self._save_cache()
 
@@ -126,23 +127,23 @@ class TripAdvisorClient:
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
                 raise PermissionError("RapidAPI key not subscribed to Tripadvisor COM")
-            print(f"[TripAdvisor] search HTTP {exc.code}")
+            miab_log("errors", f"[TripAdvisor] search HTTP {exc.code}", getattr(self, "settings", None))
             return []
         except Exception as exc:
-            print(f"[TripAdvisor] search failed: {exc}")
+            miab_log("errors", f"[TripAdvisor] search failed: {exc}", getattr(self, "settings", None))
             return []
 
         loc_id = self._extract_location_id(loc, name)
         if not loc_id:
-            print(f"[TripAdvisor] no location id in search response: "
-                  f"{json.dumps(loc)[:600]}")
+            miab_log("verbose", f"[TripAdvisor] no location id in search response: "
+                  f"{json.dumps(loc)[:600]}", getattr(self, "settings", None))
             return []
 
         # Surface the candidates so a wrong pick is easy to diagnose.
         try:
             cands = [f"{it.get('title')!r}:{it.get('geoId') or it.get('documentId')}"
                      for it in (loc.get('data') or [])[:6] if isinstance(it, dict)]
-            print(f"[TripAdvisor] candidates {cands} -> chose contentId={loc_id}")
+            miab_log("verbose", f"[TripAdvisor] candidates {cands} -> chose contentId={loc_id}", getattr(self, "settings", None))
         except Exception:
             pass
 
@@ -152,10 +153,10 @@ class TripAdvisorClient:
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
                 raise PermissionError("RapidAPI key not subscribed to Tripadvisor COM")
-            print(f"[TripAdvisor] reviews HTTP {exc.code}: {_error_body(exc)}")
+            miab_log("errors", f"[TripAdvisor] reviews HTTP {exc.code}: {_error_body(exc)}", getattr(self, "settings", None))
             return []
         except Exception as exc:
-            print(f"[TripAdvisor] reviews failed: {exc}")
+            miab_log("errors", f"[TripAdvisor] reviews failed: {exc}", getattr(self, "settings", None))
             return []
 
         # Diagnostic: show where reviews actually live and a real sample, so the
@@ -163,17 +164,17 @@ class TripAdvisorClient:
         try:
             cont = data.get("data") if isinstance(data, dict) else None
             if isinstance(cont, dict):
-                print(f"[TripAdvisor] data keys: {list(cont.keys())[:15]}")
+                miab_log("verbose", f"[TripAdvisor] data keys: {list(cont.keys())[:15]}", getattr(self, "settings", None))
                 arr = cont.get("reviews")
                 if isinstance(arr, list) and arr and isinstance(arr[0], dict):
-                    print(f"[TripAdvisor] sample review keys: {list(arr[0].keys())[:25]}")
-                    print(f"[TripAdvisor] sample review: {json.dumps(arr[0])[:600]}")
+                    miab_log("verbose", f"[TripAdvisor] sample review keys: {list(arr[0].keys())[:25]}", getattr(self, "settings", None))
+                    miab_log("verbose", f"[TripAdvisor] sample review: {json.dumps(arr[0])[:600]}", getattr(self, "settings", None))
         except Exception:
             pass
 
         reviews = self._filter_real_reviews(self._extract_reviews(data))[:limit]
         if not reviews:
-            print(f"[TripAdvisor] no reviews parsed from: {json.dumps(data)[:600]}")
+            miab_log("verbose", f"[TripAdvisor] no reviews parsed from: {json.dumps(data)[:600]}", getattr(self, "settings", None))
         else:
             self._cache[cache_key] = {"reviews": reviews, "ts": time.time()}
             self._save_cache()

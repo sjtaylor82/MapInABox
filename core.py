@@ -14,7 +14,8 @@ import urllib.request
 
 from logging_utils import miab_log
 from i18n import _, set_language
-from wx_utils import IS_MAC, _log_key_event, _primary_down
+from speech_dispatch import SpeechDispatch, braille as _braille, speak as _speak
+from wx_utils import IS_MAC, MSAAListBox, _log_key_event, _primary_down
 from lookups import LookupsMixin
 from nav import NavMixin
 from walk import WalkMixin
@@ -47,34 +48,6 @@ import wx
 def _shortcut_label(primary: str) -> str:
     """Format a shortcut label for the current platform."""
     return primary if not IS_MAC else primary.replace("Ctrl", "Cmd")
-
-# ── Screen-reader speech and Braille (AccessibleOutput2) ─────────────────
-try:
-    import accessible_output2.outputs.auto as _ao2_auto
-    _ao2 = _ao2_auto.Auto()
-except Exception:
-    _ao2 = None
-
-def _speak(msg: str, interrupt: bool = True) -> None:
-    """Output directly to the active screen reader via AO2."""
-    if _ao2:
-        text = str(msg)
-        try:
-            _ao2.speak(text, interrupt=interrupt)
-        except Exception:
-            pass
-        try:
-            _ao2.braille(text)
-        except Exception:
-            pass
-
-def _braille(msg: str) -> None:
-    """Send text to the active braille display without adding extra speech."""
-    if _ao2:
-        try:
-            _ao2.braille(str(msg))
-        except Exception:
-            pass
 
 # ── Sub-modules ──────────────────────────────────────────────────
 from geo import (
@@ -1064,7 +1037,7 @@ from airlines import decode_callsign
 try:
     from game import ChallengeGame, ChallengeSession
 except Exception as _game_import_err:
-    print(f"[Game] Import failed: {_game_import_err}")
+    miab_log("errors", f"[Game] Import failed: {_game_import_err}", None)
     class ChallengeGame:
         """No-op fallback when game.py fails to import."""
         active = False
@@ -1228,7 +1201,7 @@ class SoundEngine:
             sound = pygame.mixer.Sound(path)
             self._ch.play(sound, loops=loops)
         except Exception as e:
-            print(f"[SoundEngine] Cannot play {path}: {e}")
+            miab_log("errors", f"[SoundEngine] Cannot play {path}: {e}", getattr(self, "settings", None))
 
     def stop(self):
         """Stop current playback."""
@@ -1493,7 +1466,7 @@ def _build_land_checker(polygons=None):
             return any(p.contains(pt) for p in polygons)
         return is_land
     except Exception as e:
-        print(f"[Map] Land checker failed: {e}")
+        miab_log("errors", f"[Map] Land checker failed: {e}", None)
         return lambda lat, lon: False
 
 _IS_LAND   = _build_land_checker(_GEO_LAND_POLYGONS)
@@ -2107,7 +2080,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         except Exception:
             where = "unknown caller"
         msg = f"Rejected invalid {label} assignment from {where}: {value!r} ({reason})"
-        print(f"[CoordGuard] {msg}")
+        miab_log("street", f"[CoordGuard] {msg}", getattr(self, "settings", None))
         try:
             miab_log("navigation", msg, getattr(self, "settings", {}))
         except Exception:
@@ -2173,6 +2146,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self.settings = load_settings()
         set_language(self.settings.get("language") or None)
         self.settings["_log_path"] = os.path.join(USER_DIR, "miab.log")
+        self.speech = SpeechDispatch(trace_cb=self._verbose_trace)
 
         root = wx.Panel(self)
         root.SetBackgroundColour(COL_BG)
@@ -2185,7 +2159,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self.map_panel.Bind(wx.EVT_LEFT_DOWN, self._on_map_mouse_click)
         self.map_panel.Bind(wx.EVT_LEFT_DCLICK, self._on_map_mouse_click)
 
-        self.listbox = wx.ListBox(root, style=wx.LB_SINGLE)
+        self.listbox = MSAAListBox(root, style=wx.LB_SINGLE)
         self.listbox.Set(["Map mode"])
         self.listbox.SetSelection(0)
         self.listbox.SetBackgroundColour(wx.Colour(10, 20, 40))
@@ -2924,7 +2898,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             urllib.request.urlopen("https://www.google.com", timeout=5)
             return True
         except Exception as e:
-            print(f"[Street] Internet check failed: {e}")
+            miab_log("errors", f"[Street] Internet check failed: {e}", getattr(self, "settings", None))
             return False
 
     def _calc_distance_meters(self, lat1, lon1, lat2, lon2):
@@ -2981,7 +2955,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             
             # Cache invalid if >7km from center
             if dist > 7000:
-                print(f"[Street] Cache invalid - {dist:.0f}m from center, clearing")
+                miab_log("street", f"[Street] Cache invalid - {dist:.0f}m from center, clearing", getattr(self, "settings", None))
                 self._road_segments = []
                 self._natural_features = []
                 self._interpolations = []
@@ -3005,7 +2979,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             if (not self._fetch_in_progress
                     and not getattr(self, "_street_data_fetch_in_progress", False)
                     and not getattr(self, '_loading', False)):
-                print(f"[Street] No data ready, triggering initial fetch")
+                miab_log("street", f"[Street] No data ready, triggering initial fetch", getattr(self, "settings", None))
                 self._distance_since_fetch = 0
                 self._fetch_in_progress = True
                 threading.Thread(target=self._query_street, daemon=True).start()
@@ -3176,8 +3150,10 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             radius = geo.get("radius", 3000)
             bb = geo.get("bbox")
             country_code = geo.get("country_code", "")
-            
-            print(f"[Prefetch] Resolved place={place!r}, radius={radius}m")
+            osm_type = geo.get("osm_type")
+            osm_id = geo.get("osm_id")
+
+            miab_log("street", f"[Prefetch] Resolved place={place!r}, radius={radius}m", getattr(self, "settings", None))
             
             if bb:
                 minlat, maxlat, minlon, maxlon = bb
@@ -3186,7 +3162,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 radius = 3000
                 place  = "this area"
         except Exception as e:
-            print(f"[Prefetch] Nominatim failed: {e}")
+            miab_log("errors", f"[Prefetch] Nominatim failed: {e}", getattr(self, "settings", None))
             self._prefetch_in_progress = False
             wx.CallAfter(self._announce_transient_then_return, "Could not resolve suburb. Check connection.")
             return
@@ -3226,6 +3202,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         suburb_name=place,
                         country_code=country_code,
                         use_gnaf=self.settings.get("gnaf_enabled", True),
+                        osm_type=osm_type,
+                        osm_id=osm_id,
                     )
 
             cached_pois = self._poi_fetcher.load_cached_pois(clat, clon)
@@ -3240,7 +3218,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             wx.CallAfter(self._status_update,
                          f"Prepared {place}: {street_note} and {poi_note}.", True)
         except Exception as e:
-            print(f"[Prefetch] fetch failed: {e}")
+            miab_log("errors", f"[Prefetch] fetch failed: {e}", getattr(self, "settings", None))
             wx.CallAfter(self._announce_transient_then_return,
                 f"Could not prepare {place}. Server may be busy.")
         finally:
@@ -3289,7 +3267,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 country_probe.lower(),
             )
             if getattr(self, "_water_street_probe_key", None) == water_key:
-                print(f"[Street] Water probe already done for {water_key}; not retrying.")
+                miab_log("street", f"[Street] Water probe already done for {water_key}; not retrying.", getattr(self, "settings", None))
                 wx.CallAfter(
                     self._announce_transient_then_return,
                     "Water area already probed. Move to land or press Space to try again.",
@@ -3297,19 +3275,15 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 return
             self._water_street_probe_key = water_key
             if suburb_probe:
-                print(
-                    f"[Street] Position appears in water ({fetch_seed_lat:.4f},{fetch_seed_lon:.4f}) — "
-                    f"loading streets for {suburb_probe} from the current point"
-                )
+                miab_log("street", f"[Street] Position appears in water ({fetch_seed_lat:.4f},{fetch_seed_lon:.4f}) — "
+                    f"loading streets for {suburb_probe} from the current point", getattr(self, "settings", None))
                 wx.CallAfter(
                     self.update_ui,
                     "Position appears to be in open water. Loading nearest streets."
                 )
             else:
-                print(
-                    f"[Street] Position appears in water ({fetch_seed_lat:.4f},{fetch_seed_lon:.4f}) — "
-                    "loading nearby streets from the current point"
-                )
+                miab_log("street", f"[Street] Position appears in water ({fetch_seed_lat:.4f},{fetch_seed_lon:.4f}) — "
+                    "loading nearby streets from the current point", getattr(self, "settings", None))
                 wx.CallAfter(
                     self.update_ui,
                     "Position appears to be in open water. Loading nearest streets."
@@ -3377,16 +3351,20 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     )
                 self._current_suburb = nominatim_suburb or "this area"
             self._current_country_code = geo.get("country_code", "")
+            self._current_osm_type = geo.get("osm_type")
+            self._current_osm_id = geo.get("osm_id")
             self._prefetch_geo_features_for_point(fetch_seed_lat, fetch_seed_lon)
         else:
             # Geocoding failed - use fallback
-            print("[Street] Geocoding failed, using 3000m radius fallback")
+            miab_log("errors", "[Street] Geocoding failed, using 3000m radius fallback", getattr(self, "settings", None))
             self._street_radius  = 3000
             self._street_barrier = 2700
             self._street_bbox = None
             self._current_suburb = None
             self._current_country_code = ""
-            
+            self._current_osm_type = None
+            self._current_osm_id = None
+
         wx.CallAfter(self._enter_street_mode)
 
     def _enter_street_mode(self):
@@ -3397,10 +3375,14 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self.lat = request_lat
         self.lon = request_lon
         self.street_mode    = True
-        self.listbox.SetFocus()
-        self.listbox.Clear()
-        self.listbox.Append("Street mode")
-        self.listbox.SetSelection(0)
+        # Set content before focusing — a focus event fires as soon as
+        # SetFocus() is called, so the screen reader reads whatever the
+        # listbox already contains at that moment. Setting the text first
+        # means the focus event picks up "Street mode" immediately, instead
+        # of whatever was left over from before (which can read as blank
+        # or "unknown").
+        self.listbox.set_single("Street mode")
+        self._force_listbox_refocus()
         self._road_segments  = []
         self._natural_features = []
         self._address_points = []
@@ -3461,10 +3443,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         prev_country = getattr(self, "last_country_found", "")
         prev_continent = getattr(self, "current_continent", "")
         self.street_mode  = False
-        self.listbox.SetFocus()
-        self.listbox.Clear()
-        self.listbox.Append("Map mode")
-        self.listbox.SetSelection(0)
+        # Content before focus — see matching comment in _enter_street_mode.
+        self.listbox.set_single("Map mode")
+        self._force_listbox_refocus()
         self.street_label = ""
         self._street_auto_land_done = False
         self._jump_street_label = None
@@ -3590,15 +3571,19 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self._street_bbox = geo.get("bbox")
             self._current_suburb = geo.get("suburb", "this area")
             self._current_country_code = geo.get("country_code", "")
+            self._current_osm_type = geo.get("osm_type")
+            self._current_osm_id = geo.get("osm_id")
             self._prefetch_geo_features_for_point(self.lat, self.lon)
         else:
             # Geocoding failed - use fallback
-            print("[Street] Geocoding failed, using 3000m radius fallback")
+            miab_log("errors", "[Street] Geocoding failed, using 3000m radius fallback", getattr(self, "settings", None))
             self._street_radius  = 3000
             self._street_barrier = 2700
             self._street_bbox = None
             self._current_suburb = None
             self._current_country_code = ""
+            self._current_osm_type = None
+            self._current_osm_id = None
         
         # Fetch road data at current position
         wx.CallAfter(self._fetch_road_data)
@@ -3610,7 +3595,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         my_fetch_id = getattr(self, '_street_fetch_id', 0)
         
         if not self.street_mode or self._street_fetch_id != my_fetch_id:
-            print("[Street] Fetch aborted — street mode cancelled or superseded.")
+            miab_log("street", "[Street] Fetch aborted — street mode cancelled or superseded.", getattr(self, "settings", None))
             self._loading = False
             self._street_data_fetch_in_progress = False
             self._quiet_gnaf_reload = False
@@ -3625,6 +3610,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         request_lon = getattr(self, "_street_request_lon", self.lon)
         request_suburb = getattr(self, "_current_suburb", None)
         request_country_code = getattr(self, "_current_country_code", None)
+        request_osm_type = getattr(self, "_current_osm_type", None)
+        request_osm_id = getattr(self, "_current_osm_id", None)
         if _attempt == 1:
             suburb = request_suburb or "this area"
             if getattr(self, "_quiet_gnaf_reload", False):
@@ -3638,7 +3625,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             if (getattr(self, "_street_loading_announced", False)
                     and str(msg).lower().startswith("loading streets")):
                 self._street_loading_announced = False
-                print(f"[Street] Suppressed duplicate status: {msg}")
+                miab_log("street", f"[Street] Suppressed duplicate status: {msg}", None)
                 return
             wx.CallAfter(self._status_update, msg)
 
@@ -3670,10 +3657,12 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 suburb_name=request_suburb,
                 country_code=request_country_code,
                 use_gnaf=self.settings.get("gnaf_enabled", True),
+                osm_type=request_osm_type,
+                osm_id=request_osm_id,
             )
 
             if not self.street_mode or self._street_fetch_id != my_fetch_id:
-                print("[Street] Fetch complete but street mode was cancelled or superseded — discarding.")
+                miab_log("street", "[Street] Fetch complete but street mode was cancelled or superseded — discarding.", getattr(self, "settings", None))
                 self._loading = False
                 self._street_loading_announced = False
                 self._street_data_fetch_in_progress = False
@@ -3710,7 +3699,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             )
             if named_segs < 20 and not from_cache and self._street_radius < 1800:
                 wider = min(self._street_radius * 2, 2000)
-                print(f"[Street] Only {named_segs} named streets — widening to {wider}m and retrying from player position")
+                miab_log("street", f"[Street] Only {named_segs} named streets — widening to {wider}m and retrying from player position", getattr(self, "settings", None))
                 if not getattr(self, "_quiet_gnaf_reload", False):
                     wx.CallAfter(self._status_update,
                                  f"Only {named_segs} streets found, expanding search area...")
@@ -3756,7 +3745,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         dist = math.sqrt(((clat - self.lat)*111000)**2 +
                                          ((clon - self.lon)*111000)**2)
                         if dist > 200:
-                            print(f"[Street] Fast fetch-centre shift: {dist:.0f}m to suburb centre")
+                            miab_log("street", f"[Street] Fast fetch-centre shift: {dist:.0f}m to suburb centre", None)
                             self._recentring = True
                             self._street_fetch_lat = clat
                             self._street_fetch_lon = clon
@@ -3968,7 +3957,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                                          f"Streets fully loaded.  "
                                          f"{len(merged)} streets in area.{size_msg}")
                     except Exception as exc:
-                        print(f"[Street] Stage 2 error: {exc}")
+                        miab_log("errors", f"[Street] Stage 2 error: {exc}", None)
                         self._loading = False
                         self._quiet_gnaf_reload = False
                 threading.Thread(target=_outer_fetch, daemon=True).start()
@@ -3992,7 +3981,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                                  f"is {_wkm:.1f} km wide by {_hkm:.1f} km tall.")
 
         except Exception as e:
-            print(f"[Street] fetch error: {e}")
+            miab_log("errors", f"[Street] fetch error: {e}", getattr(self, "settings", None))
             self._loading = False
             self._street_data_fetch_in_progress = False
             self._street_loading_announced = False
@@ -4647,13 +4636,13 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     if location_info:
                         if feature_name:
                             msg = f"{self.street_label}.  {location_info}: {feature_name}."
-                            print(f"[Query] No streets, {location_info}: {feature_name}, {dist}m from centre")
+                            miab_log("street", f"[Query] No streets, {location_info}: {feature_name}, {dist}m from centre", getattr(self, "settings", None))
                         else:
                             msg = f"{self.street_label}.  {location_info}."
-                            print(f"[Query] No streets, {location_info}, {dist}m from centre")
+                            miab_log("street", f"[Query] No streets, {location_info}, {dist}m from centre", getattr(self, "settings", None))
                     else:
                         msg = f"{self.street_label}."
-                        print(f"[Query] No street data, {dist}m from centre")
+                        miab_log("street", f"[Query] No street data, {dist}m from centre", getattr(self, "settings", None))
                     
                     # Silent - _update_street_display owns speech in street mode
                 elif self.street_label:
@@ -4714,6 +4703,17 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             "p queued live POI search because another live fetch is active or cooling down.",
             self.settings,
         )
+        # Previously this was silent — logged to file only, with nothing
+        # spoken to the user. Since the caller sets self._loading = False
+        # right before returning here, the loading-tick heartbeat doesn't
+        # fire during this wait either, so a queued search gave zero
+        # audible feedback until the eventual completion chime. Announce
+        # it immediately instead.
+        wx.CallAfter(
+            self._status_update,
+            "Still working on the last search — this one will run next.",
+            True,
+        )
         self._schedule_pending_poi_live_search(generation)
 
     def _poi_live_fetch_started(self):
@@ -4732,7 +4732,16 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         cooldown = 15.0
         remaining = max(0.0, cooldown - (time.time() - getattr(self, "_poi_live_last_completed_at", 0.0)))
         delay_ms = int(max(remaining, 0.25) * 1000)
-        wx.CallLater(delay_ms, self._run_pending_poi_live_search, generation)
+        # wx.CallLater (unlike wx.CallAfter) creates and starts a wx.Timer
+        # immediately, which wx requires to happen on the main thread. This
+        # method is called both from the main thread (when a search is first
+        # queued) and from background fetch-completion threads (via
+        # _poi_live_fetch_finished) — calling wx.CallLater directly from the
+        # latter crashed with "timer can only be started from the main
+        # thread", silently dropping the queued search. Routing the
+        # CallLater creation itself through CallAfter makes this safe from
+        # either thread.
+        wx.CallAfter(wx.CallLater, delay_ms, self._run_pending_poi_live_search, generation)
 
     def _run_pending_poi_live_search(self, generation):
         params = getattr(self, "_pending_poi_live_search", None)
@@ -4898,34 +4907,35 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                             self._loading = False
                             self._poi_fetch_in_progress = False
                             return
+                        if max(search_radii) <= POI_BACKGROUND_RADIUS_METRES:
+                            live_reason = (
+                                "typed search may have matches missing from "
+                                "the background cache"
+                            )
+                        else:
+                            live_reason = (
+                                f"configured radius {max(search_radii)}m exceeds "
+                                f"background radius {POI_BACKGROUND_RADIUS_METRES}m"
+                            )
                         miab_log(
                             "verbose",
-                            f"p doing live {source.upper()} fetch: "
-                            f"configured radius {max(search_radii)}m exceeds "
-                            f"background radius {POI_BACKGROUND_RADIUS_METRES}m.",
+                            f"p doing live {source.upper()} fetch: {live_reason}.",
                             self.settings,
                         )
                     elif name_filter or street_filter:
-                        self._poi_list     = []
-                        self._poi_index    = 0
-                        self._loading      = False
-                        self._poi_fetch_in_progress = False
                         miab_log(
                             "verbose",
                             f"p in-memory background POIs cover this area; "
                             f"no cached {category_key} result matching "
-                            f"name='{name_filter}' street='{street_filter}'.",
+                            f"name='{name_filter}' street='{street_filter}'; "
+                            f"continuing with live {source.upper()} search.",
                             self.settings,
                         )
                         wx.CallAfter(
-                            self._retry_poi_name_search,
-                            category_key,
-                            name_filter,
-                            street_filter,
-                            source,
-                            max(search_radii),
+                            self._status_update,
+                            "No cached match yet. Searching live nearby...",
+                            True,
                         )
-                        return
                     else:
                         miab_log(
                             "verbose",
@@ -5024,12 +5034,21 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
             pois = []
             collected_name_pois = []
+            collected_name_only_pois = []
             collected_seen: set[str] = set()
+            collected_name_only_seen: set[str] = set()
             attempted_radius = radius
 
             def _collect(poi_list: list) -> None:
                 for poi in poi_list:
-                    if not _name_match(poi) or not _street_match(poi):
+                    name_matches = _name_match(poi)
+                    if name_filter and street_filter and name_matches:
+                        dedup_name = (poi.get("label", "").split(",")[0] or "").lower()
+                        dedup = f"{dedup_name}|{poi.get('kind','')}|{round(poi['lat'],5)}|{round(poi['lon'],5)}"
+                        if dedup not in collected_name_only_seen:
+                            collected_name_only_seen.add(dedup)
+                            collected_name_only_pois.append(poi)
+                    if not name_matches or not _street_match(poi):
                         continue
                     dedup_name = (poi.get("label", "").split(",")[0] or "").lower()
                     dedup = f"{dedup_name}|{poi.get('kind','')}|{round(poi['lat'],5)}|{round(poi['lon'],5)}"
@@ -5078,7 +5097,15 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     cached_raw_pois = _live_cache_get("category", source, category_key, attempt_radius)
                     raw_pois = cached_raw_pois
                     if raw_pois is None:
-                        if not search_beep_started:
+                        # Skip the searching sound entirely when a result was
+                        # already presented instantly from the in-memory
+                        # background cache (cached_presented). In that case
+                        # this live fetch is just a silent "just in case"
+                        # supplementary check the user isn't actively waiting
+                        # on — there's no real searching happening from their
+                        # perspective, so playing the alarm here is exactly
+                        # the "alarm with nothing to search for" bug reported.
+                        if not search_beep_started and not cached_presented:
                             try:
                                 self.sound.play_file(r"c:\windows\media\alarm09.wav", loops=-1)
                                 search_beep_started = True
@@ -5151,6 +5178,14 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
             if name_filter or street_filter:
                 pois = collected_name_pois
+                if not pois and name_filter and street_filter and collected_name_only_pois:
+                    pois = collected_name_only_pois
+                    miab_log(
+                        "verbose",
+                        f"p found no live POIs matching name='{name_filter}' "
+                        f"on street='{street_filter}'; showing name-only nearby matches.",
+                        self.settings,
+                    )
 
             if getattr(self, "_poi_explore_stack", []):
                 self._loading = False
@@ -5272,9 +5307,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             and here_key
             and not poi.get("_here_detail_fetched")
         )
-        print(f"[POIDetail] key={key_num} name={name!r} needs_detail={needs_detail} "
+        miab_log("feature_usage", f"[POIDetail] key={key_num} name={name!r} needs_detail={needs_detail} "
               f"already_fetched={bool(poi.get('_here_detail_fetched'))} "
-              f"have_here_key={bool(here_key)}")
+              f"have_here_key={bool(here_key)}", getattr(self, "settings", None))
 
         if needs_detail:
             self._poi_detail_announce(f"Looking up {name}...")
@@ -5285,7 +5320,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     if detail:
                         poi.update(detail)
                 except Exception as exc:
-                    print(f"[POIDetail] HERE lookup failed: {exc}")
+                    miab_log("errors", f"[POIDetail] HERE lookup failed: {exc}", None)
                 poi["_here_detail_fetched"] = True
                 wx.CallAfter(self._poi_detail_dispatch, key_num, poi, name)
             threading.Thread(target=_fetch_and_dispatch, daemon=True).start()
@@ -5305,7 +5340,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         try:
             info = self._serper.place_info(name, suburb)
         except Exception as exc:
-            print(f"[Reviews] place lookup failed: {exc}")
+            miab_log("errors", f"[Reviews] place lookup failed: {exc}", getattr(self, "settings", None))
             return {}
         return info if isinstance(info, dict) else {}
 
@@ -5415,7 +5450,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         try:
             webbrowser.open("https://www.google.com/search?q=" + urllib.parse.quote_plus(query))
         except Exception as exc:
-            print(f"[Reviews] open failed for {name}: {exc}")
+            miab_log("errors", f"[Reviews] open failed for {name}: {exc}", getattr(self, "settings", None))
             self._poi_detail_announce(f"Could not open the browser for {name}.")
 
     def _poi_detail_announce(self, text: str) -> None:
@@ -5545,7 +5580,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                                     distinctive, compact)
                                 break
                 except Exception as exc:
-                    print(f"[Menu] search failed: {exc}")
+                    miab_log("errors", f"[Menu] search failed: {exc}", None)
                 if results:
                     wx.CallAfter(self._show_menu_links_dialog, name, results)
                 else:
@@ -5726,7 +5761,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         scored.sort(key=lambda t: (t[0], t[1]))
         out = [item for _, _, item in scored]
         delivery = sum(1 for pr, _, _ in scored if pr == 0)
-        print(f"[Menu] kept {len(out)} of {len(results)} result(s) ({delivery} delivery)")
+        miab_log("feature_usage", f"[Menu] kept {len(out)} of {len(results)} result(s) ({delivery} delivery)", getattr(self, "settings", None))
         return out
 
     def _venue_domains(self, poi: dict, raw: list, distinctive: list, compact: str) -> list:
@@ -5772,7 +5807,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             # own "Menu" links instead of guessing.
             found = self._harvest_menu_from_home(base, name)
         if found:
-            print(f"[Menu] probe found {len(found)} menu page(s) on {host}")
+            miab_log("feature_usage", f"[Menu] probe found {len(found)} menu page(s) on {host}", getattr(self, "settings", None))
         return found
 
     def _harvest_menu_from_home(self, base: str, name: str) -> list:
@@ -5905,7 +5940,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         try:
             webbrowser.open(url)
         except Exception as exc:
-            print(f"[Menu] open failed for {name}: {exc}")
+            miab_log("errors", f"[Menu] open failed for {name}: {exc}", getattr(self, "settings", None))
             self._poi_detail_announce(f"Could not open the browser for {name}.")
 
     def _announce_address(self):
@@ -6033,7 +6068,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 
             except Exception as e:
                 # Always announce SOMETHING, even on total failure
-                print(f"[Address Lookup] Error: {e}")
+                miab_log("errors", f"[Address Lookup] Error: {e}", None)
                 street = getattr(self, 'street_label', '') or 'Unknown location'
                 suburb = getattr(self, "_current_suburb", "") or ""
                 wx.CallAfter(self._status_update, f"{street}" + (f", {suburb}" if suburb else ""))
@@ -6163,6 +6198,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 "_mistral_stop_seq",
                 "_transit_route",
                 "_transit_stop_seq",
+                "_ask_mistral",
                 "sentinel",
             }
             if plat is not None and plon is not None and not suppress_travel:
@@ -6191,13 +6227,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         if force_top:
             self._poi_index = 0
         target_index = 0 if force_top else max(0, min(self._poi_index, len(labels) - 1))
-        # Clear first so no selection-shift MSAA events fire during item removal.
-        self.listbox.Clear()
-        for lbl in labels:
-            self.listbox.Append(lbl)
-        # SetSelection before SetFocus: focus event then carries the selection,
-        # so NVDA reads the item exactly once on focus.
-        self.listbox.SetSelection(target_index)
+        # Append the new items, select the target one, then delete the old
+        # items — never leaves the listbox briefly empty (which is what a
+        # Clear()-first sequence does, and what a screen reader can catch
+        # as an empty MSAA object right as you land on a POI).
+        self.listbox.set_many(labels, sel=target_index)
         self._poi_index = target_index
         self._poi_populating = False
         if not self.listbox.HasFocus():
@@ -6937,7 +6971,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             pass   # leaf node
         elif kind == "_ask_mistral":
             if not self._mistral.is_configured:
-                print("[Mistral] Not configured — no API key.")
+                miab_log("api_calls", "[Mistral] Not configured — no API key.", getattr(self, "settings", None))
                 self._transit_nav_announce(
                     "No Mistral API key configured. "
                     "Add your key in Settings (Ctrl+comma) under Mistral API key.")
@@ -7146,6 +7180,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             if geo:
                 self._current_suburb = geo.get("suburb")
                 self._current_country_code = geo.get("country_code", "")
+                self._current_osm_type = geo.get("osm_type")
+                self._current_osm_id = geo.get("osm_id")
                 radius = geo.get("radius", 3000)
                 self._street_radius  = radius
                 self._street_barrier = int(radius * 0.9)
@@ -7155,6 +7191,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 self._street_radius  = 3000
                 self._street_barrier = 2700
                 self._current_suburb = None
+                self._current_osm_type = None
+                self._current_osm_id = None
             cache_entry = _load_road_cache(
                 self._street_fetcher._cache_dir,
                 lat, lon,
@@ -7413,9 +7451,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             addr_pts = getattr(self, '_address_points', [])
             # Log all address points on this street for debugging
             on_street = [ap for ap in addr_pts if _bare(ap.get('street', '')) == bare_target]
-            print(f"[StreetJump] Seeking #{house_number} on '{street_name}' "
+            miab_log("street", f"[StreetJump] Seeking #{house_number} on '{street_name}' "
                   f"(bare='{bare_target}'). {len(on_street)} address points on street. "
-                  f"Numbers: {sorted(set(ap['number'] for ap in on_street))[:20]}")
+                  f"Numbers: {sorted(set(ap['number'] for ap in on_street))[:20]}", getattr(self, "settings", None))
 
             def _pick_address_candidate(candidates):
                 """Choose the address whose street projection is most plausible."""
@@ -7435,8 +7473,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 the raw address point and force a data reload at that location."""
                 if projected and snap_d <= 100:
                     self.lat, self.lon, _ = projected
-                    print(f"[StreetJump] Snapped #{best_pt['number']} onto {street_name} "
-                          f"({snap_d:.1f}m from address point) at ({self.lat:.5f},{self.lon:.5f})")
+                    miab_log("street", f"[StreetJump] Snapped #{best_pt['number']} onto {street_name} "
+                          f"({snap_d:.1f}m from address point) at ({self.lat:.5f},{self.lon:.5f})", None)
                 else:
                     self.lat = best_pt['lat']
                     self.lon = best_pt['lon']
@@ -7449,8 +7487,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         self._road_fetch_lat = None
                         self._road_fetch_lon = None
                     else:
-                        print(f"[StreetJump] No projection found for #{best_pt['number']}; "
-                              f"using address point ({self.lat:.5f},{self.lon:.5f})")
+                        miab_log("street", f"[StreetJump] No projection found for #{best_pt['number']}; "
+                              f"using address point ({self.lat:.5f},{self.lon:.5f})", None)
 
             # Exact match first
             exact = [ap for ap in on_street
@@ -7458,7 +7496,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                      and ap.get('lat') and ap.get('lon')]
             if exact:
                 snap_d, _from_here, best_pt, projected = _pick_address_candidate(exact)
-                print(f"[StreetJump] Exact match #{best_pt['number']} at ({best_pt['lat']:.5f},{best_pt['lon']:.5f})")
+                miab_log("street", f"[StreetJump] Exact match #{best_pt['number']} at ({best_pt['lat']:.5f},{best_pt['lon']:.5f})", getattr(self, "settings", None))
                 _apply_address_candidate(best_pt, projected, snap_d)
                 best_lat, best_lon = self.lat, self.lon
                 number_found = True
@@ -7470,7 +7508,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                          and ap.get('lat') and ap.get('lon')]
                 if fuzzy:
                     snap_d, _from_here, best_pt, projected = _pick_address_candidate(fuzzy)
-                    print(f"[StreetJump] Fuzzy match #{best_pt['number']} at ({best_pt['lat']:.5f},{best_pt['lon']:.5f})")
+                    miab_log("street", f"[StreetJump] Fuzzy match #{best_pt['number']} at ({best_pt['lat']:.5f},{best_pt['lon']:.5f})", getattr(self, "settings", None))
                     _apply_address_candidate(best_pt, projected, snap_d)
                     best_lat, best_lon = self.lat, self.lon
                     number_found = True
@@ -7487,8 +7525,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         _gap, _num, best_pt = min(numeric, key=lambda item: (item[0], item[1]))
                         projected = _nearest_on_selected_street(best_pt['lat'], best_pt['lon'])
                         snap_d = projected[2] if projected else float("inf")
-                        print(f"[StreetJump] No exact match for #{house_number}; nearest known "
-                              f"number is #{best_pt['number']} at ({best_pt['lat']:.5f},{best_pt['lon']:.5f})")
+                        miab_log("street", f"[StreetJump] No exact match for #{house_number}; nearest known "
+                              f"number is #{best_pt['number']} at ({best_pt['lat']:.5f},{best_pt['lon']:.5f})", getattr(self, "settings", None))
                         _apply_address_candidate(best_pt, projected, snap_d)
                         best_lat, best_lon = self.lat, self.lon
                         number_found = True
@@ -7496,10 +7534,10 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         _speak(f"Number {house_number} not found. Jumping to nearest known number, "
                                f"{resolved_house_number} {street_name}.")
                     else:
-                        print(f"[StreetJump] No match for #{house_number} on '{street_name}'")
+                        miab_log("street", f"[StreetJump] No match for #{house_number} on '{street_name}'", getattr(self, "settings", None))
                         _speak(f"Number {house_number} not found. Jumping to nearest part of {street_name}.")
             else:
-                print(f"[StreetJump] No match for #{house_number} on '{street_name}'")
+                miab_log("street", f"[StreetJump] No match for #{house_number} on '{street_name}'", getattr(self, "settings", None))
                 _speak(f"Number {house_number} not found. Jumping to nearest part of {street_name}.")
 
         # Centre the movement barrier on the jumped position so arrow keys
@@ -7591,7 +7629,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 return
             wx.CallAfter(self._push_explore, children, parent_name)
         except Exception as e:
-            print(f"[Explore] error: {e}")
+            miab_log("errors", f"[Explore] error: {e}", getattr(self, "settings", None))
             wx.CallAfter(self._announce_and_restore_poi_list,
                 f"Could not load {parent_name}. Server may be busy.")
     def _push_explore(self, child_pois, parent_name):
@@ -7856,7 +7894,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 parts = urllib.parse.urlsplit(link)
                 homepage = f"{parts.scheme}://{parts.netloc}/"
                 status = self._website_status(homepage, timeout=5.0)
-                print(f"[Website] search candidate {homepage} -> {status}")
+                miab_log("api_calls", f"[Website] search candidate {homepage} -> {status}", getattr(self, "settings", None))
                 if status != "dead":
                     return homepage
         return ""
@@ -7869,7 +7907,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         url: str,
     ) -> tuple[str, bool]:
         """Resolve a working venue website. Returns (url, had_listed_url)."""
-        print(f"[Website] resolving for {name!r}: tagged url={url!r}")
+        miab_log("api_calls", f"[Website] resolving for {name!r}: tagged url={url!r}", getattr(self, "settings", None))
         had_listed_url = bool((url or "").strip())
         # No tagged website — ask HERE once for one.
         if (not url and self.settings.get("here_api_key", "").strip()
@@ -7889,9 +7927,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         # Validate; drop a dead website so the search fallbacks take over.
         if url:
             status = self._website_status(url)
-            print(f"[Website] {name!r}: {url} -> {status}")
+            miab_log("api_calls", f"[Website] {name!r}: {url} -> {status}", getattr(self, "settings", None))
             if status == "dead":
-                print(f"[Website] {url} is dead — searching for the homepage")
+                miab_log("api_calls", f"[Website] {url} is dead — searching for the homepage", getattr(self, "settings", None))
                 url = ""
 
         # No (valid) website — find the real homepage via the search proxy.
@@ -8304,7 +8342,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                                 sname_bare in origin_bare):
                 label = f"YOU ARE HERE: {sname}{platform}"
                 focus_index = i
-                print(f"[Transit] YOU ARE HERE matched '{sname}' for origin '{origin}'")
+                miab_log("navigation", f"[Transit] YOU ARE HERE matched '{sname}' for origin '{origin}'", getattr(self, "settings", None))
             else:
                 label = f"{sname}{platform}"
             child_pois.append({
@@ -8315,7 +8353,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             })
         if focus_index == 0 and origin_bare:
             all_names = [_bare(s['name'].lower().strip()) for s in stops[:5]]
-            print(f"[Transit] No YOU ARE HERE match for '{origin_bare}'. First 5: {all_names}")
+            miab_log("navigation", f"[Transit] No YOU ARE HERE match for '{origin_bare}'. First 5: {all_names}", getattr(self, "settings", None))
         # Stash raw GTFS stops (with real coords) so Ctrl+Alt+F can query food nearby
         self._active_transit_route = {"name": route_name, "stops": stops}
 
@@ -8602,11 +8640,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     headers={"User-Agent": "MapInABox/1.0"},
                 )
                 with urllib.request.urlopen(req, timeout=10) as resp:
-                    print(f"[OSM Note] Posted for '{name}': HTTP {resp.status}")
+                    miab_log("api_calls", f"[OSM Note] Posted for '{name}': HTTP {resp.status}", None)
                 wx.CallAfter(self._status_update,
                     f"'{name}' reported to OpenStreetMap.")
             except Exception as e:
-                print(f"[OSM Note] Failed: {e}")
+                miab_log("errors", f"[OSM Note] Failed: {e}", None)
                 wx.CallAfter(self._status_update,
                     f"OSM report failed for '{name}'.")
             finally:
@@ -8683,11 +8721,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     headers={"User-Agent": "MapInABox/1.0"},
                 )
                 with urllib.request.urlopen(req, timeout=10) as resp:
-                    print(f"[OSM Note] Rename posted for '{old_name}': HTTP {resp.status}")
+                    miab_log("api_calls", f"[OSM Note] Rename posted for '{old_name}': HTTP {resp.status}", None)
                 wx.CallAfter(self._status_update,
                     f"Renamed to '{new_name}' and reported to OpenStreetMap.")
             except Exception as e:
-                print(f"[OSM Note] Rename report failed: {e}")
+                miab_log("errors", f"[OSM Note] Rename report failed: {e}", None)
                 wx.CallAfter(self._status_update,
                     f"Renamed to '{new_name}' locally. OSM report failed.")
             finally:
@@ -9198,39 +9236,16 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _emit_speech(self, text, braille_text=None, interrupt: bool = True,
                      second_braille: bool = True) -> None:
-        """The single AO2 output path — speak + braille, with an optional second
-        braille pass. JAWS, NVDA and VoiceOver all go through here."""
-        text = str(text)
-        braille_text = text if braille_text is None else str(braille_text)
-        def _emit():
-            _speak(text, interrupt=interrupt)
-            _braille(braille_text)
-            if second_braille:
-                try:
-                    # Some outputs need a second braille pass after speech starts.
-                    wx.CallLater(80, lambda v=braille_text: _braille(v))
-                except Exception:
-                    pass
-        wx.CallAfter(_emit)
+        """Speak + braille through the shared dispatcher."""
+        self.speech.emit(text, braille_text, interrupt, second_braille)
 
     def _announce_transient(self, msg, braille_msg=None) -> None:
         """Speak and braille a transient announcement without touching the listbox."""
-        msg_text = str(msg)
-        self._verbose_trace(f"transient announcement applied: {msg!r}")
-        self._emit_speech(msg_text, braille_msg)
+        self.speech.transient(msg, braille_msg)
 
     def _announce_mode_change(self, msg) -> None:
         """Announce map/street mode once, ignoring immediate duplicates."""
-        msg_text = str(msg)
-        now = time.time()
-        last_text = getattr(self, "_last_mode_announcement_text", "")
-        last_at = getattr(self, "_last_mode_announcement_at", 0.0)
-        if msg_text == last_text and now - last_at < 1.25:
-            self._verbose_trace(f"mode announcement suppressed duplicate: {msg_text!r}")
-            return
-        self._last_mode_announcement_text = msg_text
-        self._last_mode_announcement_at = now
-        self._announce_transient(msg_text)
+        self.speech.mode_change(msg)
 
     def _announce_transient_then_return(self, msg, delay_ms=2000, focus_target=None) -> None:
         """Announce a warning, then return focus after a short pause."""
@@ -9379,6 +9394,58 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         if getattr(self, "_poi_list", []):
             wx.CallAfter(self.listbox.SetFocus)
 
+    def _handle_f2_tap(self):
+        """F2: repeat current location. Double-tap within 0.6s: spell it
+        out letter by letter. Triple-tap: copy it to the clipboard.
+
+        Each press fires its action immediately (no waiting to see if
+        another tap follows) — a rapid follow-up press just interrupts the
+        prior speech with the escalated action, same as pressing F2 once
+        always has done.
+        """
+        now = time.time()
+        last_at = getattr(self, "_f2_last_tap_at", 0.0)
+        tap_window = 0.6
+        count = (getattr(self, "_f2_tap_count", 0) + 1) if (now - last_at) <= tap_window else 1
+        self._f2_tap_count = count
+        self._f2_last_tap_at = now
+
+        if count == 1:
+            self._repeat_current_location(force=True)
+        elif count == 2:
+            self._spell_current_location()
+        else:
+            self._copy_current_location_to_clipboard()
+            self._f2_tap_count = 0  # next press after a triple starts fresh
+
+    def _spell_current_location(self):
+        """Double-tap F2 — spell the current location letter by letter."""
+        label = self._last_landed_object_label()
+        if not label:
+            self._status_update("Nothing to spell.", force=True)
+            return
+        spelled = " ".join(ch if ch.strip() else "," for ch in label)
+        self._status_update(spelled, force=True)
+
+    def _copy_current_location_to_clipboard(self):
+        """Triple-tap F2 — copy the current location to the clipboard."""
+        label = self._last_landed_object_label()
+        if not label:
+            self._status_update("Nothing to copy.", force=True)
+            return
+        try:
+            if wx.TheClipboard.Open():
+                try:
+                    wx.TheClipboard.SetData(wx.TextDataObject(label))
+                finally:
+                    wx.TheClipboard.Close()
+                self._status_update(f"Copied: {label}", force=True)
+            else:
+                self._status_update("Could not access the clipboard.", force=True)
+        except Exception as e:
+            miab_log("errors", f"F2 clipboard copy failed: {e}", getattr(self, "settings", None))
+            self._status_update("Could not copy to clipboard.", force=True)
+
     def _repeat_current_location(self, force=False, allow_unknown=True):
         """Repeat the last landed object through AO2 speech and braille."""
         if not force:
@@ -9415,6 +9482,23 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 _speak(label)
 
         wx.CallLater(delay_ms, _repeat_if_current)
+
+    def _force_listbox_refocus(self) -> None:
+        """Force a genuine blur+focus cycle on the listbox.
+
+        A plain self.listbox.SetFocus() is a no-op at the OS level when the
+        listbox already has focus (which it usually does), so no real
+        focus-changed event fires. JAWS still re-reads the object's content
+        on a redundant SetFocus() call, but NVDA relies on an actual
+        transition to know to re-query it — hence "works in JAWS, not
+        NVDA" for mode-change announcements. Briefly moving focus to the
+        frame and back creates two real transitions instead of a no-op.
+        """
+        try:
+            self.SetFocus()
+        except Exception:
+            pass
+        self.listbox.SetFocus()
 
     def _focus_map_window_silently(self) -> None:
         """Focus the map command target through one shared path."""
@@ -9522,7 +9606,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._status_update(country if country else "Country unknown.", force=True)
 
     def _announce_nearest_city_only(self):
-        """Shift+C in map mode — speak the nearest city/locality only."""
+        """N in map mode — speak the nearest city/locality only."""
         if self.lat < -60.0:
             self._status_update("Antarctica", force=True)
             return
@@ -9818,7 +9902,15 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             pass
 
     def _on_loading_tick(self, event):
-        """Timer tick for loading feedback."""
+        """Timer tick for loading feedback (street loading only).
+
+        POI fetches have their own dedicated "searching" sound
+        (alarm09.wav, looped) rather than this heartbeat — playing both
+        at once was the actual bug, not the tick itself. This guard
+        restores the original behaviour: the tick stops as soon as
+        street loading (self._loading) finishes, and does not also run
+        during POI fetches.
+        """
         if not getattr(self, '_loading', False):
             return
         if getattr(self, '_poi_fetch_in_progress', False):
@@ -10339,7 +10431,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 self._walk_graph = self._build_walk_graph()
                 self._nav.set_graph(self._walk_graph)
             except Exception as exc:
-                print(f"[StreetSurvey] Walk graph build failed: {exc}")
+                miab_log("errors", f"[StreetSurvey] Walk graph build failed: {exc}", getattr(self, "settings", None))
                 return []
         graph = self._walk_graph or {}
         nodes = graph.get("nodes", {})
@@ -10785,7 +10877,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         if shift and not primary and key == wx.WXK_F2:
             self._announce_climate_zone(); return True
         if no_mod and key == wx.WXK_F2:
-            self._repeat_current_location(force=True)
+            self._handle_f2_tap()
             return True
         if shift and not primary and key == wx.WXK_F3:
             self._status_update(self.sound.volume_down(), force=True); return True
@@ -10975,8 +11067,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 self._announce_current_region(); return True
             if no_mod and (key == ord('C') or key == ord('c')):
                 self._announce_current_country(); return True
-            if shift and not primary and (key == ord('C') or key == ord('c')):
-                miab_log("feature_usage", "Key: Shift+C (nearest city only)", self.settings)
+            if no_mod and (key == ord('N') or key == ord('n')):
+                miab_log("feature_usage", "Key: N (nearest city only)", self.settings)
                 self._announce_nearest_city_only(); return True
 
         if getattr(self, '_nav_active', False):
@@ -11028,8 +11120,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 miab_log("feature_usage", "Key: X (nearest intersection)", self.settings)
                 self._announce_nearest_intersection()
             return True
-        if no_mod and (key == ord('N') or key == ord('n')):
-            miab_log("feature_usage", "Key: N (nearby features)", self.settings)
+        if no_mod and (key == ord('G') or key == ord('g')):
+            miab_log("feature_usage", "Key: G (nearby features)", self.settings)
             self._announce_nearby_features(); return True
         if no_mod and (key == ord('P') or key == ord('p')):
             miab_log("feature_usage", "Key: p (nearby menu)", self.settings)
@@ -11039,8 +11131,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             if no_mod and (key == ord('T') or key == ord('t')):
                 miab_log("feature_usage", "Key: T (local time)", self.settings)
                 self.announce_time();  return True
-            if shift and not primary and (key == ord('T') or key == ord('t')):
-                miab_log("feature_usage", "Key: Shift+T (timezone)", self.settings)
+            if no_mod and (key == ord('Z') or key == ord('z')):
+                miab_log("feature_usage", "Key: Z (timezone)", self.settings)
                 self._announce_timezone(); return True
             if no_mod and (key == ord('S') or key == ord('s')):
                 miab_log("feature_usage", "Key: S (sunrise/sunset)", self.settings)
@@ -11803,9 +11895,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         try:
             with open(p, "w", encoding="utf-8") as f:
                 json.dump(op_map, f, indent=2)
-            print(f"[GTFS] Saved operator map: '{operator_key}' → feed {feed_id}")
+            miab_log("api_calls", f"[GTFS] Saved operator map: '{operator_key}' → feed {feed_id}", getattr(self, "settings", None))
         except Exception as exc:
-            print(f"[GTFS] Failed to save operator map: {exc}")
+            miab_log("errors", f"[GTFS] Failed to save operator map: {exc}", getattr(self, "settings", None))
 
     def _resume_location_sound(self):
         """Re-start the country/region ambient sound and refresh the UI label."""
@@ -11834,7 +11926,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             "Shift+arrows: fine movement.",
             "Ctrl+arrows: move in large steps (~333km) for fast long-distance navigation.",
             "Ctrl+Alt+arrows: jump to the nearest foreign country in that direction.",
-            "F2: repeat last landed object.",
+            "F2: repeat last landed object. Double-tap: spell it out. Triple-tap: copy to clipboard.",
             "Shift+F2: climate zone.",
             "F3: latitude.",
             "F4: longitude.",
@@ -11860,18 +11952,18 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             "Ctrl+Shift+F: add current place to favourites.",
             "J: jump to city, country, or coordinates.",
             "Ctrl+J: jump to a saved mark.",
-            "G: toggle GeoFeatures on/off.",
-            "Shift+C: nearest city only.",
+            "Shift+F5: toggle GeoFeatures on/off.",
+            "N: nearest city only.",
             "Ctrl+M: save current position as mark (then press 1, 2, or 3 to choose a slot).",
             "Ctrl+Shift+P: save current position as a personal POI.",
             "Ctrl+Shift+M: clear a mark (then press 1, 2, or 3).",
             "Ctrl+1, Ctrl+2, Ctrl+3: read a mark's distance from here.",
             "Shift+Alt+M: compare distances between all saved marks.",
-            "N: nearby geographic features.",
+            "G: nearby geographic features.",
             "P: POI search.",
             "POI menu: selected POI address, hours, phone, website, Mistral, menu lookup, and website launch.",
             "T: local time.",
-            "Shift+T: timezone.",
+            "Z: timezone.",
             "S: sunrise and sunset.",
             "Ctrl+Shift+S: satellite view.",
             "Ctrl+Shift+Alt+S: street view of selected POI (falls back to satellite if no coverage).",
@@ -11899,7 +11991,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 "Ctrl+Right: snap to nearest cross street.",
                 "H: current heading.",
                 "X: nearest intersection.",
-                "N: nearby features.",
+                "G: nearby features.",
                 "A: address lookup.",
                 "R: reverse direction.",
                 "F: leave free mode.",
@@ -11923,7 +12015,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 "R: turn around.",
                 "H: current heading.",
                 "X: nearest intersection.",
-                "N: nearby features.",
+                "G: nearby features.",
                 "A: address lookup.",
                 "P: POI search.",
                 "Ctrl+Alt+P: refresh POIs.",
@@ -11953,7 +12045,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 "P: POI search.",
                 "Ctrl+Alt+P: refresh POIs.",
                 "X: nearest cross street.",
-                "N: nearby features.",
+                "G: nearby features.",
                 "I: street summary.",
                 "W: walking mode.",
                 "F: free mode.",
@@ -12188,7 +12280,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 bmp = wx.StaticBitmap(dlg, bitmap=wx.Bitmap(wx_img))
                 img_sizer.Add(bmp, 0, wx.ALL, 6)
             except Exception as e:
-                print(f"[UI] {title} image display failed: {e}")
+                miab_log("errors", f"[UI] {title} image display failed: {e}", getattr(self, "settings", None))
         vs.Add(img_sizer, 0, wx.ALL | wx.CENTER, 4)
 
         txt = wx.TextCtrl(
@@ -12223,7 +12315,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             with open(PLACE_CACHE_PATH, "w", encoding="utf-8") as f:
                 json.dump(places, f, ensure_ascii=False, indent=2)
         except Exception as exc:
-            print(f"[PlaceCache] Save failed: {exc}")
+            miab_log("errors", f"[PlaceCache] Save failed: {exc}", getattr(self, "settings", None))
 
     def _cache_place_result(self, label, lat, lon):
         places = self._load_place_cache()
@@ -12315,7 +12407,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             with urllib.request.urlopen(req, timeout=8) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except Exception as exc:
-            print(f"[Jump] Online search failed for {query!r}: {exc}")
+            miab_log("errors", f"[Jump] Online search failed for {query!r}: {exc}", getattr(self, "settings", None))
             return []
 
         candidates = []
@@ -13089,7 +13181,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 with open(self._flight_dest_cache_path, "w", encoding="utf-8") as _f:
                     json.dump(self._flight_dest_cache, _f, ensure_ascii=False, indent=1)
             except Exception as exc:
-                print(f"[FlightCache] Save failed: {exc}")
+                miab_log("errors", f"[FlightCache] Save failed: {exc}", None)
             wx.CallAfter(status_lbl.SetLabel, msg)
             if lb is not None and idx is not None:
                 num   = flight["flight_num"] if flight["airline"] else ""
@@ -13118,7 +13210,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         _save_and_update(route_str, flight["airline"] or query)
                         return
                 except Exception as exc:
-                    print(f"[FlightDest] OpenSky route lookup failed: {exc}")
+                    miab_log("errors", f"[FlightDest] OpenSky route lookup failed: {exc}", None)
 
             # ── Fall back to AviationStack if key is configured ────────
             if not self._aviationstack.configured:

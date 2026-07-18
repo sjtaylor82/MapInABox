@@ -25,6 +25,7 @@ import re
 import time
 import urllib.parse
 import urllib.request
+from logging_utils import miab_log
 
 from geo import (
     dist_metres, bearing_deg, compass_name,
@@ -124,7 +125,7 @@ def _forward_geocode_address(address: str) -> tuple[float, float] | None:
         with urllib.request.urlopen(req, timeout=8) as resp:
             data = json.loads(resp.read().decode())
     except Exception as exc:
-        print(f"[POI] Manual shopping geocode failed for {address!r}: {exc}")
+        miab_log("errors", f"[POI] Manual shopping geocode failed for {address!r}: {exc}", None)
         _MANUAL_SHOPPING_GEOCODE_CACHE[cache_key] = None
         return None
 
@@ -790,7 +791,7 @@ def _parse_here_item(
     kind = _HERE_KIND_MAP.get(raw_kind)
     if kind is None:
         if raw_kind:
-            print(f"[HERE] Unmapped category '{raw_kind}' for '{title}' — passing through as generic")
+            miab_log("api_calls", f"[HERE] Unmapped category '{raw_kind}' for '{title}' — passing through as generic", None)
         kind = "generic"
 
     if kind in POI_KIND_EXCLUDE:
@@ -1213,7 +1214,7 @@ class PoiFetcher:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read().decode())
         except Exception as e:
-            print(f"[HERE] Request failed: {e}")
+            miab_log("errors", f"[HERE] Request failed: {e}", getattr(self, "settings", None))
             return []
 
         seen: set = set()
@@ -1228,8 +1229,8 @@ class PoiFetcher:
             seen.add(dedup)
             pois.append(poi)
 
-        print(f"[HERE] Got {len(pois)} places "
-              f"(category={category}, radius={radius}m)")
+        miab_log("api_calls", f"[HERE] Got {len(pois)} places "
+              f"(category={category}, radius={radius}m)", getattr(self, "settings", None))
         return pois
 
     def fetch_google_pois(
@@ -1256,7 +1257,7 @@ class PoiFetcher:
         cache_key = _cache_key(lat, lon, cache_category, radius, "google")
         cached = _get_cached(cache, cache_key)
         if cached is not None:
-            print(f"[Google POI] Cache hit — {len(cached)} results for '{category_key}'")
+            miab_log("verbose", f"[Google POI] Cache hit — {len(cached)} results for '{category_key}'", getattr(self, "settings", None))
             return cached
 
         category_type: dict[str, str | list[str] | None] = {
@@ -1326,7 +1327,7 @@ class PoiFetcher:
                     data = json.loads(resp.read().decode())
                 status = data.get("status", "")
                 if status not in ("OK", "ZERO_RESULTS"):
-                    print(f"[Google POI] API error: {status} — {data.get('error_message','')}")
+                    miab_log("errors", f"[Google POI] API error: {status} — {data.get('error_message','')}", getattr(self, "settings", None))
                     return []
                 google_places = data.get("results", [])[:25]
             else:
@@ -1348,7 +1349,7 @@ class PoiFetcher:
                         data = json.loads(resp.read().decode())
                     status = data.get("status", "")
                     if status not in ("OK", "ZERO_RESULTS"):
-                        print(f"[Google POI] API error: {status} — {data.get('error_message','')}")
+                        miab_log("errors", f"[Google POI] API error: {status} — {data.get('error_message','')}", getattr(self, "settings", None))
                         continue
                     for place in data.get("results", [])[:25]:
                         place_id = place.get("place_id") or ""
@@ -1409,15 +1410,15 @@ class PoiFetcher:
                         "source": "google",
                     })
                 except Exception as exc:
-                    print(f"[Google POI] Parse error: {exc}")
+                    miab_log("errors", f"[Google POI] Parse error: {exc}", getattr(self, "settings", None))
                     continue
 
-            print(f"[Google POI] {len(results)} results for '{category_key}' within {radius}m")
+            miab_log("verbose", f"[Google POI] {len(results)} results for '{category_key}' within {radius}m", getattr(self, "settings", None))
             _set_cached(cache, cache_key, results)
             _save_poi_cache(self._cache_path, cache)
             return results
         except Exception as exc:
-            print(f"[Google POI] Fetch error: {exc}")
+            miab_log("errors", f"[Google POI] Fetch error: {exc}", getattr(self, "settings", None))
             return []
 
     # ------------------------------------------------------------------
@@ -1461,7 +1462,7 @@ class PoiFetcher:
             "out body center 300;\n"
         )
 
-        print(f"[POI] Fetching {category} radius={radius}m timeout={timeout}s")
+        miab_log("verbose", f"[POI] Fetching {category} radius={radius}m timeout={timeout}s", getattr(self, "settings", None))
 
         # ── HERE path ────────────────────────────────────────────────────
         # If HERE is explicitly chosen (key is set), always return its result —
@@ -1512,7 +1513,7 @@ class PoiFetcher:
         _set_cached(cache, key, pois)
         _save_poi_cache(self._cache_path, cache)
 
-        print(f"[POI] Got {len(pois)} pois at radius={radius}m")
+        miab_log("verbose", f"[POI] Got {len(pois)} pois at radius={radius}m", getattr(self, "settings", None))
         return pois, False
 
     def fetch_osm_name_search(
@@ -1597,11 +1598,11 @@ class PoiFetcher:
             ");\n"
             "out tags center 40;\n"
         )
-        print(f"[POI] OSM broad name search '{query_text}' category={category_key} radius={radius}m timeout={effective_timeout}s")
+        miab_log("verbose", f"[POI] OSM broad name search '{query_text}' category={category_key} radius={radius}m timeout={effective_timeout}s", getattr(self, "settings", None))
         data = urllib.parse.urlencode({"data": query}).encode()
         result = self._overpass.poi_request(data, timeout=effective_timeout + 2)
         if result is None:
-            print(f"[POI] OSM broad name search '{query_text}' failed (server error) — not caching")
+            miab_log("errors", f"[POI] OSM broad name search '{query_text}' failed (server error) — not caching", getattr(self, "settings", None))
             return None
 
         pois = []
@@ -1629,7 +1630,7 @@ class PoiFetcher:
                 _inject_manual_shopping_centres(pois, lat, lon, radius)
 
         pois.sort(key=lambda x: x["dist"])
-        print(f"[POI] OSM broad name search got {len(pois)} pois")
+        miab_log("verbose", f"[POI] OSM broad name search got {len(pois)} pois", getattr(self, "settings", None))
         return pois
 
     # ------------------------------------------------------------------
@@ -1661,7 +1662,7 @@ class PoiFetcher:
         cache_key = _cache_key(round(lat, 1), round(lon, 1), "all_background", radius, source)
         cached    = None if force_refresh else _get_cached(cache, cache_key)
         if cached is not None:
-            print(f"[POI] Background cache hit — {len(cached)} places.")
+            miab_log("verbose", f"[POI] Background cache hit — {len(cached)} places.", getattr(self, "settings", None))
             return cached
 
         # ── HERE path ────────────────────────────────────────────────────
@@ -1689,8 +1690,8 @@ class PoiFetcher:
                     if dedup not in seen:
                         seen.add(dedup)
                         all_pois.append(poi)
-            print(f"[POI] HERE background fetch complete: "
-                  f"{len(all_pois)} places across {len(buckets)} buckets.")
+            miab_log("verbose", f"[POI] HERE background fetch complete: "
+                  f"{len(all_pois)} places across {len(buckets)} buckets.", getattr(self, "settings", None))
             _set_cached(cache, cache_key, all_pois)
             _save_poi_cache(self._cache_path, cache)
             return all_pois
@@ -1713,7 +1714,7 @@ class PoiFetcher:
                 f"(\n  {query_body}\n);\n"
                 "out body center 800;\n"
             )
-            print(f"[POI] Fetching all background radius={query_radius}m timeout=20s")
+            miab_log("verbose", f"[POI] Fetching all background radius={query_radius}m timeout=20s", getattr(self, "settings", None))
             data = urllib.parse.urlencode({"data": query}).encode()
             result = self._overpass.poi_request(data, timeout=22)
             if result is not None:
@@ -1736,8 +1737,8 @@ class PoiFetcher:
             seen_keys.add(dedup)
             pois.append(poi)
 
-        print(f"[POI] Background fetch complete: {len(pois)} places "
-              f"(radius={result_radius}m).")
+        miab_log("verbose", f"[POI] Background fetch complete: {len(pois)} places "
+              f"(radius={result_radius}m).", getattr(self, "settings", None))
         # Cache regardless of which radius succeeded — previously this only
         # cached when the full radius worked, so any area where the wider
         # query times out (dense suburbs) never got cached at all and
@@ -1758,9 +1759,9 @@ class PoiFetcher:
                          POI_BACKGROUND_RADIUS_METRES, source)
         cached = _get_cached(cache, key)
         if cached is not None:
-            print(f"[POI] Background cache preload hit — {len(cached)} places.")
+            miab_log("verbose", f"[POI] Background cache preload hit — {len(cached)} places.", getattr(self, "settings", None))
         else:
-            print("[POI] Background cache preload miss.")
+            miab_log("verbose", "[POI] Background cache preload miss.", getattr(self, "settings", None))
         return cached
 
     def cached_background_age_hours(self, lat: float, lon: float) -> float | None:
@@ -2076,8 +2077,8 @@ class PoiFetcher:
             seen.add(dedup)
             records.append(rec)
 
-        print(f"[Airport] {airport_name or 'airport'}: {len(records)} amenities, "
-              f"{len(terminals)} terminals, {len(gates)} gates (focus={focus_key})")
+        miab_log("verbose", f"[Airport] {airport_name or 'airport'}: {len(records)} amenities, "
+              f"{len(terminals)} terminals, {len(gates)} gates (focus={focus_key})", getattr(self, "settings", None))
         return records, airport_name, terminal_gates
 
     def _find_aerodrome(self, lat: float, lon: float, search_radius: int) -> dict | None:

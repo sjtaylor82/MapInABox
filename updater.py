@@ -27,6 +27,7 @@ import sys
 import tempfile
 import threading
 import urllib.request
+from logging_utils import miab_log
 
 
 GITHUB_API = "https://api.github.com/repos/{repo}/releases/latest"
@@ -108,7 +109,7 @@ class UpdateChecker:
 
         except Exception as e:
             # Never raise — update check should be completely silent on failure
-            print(f"[Updater] Check failed (non-fatal): {e}")
+            miab_log("errors", f"[Updater] Check failed (non-fatal): {e}", getattr(self, "settings", None))
 
     def download_and_install(self) -> bool:
         """Download the release asset and launch it.  Returns False on error.
@@ -140,11 +141,11 @@ class UpdateChecker:
         dest     = os.path.join(tempfile.gettempdir(), filename)
 
         try:
-            print(f"[Updater] Downloading {url} ...")
+            miab_log("verbose", f"[Updater] Downloading {url} ...", getattr(self, "settings", None))
             urllib.request.urlretrieve(url, dest)
-            print(f"[Updater] Launching {dest}")
+            miab_log("verbose", f"[Updater] Launching {dest}", getattr(self, "settings", None))
             os.startfile(dest)   # Windows only — we only reach here on Windows
             return True
         except Exception as e:
-            print(f"[Updater] Download/launch failed: {e}")
+            miab_log("errors", f"[Updater] Download/launch failed: {e}", getattr(self, "settings", None))
             return False

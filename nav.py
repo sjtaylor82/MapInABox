@@ -1187,7 +1187,7 @@ class NavMixin:
                         wx.CallAfter(self._nav_launch,
                                      pos["lat"], pos["lng"], dest_name)
                     except Exception as e:
-                        print(f"[Nav] HERE geocode failed: {e}")
+                        miab_log("errors", f"[Nav] HERE geocode failed: {e}", None)
                         wx.CallAfter(self._status_update,
                             f"Could not find {number} {street}.", True)
                 threading.Thread(target=_here_geocode, daemon=True).start()
@@ -1382,7 +1382,7 @@ class NavMixin:
                 msg = self._nav_route_summary(dest_name, provider="Google route")
             wx.CallAfter(self._nav_update_ui, msg)
         except Exception as exc:
-            print(f"[Nav] Google routing failed: {exc}")
+            miab_log("errors", f"[Nav] Google routing failed: {exc}", getattr(self, "settings", None))
             err_str = str(exc)
             if "No Google API key" in err_str:
                 wx.CallAfter(self._nav_update_ui,
@@ -1410,7 +1410,7 @@ class NavMixin:
                 msg = self._nav_route_summary(dest_name, provider="HERE route")
             wx.CallAfter(self._nav_update_ui, msg)
         except urllib.error.HTTPError as exc:
-            print(f"[Nav] HERE routing HTTP {exc.code}")
+            miab_log("errors", f"[Nav] HERE routing HTTP {exc.code}", getattr(self, "settings", None))
             if not allow_osm_fallback:
                 wx.CallAfter(self._nav_update_ui,
                     f"HERE could not route to {dest_name}.")
@@ -1419,7 +1419,7 @@ class NavMixin:
                 f"HERE routing error ({exc.code}). Falling back to OSM.")
             self._nav_start(dest_lat, dest_lon, dest_name, target_source)
         except Exception as exc:
-            print(f"[Nav] HERE routing failed: {exc}")
+            miab_log("errors", f"[Nav] HERE routing failed: {exc}", getattr(self, "settings", None))
             if not allow_osm_fallback:
                 wx.CallAfter(self._nav_update_ui,
                     f"HERE could not route to {dest_name}.")
@@ -1962,7 +1962,7 @@ class NavMixin:
                             f"Street View at destination: {desc}",
                         )
             except Exception as exc:
-                print(f"[Nav] Arrival StreetView failed: {exc}")
+                miab_log("errors", f"[Nav] Arrival StreetView failed: {exc}", None)
 
         threading.Thread(target=_fetch, daemon=True).start()
 

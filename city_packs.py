@@ -69,6 +69,7 @@ import json
 
 import wx
 from shapely.geometry import shape, Point
+from logging_utils import miab_log
 
 # ── Screen-reader speech (AccessibleOutput2) ──────────────────────────────
 # Same direct-to-screen-reader pattern core.py uses (_speak there) - a
@@ -209,10 +210,10 @@ def geocode_admin_boundary(name, country=None, timeout=15):
             try:
                 geometry = shape(geojson)
             except Exception as e:
-                print(f"[CityPacks] Boundary polygon parse failed for {name!r}: {e}")
+                miab_log("errors", f"[CityPacks] Boundary polygon parse failed for {name!r}: {e}", None)
         return (south, north, west, east), geometry
     except Exception as e:
-        print(f"[CityPacks] Area geocode failed for {name!r}: {e}")
+        miab_log("errors", f"[CityPacks] Area geocode failed for {name!r}: {e}", None)
         return None, None
 
 
@@ -290,7 +291,7 @@ def run_batch_fetch(
     def status(msg):
         if status_cb:
             status_cb(msg)
-        print(f"[CityPacks] {msg}")
+        miab_log("verbose", f"[CityPacks] {msg}", None)
 
     _set_batch_active(True)
     overall = {"areas": 0, "fetched": 0, "from_cache": 0, "failed": 0}
@@ -317,7 +318,7 @@ def run_batch_fetch(
                         overall["fetched"] += 1
                 except Exception as e:
                     overall["failed"] += 1
-                    print(f"[CityPacks] Area {suburb.get('name')} failed: {e}")
+                    miab_log("errors", f"[CityPacks] Area {suburb.get('name')} failed: {e}", None)
         status(
             f"City data download finished: {overall['fetched']} area(s) fetched, "
             f"{overall['from_cache']} already cached, {overall['failed']} failed."
@@ -362,7 +363,7 @@ def _geocode_postcode(postcode, country_code):
         if data:
             return float(data[0]["lat"]), float(data[0]["lon"])
     except Exception as e:
-        print(f"[CityPacks] Postcode geocode failed for {postcode}: {e}")
+        miab_log("errors", f"[CityPacks] Postcode geocode failed for {postcode}: {e}", None)
     return None
 
 
@@ -388,16 +389,14 @@ def bbox_for_postcode_range(country_code, start, end):
 # ---------------------------------------------------------------------------
 
 INTRO_MESSAGE = (
-    "It is recommended that commonly explored suburbs are downloaded to "
-    "your computer, as this will save significant time when navigating "
+    "Commonly explored suburbs can be downloaded to "
+    "your computer to save significant time when navigating "
     "to them for the first time.\n\n"
     "Choose a country, then a state or region (or a postcode range), "
-    "then pick the individual suburbs you want from a real, "
-    "OpenStreetMap-sourced list - nothing is downloaded until you tick "
-    "the ones you want and confirm.\n\n"
-    "Once you confirm, this wizard closes and the download continues in "
-    "the background, the same way Shift+F11 already works. You can do "
-    "other things in the app meanwhile, but avoid exploring brand-new "
+    "then pick the individual suburbs you require.\n\n"
+    "Once confirmed, this wizard closes and the download continues in "
+    "the background."
+    "You can keep using the app, but avoid exploring brand-new "
     "areas at the same time - that uses the same street servers and will "
     "be slower until the download finishes. You can run this wizard "
     "again any time with Control+Shift+F11."
@@ -644,7 +643,7 @@ class CityPackWizardDialog(wx.Dialog):
                 suburbs = [s for s in suburbs if geometry.contains(Point(s["lon"], s["lat"]))]
                 dropped = before - len(suburbs)
                 if dropped:
-                    print(f"[CityPacks] Dropped {dropped} suburb(s) outside {area_label}'s real border")
+                    miab_log("verbose", f"[CityPacks] Dropped {dropped} suburb(s) outside {area_label}'s real border", None)
             wx.CallAfter(self._area_discovery_done, area_label, suburbs)
 
         threading.Thread(target=worker, daemon=True).start()

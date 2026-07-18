@@ -15,6 +15,7 @@ import urllib.parse
 import urllib.error
 import urllib.request
 from typing import Optional
+from logging_utils import miab_log
 
 _CACHE_TTL_DAYS = 30
 _URL = "https://google.serper.dev/search"
@@ -60,7 +61,7 @@ class SerperClient:
         cache_key = "serper_v1_" + re.sub(r"[^a-z0-9]+", "_", query.lower())
         cached = self._get_cache(cache_key)
         if cached is not None:
-            print(f"[Serper] cache hit for {query!r}")
+            miab_log("verbose", f"[Serper] cache hit for {query!r}", getattr(self, "settings", None))
             return cached
 
         try:
@@ -71,13 +72,13 @@ class SerperClient:
                 detail = exc.read().decode("utf-8", "ignore")[:300]
             except Exception:
                 pass
-            print(f"[Serper] HTTP {exc.code}: {detail}")
+            miab_log("errors", f"[Serper] HTTP {exc.code}: {detail}", getattr(self, "settings", None))
             return []
         except Exception as exc:
-            print(f"[Serper] failed: {exc}")
+            miab_log("errors", f"[Serper] failed: {exc}", getattr(self, "settings", None))
             return []
 
-        print(f"[Serper] returned {len(results)} result(s)")
+        miab_log("verbose", f"[Serper] returned {len(results)} result(s)", getattr(self, "settings", None))
         if results:
             self._set_cache(cache_key, results)
         return results
@@ -91,16 +92,16 @@ class SerperClient:
         cache_key = "place_v1_" + re.sub(r"[^a-z0-9]+", "_", query.lower())
         cached = self._get_cache(cache_key)
         if cached is not None:
-            print(f"[Serper] place cache hit for {query!r}")
+            miab_log("verbose", f"[Serper] place cache hit for {query!r}", getattr(self, "settings", None))
             return cached
         params = urllib.parse.urlencode({"q": query, "type": "places", "gl": self._country})
         req = urllib.request.Request(f"{PROXY_URL}?{params}", headers=_PROXY_HEADERS)
-        print(f"[Serper] place lookup: {query!r}")
+        miab_log("verbose", f"[Serper] place lookup: {query!r}", getattr(self, "settings", None))
         try:
             with urllib.request.urlopen(req, timeout=12) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except Exception as exc:
-            print(f"[Serper] place lookup failed: {exc}")
+            miab_log("errors", f"[Serper] place lookup failed: {exc}", getattr(self, "settings", None))
             return {}
         place = data.get("place") or {}
         if place:
@@ -111,7 +112,7 @@ class SerperClient:
         """Call the Cloudflare Worker proxy (production — no user key needed)."""
         params = urllib.parse.urlencode({"q": query, "num": num, "gl": self._country})
         req = urllib.request.Request(f"{PROXY_URL}?{params}", headers=_PROXY_HEADERS)
-        print(f"[Serper] proxy search: {query!r}")
+        miab_log("verbose", f"[Serper] proxy search: {query!r}", getattr(self, "settings", None))
         with urllib.request.urlopen(req, timeout=12) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         out = []

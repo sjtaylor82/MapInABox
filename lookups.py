@@ -212,7 +212,7 @@ class LookupsMixin:
                 with open(WIKI_CACHE_PATH, "w", encoding="utf-8") as f:
                     json.dump(self._wiki_cache, f, ensure_ascii=False, indent=2)
             except Exception as exc:
-                print(f"[Wiki] Cache save failed: {exc}")
+                miab_log("errors", f"[Wiki] Cache save failed: {exc}", getattr(self, "settings", None))
         miab_log("feature_usage",
                  f"Wikipedia result for cache_key='{cache_key}': "
                  f"{summary[:80].replace(chr(10), ' ')}...",
@@ -311,7 +311,7 @@ class LookupsMixin:
         )
 
     def _announce_timezone(self):
-        """Shift+T — timezone name and UTC offset."""
+        """Z — timezone name and UTC offset."""
         tz_name, tz = self._resolve_timezone()
         if not tz_name or not tz:
             self._announce_transient("No timezone found for this location.")
@@ -1011,7 +1011,7 @@ class LookupsMixin:
         return str(getattr(self, "last_country_found", "") or "").strip()
 
     def _announce_nearby_features(self):
-        """X key (world map) — show nearby geographic features from CSV."""
+        """G key (world map) — show nearby geographic features from CSV."""
         location = getattr(self, 'last_location_str', '') or 'this location'
         geo_on = getattr(self, "_geo_features_enabled", lambda: True)()
 

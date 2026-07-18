@@ -45,6 +45,7 @@ import re
 import time
 import urllib.parse
 import urllib.request
+from logging_utils import miab_log
 
 _CACHE_VERSION = "v4"
 
@@ -232,7 +233,7 @@ def discover_source_urls(query: str, search_client=None, source_hint: str = "") 
             try:
                 results = search_client.search(search, num=8)
             except Exception as exc:
-                print(f"[AirportDir] Search failed for {search!r}: {exc}")
+                miab_log("errors", f"[AirportDir] Search failed for {search!r}: {exc}", None)
                 results = []
             for item in results or []:
                 url = (item.get("url") or item.get("link") or "").strip()
@@ -1037,7 +1038,7 @@ def _fetch_url(url: str) -> tuple[str, str] | None:
             enc = resp.headers.get_content_charset() or "utf-8"
             return resp.geturl(), raw.decode(enc, errors="replace")
     except Exception as exc:
-        print(f"[AirportDir] Fetch failed for {url}: {exc}")
+        miab_log("errors", f"[AirportDir] Fetch failed for {url}: {exc}", None)
         return None
 
 

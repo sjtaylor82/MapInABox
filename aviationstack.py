@@ -4,6 +4,7 @@ import json
 import re
 import urllib.parse
 import urllib.request
+from logging_utils import miab_log
 
 API_BASE = "http://api.aviationstack.com/v1"
 
@@ -117,7 +118,7 @@ class AviationStackClient:
             raw = data.get("data", [])
             return deduplicate(raw, "dep")
         except Exception as exc:
-            print(f"[AviationStack] Departures failed: {exc}")
+            miab_log("errors", f"[AviationStack] Departures failed: {exc}", getattr(self, "settings", None))
             return []
 
     def arrivals(self, iata: str, limit: int = 100) -> list:
@@ -130,7 +131,7 @@ class AviationStackClient:
             raw = data.get("data", [])
             return deduplicate(raw, "arr")
         except Exception as exc:
-            print(f"[AviationStack] Arrivals failed: {exc}")
+            miab_log("errors", f"[AviationStack] Arrivals failed: {exc}", getattr(self, "settings", None))
             return []
 
 

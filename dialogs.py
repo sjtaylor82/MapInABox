@@ -20,6 +20,7 @@ import wx.adv
 
 from i18n import _
 from wx_utils import _log_key_event, _primary_down
+from logging_utils import miab_log
 
 
 def _return_parent_focus(dialog) -> None:
@@ -1877,7 +1878,7 @@ class FlightSearchDialog(wx.Dialog):
                     is_large = 1 if apt_type == "large_airport" else 0
                     self._airports.append((name, iata, city, country, is_large))
         except Exception as exc:
-            print(f"[FlightSearch] Airport load failed: {exc}")
+            miab_log("errors", f"[FlightSearch] Airport load failed: {exc}", getattr(self, "settings", None))
 
     def _suggest(self, q):
         q = q.lower().strip()

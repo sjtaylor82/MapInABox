@@ -25,6 +25,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Callable, Optional
+from logging_utils import miab_log
 
 from geo import haversine_m as _haversine_m
 
@@ -392,7 +393,7 @@ class RouteTools:
             if self._key:
                 return self._google_geocode(address, country_code)
         except Exception as exc:
-            print(f"[RouteTools] Google geocode failed, falling back to open data: {exc}")
+            miab_log("errors", f"[RouteTools] Google geocode failed, falling back to open data: {exc}", getattr(self, "settings", None))
         return self._open_geocode(address, country_code)
 
     def _reverse_geocode_suburb(self, lat: float, lon: float) -> str:
@@ -484,7 +485,7 @@ class RouteTools:
                     request_polyline=request_polyline,
                 )
             except Exception as exc:
-                print(f"[RouteTools] Google routes failed, falling back to OSRM: {exc}")
+                miab_log("errors", f"[RouteTools] Google routes failed, falling back to OSRM: {exc}", getattr(self, "settings", None))
         return self._osrm_routes_request(
             origin,
             destination,
@@ -555,7 +556,7 @@ class RouteTools:
                 detail = exc.read().decode()
             except Exception:
                 pass
-            print(f"[RouteTools] HTTP {exc.code}: {detail}")
+            miab_log("errors", f"[RouteTools] HTTP {exc.code}: {detail}", getattr(self, "settings", None))
             raise RuntimeError(
                 f"Google Routes API error {exc.code}. {detail[:300]}"
             )
@@ -635,7 +636,7 @@ class RouteTools:
                 detail = exc.read().decode()
             except Exception:
                 pass
-            print(f"[RouteTools] HTTP {exc.code}: {detail}")
+            miab_log("errors", f"[RouteTools] HTTP {exc.code}: {detail}", getattr(self, "settings", None))
             raise RuntimeError(
                 f"Google Routes API error {exc.code}. {detail[:300]}"
             )
@@ -957,7 +958,7 @@ class RouteTools:
                 raise RuntimeError("Google Routes API returned no routes.")
             return self._parse_route(data["routes"][0])
         except Exception as exc:
-            print(f"[RouteTools] Google route failed, falling back to OSRM: {exc}")
+            miab_log("errors", f"[RouteTools] Google route failed, falling back to OSRM: {exc}", getattr(self, "settings", None))
             return self._osrm_compute_route(
                 origin,
                 destination,
@@ -1851,7 +1852,7 @@ class RouteTools:
         # Debug: log first station entry to verify ID format
         raw_stations = data.get("stations", [])
         if raw_stations:
-            print(f"[HERE Transit] First station raw: {json.dumps(raw_stations[0], indent=2)[:500]}")
+            miab_log("verbose", f"[HERE Transit] First station raw: {json.dumps(raw_stations[0], indent=2)[:500]}", getattr(self, "settings", None))
 
         stations: list[dict] = []
         for stn in raw_stations:
@@ -2027,7 +2028,7 @@ class RouteTools:
             params["dateTime"] = date_time
 
         url = f"{self._HERE_DEPARTURES_URL}?{urllib.parse.urlencode(params)}"
-        print(f"[HERE Transit] Departures URL: {url.replace(here_api_key, 'KEY')}")
+        miab_log("verbose", f"[HERE Transit] Departures URL: {url.replace(here_api_key, 'KEY')}", getattr(self, "settings", None))
         req = urllib.request.Request(url, headers={"User-Agent": "MapInABox/1.0"})
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:

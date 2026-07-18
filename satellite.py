@@ -7,6 +7,7 @@ to provide a rich, detailed description of the landscape suitable for accessibil
 import urllib.parse
 import urllib.request
 from typing import Optional, Tuple
+from logging_utils import miab_log
 
 from cache_utils import _get_cached, _load_cache, _save_cache, _set_cached
 
@@ -61,7 +62,7 @@ def fetch_satellite_image(lat: float, lon: float, zoom: int, api_key: str) -> Op
                 return None
             return data
     except Exception as e:
-        print(f"[Satellite] Fetch failed at ({lat}, {lon}): {e}")
+        miab_log("errors", f"[Satellite] Fetch failed at ({lat}, {lon}): {e}", None)
         return None
 
 
@@ -117,7 +118,7 @@ def lookup_satellite_description(
     try:
         description = mistral_client.describe_satellite_image(image_bytes, cache_key)
     except Exception as exc:
-        print(f"[Satellite] Mistral description failed: {exc}")
+        miab_log("errors", f"[Satellite] Mistral description failed: {exc}", None)
         description = ""
     if not description:
         description = (

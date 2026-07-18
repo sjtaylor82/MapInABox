@@ -15,6 +15,7 @@ import time
 import urllib.parse
 import urllib.request
 import ssl
+from logging_utils import miab_log
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -38,14 +39,14 @@ class OpenSkyClient:
         self._token_expiry = 0.0
         self._ssl_ctx      = ssl.create_default_context()
         if self._client_id and self._client_secret:
-            print(f"[OpenSky] Credentials loaded from settings for {self._client_id}")
+            miab_log("verbose", f"[OpenSky] Credentials loaded from settings for {self._client_id}", getattr(self, "settings", None))
         else:
             self._load_credentials()
 
     def _load_credentials(self):
         path = os.path.join(self._base_dir, CREDS_FILE)
         if not os.path.exists(path):
-            print("[OpenSky] No credentials.json found — using anonymous access")
+            miab_log("verbose", "[OpenSky] No credentials.json found — using anonymous access", getattr(self, "settings", None))
             return
         try:
             with open(path, encoding="utf-8") as f:
@@ -53,11 +54,11 @@ class OpenSkyClient:
             self._client_id     = data.get("clientId", "").strip()
             self._client_secret = data.get("clientSecret", "").strip()
             if self._client_id and self._client_secret:
-                print(f"[OpenSky] Credentials loaded for {self._client_id}")
+                miab_log("verbose", f"[OpenSky] Credentials loaded for {self._client_id}", getattr(self, "settings", None))
             else:
-                print("[OpenSky] credentials.json missing clientId or clientSecret")
+                miab_log("verbose", "[OpenSky] credentials.json missing clientId or clientSecret", getattr(self, "settings", None))
         except Exception as exc:
-            print(f"[OpenSky] Failed to load credentials.json: {exc}")
+            miab_log("errors", f"[OpenSky] Failed to load credentials.json: {exc}", getattr(self, "settings", None))
 
     @property
     def authenticated(self) -> bool:
@@ -85,10 +86,10 @@ class OpenSkyClient:
                 resp = json.loads(r.read().decode())
             self._token        = resp["access_token"]
             self._token_expiry = time.time() + int(resp.get("expires_in", 300))
-            print("[OpenSky] Token refreshed")
+            miab_log("verbose", "[OpenSky] Token refreshed", getattr(self, "settings", None))
             return self._token
         except Exception as exc:
-            print(f"[OpenSky] Token refresh failed: {exc}")
+            miab_log("errors", f"[OpenSky] Token refresh failed: {exc}", getattr(self, "settings", None))
             return None
 
     def _request(self, endpoint: str, params: dict) -> dict:
@@ -139,7 +140,7 @@ class OpenSkyClient:
                 return {"departure": dep, "arrival": arr}
         except Exception as exc:
             if "404" not in str(exc):
-                print(f"[OpenSky] flight_route failed for {icao24}: {exc}")
+                miab_log("errors", f"[OpenSky] flight_route failed for {icao24}: {exc}", getattr(self, "settings", None))
         return {}
 
     def departures(self, airport_icao: str, hours_ahead: int = 12) -> list:
@@ -159,7 +160,7 @@ class OpenSkyClient:
             })
             return data if isinstance(data, list) else []
         except Exception as exc:
-            print(f"[OpenSky] Departures failed: {exc}")
+            miab_log("errors", f"[OpenSky] Departures failed: {exc}", getattr(self, "settings", None))
             return []
 
     def arrivals(self, airport_icao: str, hours_back: int = 6) -> list:
@@ -175,5 +176,5 @@ class OpenSkyClient:
             })
             return data if isinstance(data, list) else []
         except Exception as exc:
-            print(f"[OpenSky] Arrivals failed: {exc}")
+            miab_log("errors", f"[OpenSky] Arrivals failed: {exc}", getattr(self, "settings", None))
             return []

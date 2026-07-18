@@ -28,6 +28,7 @@ import os
 import threading
 import time
 import urllib.request
+from logging_utils import miab_log
 import urllib.parse
 import zipfile
 import datetime
@@ -209,8 +210,8 @@ class TransitLookup:
                             df = self._catalog_df_full if self._catalog_df_full is not None else self._catalog_df
                             self._save_to_verified_index(region_key, [winning_feed], df)
                 else:
-                    print(f"[Transit] Not saving feed {winning_feed} to verified index "
-                          f"— only {n_stops} stops (too small to be authoritative)")
+                    miab_log("navigation", f"[Transit] Not saving feed {winning_feed} to verified index "
+                          f"— only {n_stops} stops (too small to be authoritative)", getattr(self, "settings", None))
 
         primary_feed = feed_ids[0] if feed_ids else None
         return primary_feed, all_stops
@@ -224,7 +225,7 @@ class TransitLookup:
         for feed_id in feed_ids:
             data = self._feeds.get(feed_id)
             if not data:
-                print(f"[Transit] _stops_within: feed {feed_id} not in _feeds!")
+                miab_log("navigation", f"[Transit] _stops_within: feed {feed_id} not in _feeds!", getattr(self, "settings", None))
                 continue
             for sid, s in data["stops"].items():
                 d = math.sqrt(
@@ -291,8 +292,8 @@ class TransitLookup:
             # GTFS stop_name ("Melbourne Central" vs "Melbourne Central
             # Station"). Fall back to pure coordinate proximity so platform
             # info still gets populated instead of silently staying blank.
-            print(f"[Transit] find_stops_by_name: no name match for {name!r} — "
-                  f"falling back to nearest stop by coordinates")
+            miab_log("navigation", f"[Transit] find_stops_by_name: no name match for {name!r} — "
+                  f"falling back to nearest stop by coordinates", getattr(self, "settings", None))
             for feed_id in feed_ids:
                 data = self._feeds.get(feed_id)
                 if not data:
@@ -428,14 +429,14 @@ class TransitLookup:
                 rev = len(q_words & c_words) / len(c_words)
                 score = max(fwd, rev)
                 if score > 0:
-                    print(f"[Transit] Headsign fuzzy: query='{headsign}' "
-                          f"candidate='{hs}' score={score:.2f}")
+                    miab_log("navigation", f"[Transit] Headsign fuzzy: query='{headsign}' "
+                          f"candidate='{hs}' score={score:.2f}", getattr(self, "settings", None))
                 if score > best_score:
                     best_score = score
                     best_stops = stops
 
         if best_score >= 0.5 and best_stops:
-            print(f"[Transit] Headsign fuzzy match accepted (score={best_score:.2f})")
+            miab_log("navigation", f"[Transit] Headsign fuzzy match accepted (score={best_score:.2f})", getattr(self, "settings", None))
             return best_stops
 
         # ── 4. Fallback: first entry for this route_id ───────────────
@@ -448,8 +449,8 @@ class TransitLookup:
                 if rid == route_id:
                     return stops
 
-        print(f"[Transit] stops_for_route: no headsign match for '{headsign}' "
-              f"on route '{route_id}' — returning empty (best score={best_score:.2f})")
+        miab_log("navigation", f"[Transit] stops_for_route: no headsign match for '{headsign}' "
+              f"on route '{route_id}' — returning empty (best score={best_score:.2f})", getattr(self, "settings", None))
         return []
 
     def next_departures(
@@ -566,7 +567,7 @@ class TransitLookup:
         self._catalog_df_full = None
         self._location_feeds.clear()
         self._geocode_cache.clear()
-        print("[Transit] Cleared verified feed index and all caches")
+        miab_log("navigation", "[Transit] Cleared verified feed index and all caches", getattr(self, "settings", None))
         return self._ensure_catalog()
 
     # ------------------------------------------------------------------
@@ -606,7 +607,7 @@ class TransitLookup:
                     # Catches cases where a bad feed was previously saved to the index.
                     closest_d = self._nearest_stop_distance(lat, lon, _data)
                     if closest_d <= 100_000:
-                        print(f"[Transit] Verified index: feed {fid} for {region_key}")
+                        miab_log("navigation", f"[Transit] Verified index: feed {fid} for {region_key}", getattr(self, "settings", None))
                         # Always append supplementary override feeds so e.g. Queensland
                         # Rail appears alongside Sunbus even on cached repeat visits.
                         feed_ids = [fid]
@@ -623,14 +624,14 @@ class TransitLookup:
                         self._location_feeds[loc_key] = feed_ids
                         return feed_ids
                     # Bad entry — evict from index and memory, re-discover
-                    print(f"[Transit] Verified index: feed {fid} invalid "
-                          f"(nearest stop {closest_d/1000:.0f}km) — evicting")
+                    miab_log("navigation", f"[Transit] Verified index: feed {fid} invalid "
+                          f"(nearest stop {closest_d/1000:.0f}km) — evicting", getattr(self, "settings", None))
                     self._feeds.pop(fid, None)
                     index.pop(region_key, None)
                     self._save_verified_index(index)
                 else:
                     # ZIP gone or corrupt — fall through to re-discover
-                    print(f"[Transit] Verified index: feed {fid} unavailable, re-discovering")
+                    miab_log("navigation", f"[Transit] Verified index: feed {fid} unavailable, re-discovering", getattr(self, "settings", None))
 
         # ── 3. Discovery ──────────────────────────────────────────────
         df = self._catalog_df
@@ -668,18 +669,18 @@ class TransitLookup:
                     if subdivision and col_sub in matches.columns:
                         feed_subdiv = str(row.get(col_sub, "")).strip().lower()
                         if feed_subdiv and subdivision.lower()[:6] not in feed_subdiv:
-                            print(f"[Transit] Bbox skipping feed {fid} before download — "
-                                  f"subdivision '{feed_subdiv}' doesn't match '{subdivision}'")
+                            miab_log("navigation", f"[Transit] Bbox skipping feed {fid} before download — "
+                                  f"subdivision '{feed_subdiv}' doesn't match '{subdivision}'", getattr(self, "settings", None))
                             continue
                     _fid, _data = self._gtfs_ensure(fid, url)
                     if not _data:
                         continue
                     closest_d = self._nearest_stop_distance(lat, lon, _data)
                     n_stops   = len(_data.get("stops", {}))
-                    print(f"[Transit] Feed {fid}: nearest stop {closest_d/1000:.1f}km, {n_stops} stops")
+                    miab_log("navigation", f"[Transit] Feed {fid}: nearest stop {closest_d/1000:.1f}km, {n_stops} stops", getattr(self, "settings", None))
                     if closest_d > 100_000:
-                        print(f"[Transit] Skipping feed {fid} — nearest stop "
-                              f"{closest_d/1000:.1f}km away (wrong region)")
+                        miab_log("navigation", f"[Transit] Skipping feed {fid} — nearest stop "
+                              f"{closest_d/1000:.1f}km away (wrong region)", getattr(self, "settings", None))
                         self._feeds.pop(fid, None)
                         continue
                     feed_ids.append(fid)
@@ -719,8 +720,8 @@ class TransitLookup:
                 continue
             closest_d = self._nearest_stop_distance(lat, lon, _data)
             if closest_d > 100_000:
-                print(f"[Transit] Override feed {ov_fid} skipped — "
-                      f"nearest stop {closest_d/1000:.0f}km away")
+                miab_log("navigation", f"[Transit] Override feed {ov_fid} skipped — "
+                      f"nearest stop {closest_d/1000:.0f}km away", getattr(self, "settings", None))
                 self._feeds.pop(ov_fid, None)
                 continue
             feed_ids.append(ov_fid)
@@ -792,7 +793,7 @@ class TransitLookup:
         index = self._load_verified_index()
         index[region_key] = {"feed_id": fid, "url": url}
         self._save_verified_index(index)
-        print(f"[Transit] Saved feed {fid} for region '{region_key}' to verified index")
+        miab_log("navigation", f"[Transit] Saved feed {fid} for region '{region_key}' to verified index", getattr(self, "settings", None))
 
     def _reverse_geocode_country(self, lat: float, lon: float) -> tuple[str, str]:
         """Return (country_code, subdivision) for (lat, lon) via Nominatim.
@@ -816,11 +817,11 @@ class TransitLookup:
             country_code = addr.get("country_code", "").upper()
             subdivision  = (addr.get("state") or addr.get("province")
                             or addr.get("region") or "")
-            print(f"[Transit] Geocoded ({lat:.2f},{lon:.2f}) → "
-                  f"country={country_code} subdivision={subdivision}")
+            miab_log("navigation", f"[Transit] Geocoded ({lat:.2f},{lon:.2f}) → "
+                  f"country={country_code} subdivision={subdivision}", getattr(self, "settings", None))
             return country_code, subdivision
         except Exception as exc:
-            print(f"[Transit] Reverse geocode failed: {exc}")
+            miab_log("errors", f"[Transit] Reverse geocode failed: {exc}", getattr(self, "settings", None))
             return "", ""
 
     def _country_fallback(
@@ -855,7 +856,7 @@ class TransitLookup:
         country_df = df[country_mask].copy()
 
         if country_df.empty:
-            print(f"[Transit] No catalog feeds for country {country_code}")
+            miab_log("navigation", f"[Transit] No catalog feeds for country {country_code}", getattr(self, "settings", None))
             return []
 
         # Prefer feeds whose subdivision matches (e.g. "Queensland")
@@ -906,8 +907,8 @@ class TransitLookup:
             sorted(range(len(country_df)), key=lambda i: sort_keys[i])
         ].reset_index(drop=True)
 
-        print(f"[Transit] Country fallback: {len(country_df)} feeds in {country_code}"
-              + (f"/{subdivision}" if subdivision else ""))
+        miab_log("navigation", f"[Transit] Country fallback: {len(country_df)} feeds in {country_code}"
+              + (f"/{subdivision}" if subdivision else ""), getattr(self, "settings", None))
 
         feed_ids: list[str] = []
         primary_found = False
@@ -930,8 +931,8 @@ class TransitLookup:
                     + ((lon - clon) * 111_000 * math.cos(math.radians(lat))) ** 2
                 )
                 if centroid_d > 150_000:
-                    print(f"[Transit] Country fallback pre-skipping {fid} — "
-                          f"centroid {centroid_d/1000:.0f}km away")
+                    miab_log("navigation", f"[Transit] Country fallback pre-skipping {fid} — "
+                          f"centroid {centroid_d/1000:.0f}km away", getattr(self, "settings", None))
                     continue
             except Exception:
                 pass  # no bbox — can't pre-filter, proceed to download
@@ -948,15 +949,15 @@ class TransitLookup:
                 default=float("inf"),
             )
             if closest_d > 100_000:
-                print(f"[Transit] Country fallback skipping {fid} — "
-                      f"nearest stop {closest_d/1000:.0f}km away")
+                miab_log("navigation", f"[Transit] Country fallback skipping {fid} — "
+                      f"nearest stop {closest_d/1000:.0f}km away", getattr(self, "settings", None))
                 self._feeds.pop(fid, None)
                 continue
             # Once a primary feed (stop within 5km) is found, only accept
             # additional feeds within 10km — avoids distant regional operators.
             if primary_found and closest_d > 10_000:
-                print(f"[Transit] Country fallback skipping {fid} — "
-                      f"primary already found, {closest_d/1000:.0f}km too far")
+                miab_log("navigation", f"[Transit] Country fallback skipping {fid} — "
+                      f"primary already found, {closest_d/1000:.0f}km too far", getattr(self, "settings", None))
                 self._feeds.pop(fid, None)
                 continue
             # If a subdivision-matching primary exists, skip feeds from other
@@ -964,12 +965,12 @@ class TransitLookup:
             if primary_found and subdivision and col_sub in country_df.columns:
                 feed_subdiv = str(row.get(col_sub, "")).strip().lower()
                 if feed_subdiv and subdivision.lower()[:6] not in feed_subdiv:
-                    print(f"[Transit] Country fallback skipping {fid} — "
-                          f"subdivision '{feed_subdiv}' doesn't match '{subdivision}'")
+                    miab_log("navigation", f"[Transit] Country fallback skipping {fid} — "
+                          f"subdivision '{feed_subdiv}' doesn't match '{subdivision}'", getattr(self, "settings", None))
                     self._feeds.pop(fid, None)
                     continue
-            print(f"[Transit] Country fallback accepted feed {fid} "
-                  f"(nearest stop {closest_d:.0f}m)")
+            miab_log("navigation", f"[Transit] Country fallback accepted feed {fid} "
+                  f"(nearest stop {closest_d:.0f}m)", getattr(self, "settings", None))
             feed_ids.append(fid)
             if closest_d <= 5_000:
                 primary_found = True
@@ -999,13 +1000,13 @@ class TransitLookup:
                     continue
                 closest_d = self._nearest_stop_distance(lat, lon, _data)
                 if closest_d > 100_000:
-                    print(f"[Transit] KDTree skipping feed {fid} — "
-                          f"nearest stop {closest_d/1000:.0f}km away")
+                    miab_log("navigation", f"[Transit] KDTree skipping feed {fid} — "
+                          f"nearest stop {closest_d/1000:.0f}km away", getattr(self, "settings", None))
                     self._feeds.pop(fid, None)
                     continue
                 return [fid]
         except Exception as exc:
-            print(f"[Transit] KDTree fallback failed: {exc}")
+            miab_log("errors", f"[Transit] KDTree fallback failed: {exc}", getattr(self, "settings", None))
         return []
 
     # ------------------------------------------------------------------
@@ -1030,7 +1031,7 @@ class TransitLookup:
             with open(p, "w", encoding="utf-8") as f:
                 json.dump(index, f, indent=2)
         except Exception as exc:
-            print(f"[Transit] Could not save verified index: {exc}")
+            miab_log("errors", f"[Transit] Could not save verified index: {exc}", getattr(self, "settings", None))
 
     # ------------------------------------------------------------------
     # GTFS overrides — supplementary feeds not in MobilityData catalog
@@ -1134,9 +1135,9 @@ class TransitLookup:
                     results.append((fid, url))
 
         if results:
-            print(f"[Transit] Overrides: {len(results)} supplementary feed(s) "
+            miab_log("navigation", f"[Transit] Overrides: {len(results)} supplementary feed(s) "
                   f"for {cc}/{subdivision or 'country'}: "
-                  + ", ".join(f[0] for f in results))
+                  + ", ".join(f[0] for f in results), getattr(self, "settings", None))
         return results
 
     def _cache_dir(self) -> str:
@@ -1184,25 +1185,25 @@ class TransitLookup:
                 with open(pickle_p, "rb") as f:
                     data = pickle.load(f)
                 if data.get("_parser_version") != GTFS_PARSER_VERSION:
-                    print(f"[Transit] Pickle for {feed_id} is parser version "
+                    miab_log("navigation", f"[Transit] Pickle for {feed_id} is parser version "
                           f"{data.get('_parser_version')} (current={GTFS_PARSER_VERSION})"
-                          f" — discarding and re-downloading")
+                          f" — discarding and re-downloading", getattr(self, "settings", None))
                     os.remove(pickle_p)
                     # fall through to download
                 else:
-                    print(f"[Transit] Loaded parsed cache for {feed_id}")
+                    miab_log("navigation", f"[Transit] Loaded parsed cache for {feed_id}", getattr(self, "settings", None))
                     self._feeds[feed_id] = data
                     return feed_id, data
             except Exception as e:
-                print(f"[Transit] Pickle load failed for {feed_id}: {e} — will re-parse")
+                miab_log("errors", f"[Transit] Pickle load failed for {feed_id}: {e} — will re-parse", getattr(self, "settings", None))
 
         # ── Load or download the zip ──────────────────────────────────
         if not stale and os.path.exists(zp):
-            print(f"[Transit] Using cached GTFS zip for {feed_id}")
+            miab_log("navigation", f"[Transit] Using cached GTFS zip for {feed_id}", getattr(self, "settings", None))
             with open(zp, "rb") as f:
                 zip_bytes = f.read()
         else:
-            print(f"[Transit] Downloading GTFS for {feed_id} …")
+            miab_log("navigation", f"[Transit] Downloading GTFS for {feed_id} …", getattr(self, "settings", None))
             try:
                 req = urllib.request.Request(
                     download_url,
@@ -1211,7 +1212,7 @@ class TransitLookup:
                 with urllib.request.urlopen(req, timeout=90, context=_ssl_context()) as r:
                     zip_bytes = r.read()
             except Exception as exc:
-                print(f"[Transit] Download failed for {feed_id}: {exc}")
+                miab_log("errors", f"[Transit] Download failed for {feed_id}: {exc}", getattr(self, "settings", None))
                 self._failed_feeds.add(feed_id)
                 return feed_id, None
 
@@ -1231,13 +1232,13 @@ class TransitLookup:
         try:
             with open(pickle_p, "wb") as f:
                 pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
-            print(f"[Transit] Saved parsed cache for {feed_id}")
+            miab_log("navigation", f"[Transit] Saved parsed cache for {feed_id}", getattr(self, "settings", None))
             try:
                 os.remove(zp)
             except Exception:
                 pass
         except Exception as e:
-            print(f"[Transit] Pickle save failed for {feed_id}: {e}")
+            miab_log("errors", f"[Transit] Pickle save failed for {feed_id}: {e}", getattr(self, "settings", None))
         return feed_id, data
 
     @staticmethod
@@ -1273,15 +1274,15 @@ class TransitLookup:
             yield "", outer
             return
 
-        print(f"[Transit] {feed_id}: no top-level GTFS files — treating as "
-              f"a zip-of-zips with {len(inner_zip_names)} nested feed(s).")
+        miab_log("navigation", f"[Transit] {feed_id}: no top-level GTFS files — treating as "
+              f"a zip-of-zips with {len(inner_zip_names)} nested feed(s).", None)
         for i, inner_name in enumerate(inner_zip_names):
             try:
                 inner_bytes = outer.read(inner_name)
                 inner_zf = zipfile.ZipFile(io.BytesIO(inner_bytes))
             except Exception as exc:
-                print(f"[Transit] {feed_id}: failed to open nested zip "
-                      f"{inner_name!r}: {exc}")
+                miab_log("errors", f"[Transit] {feed_id}: failed to open nested zip "
+                      f"{inner_name!r}: {exc}", None)
                 continue
             yield f"z{i}_", inner_zf
 
@@ -1443,10 +1444,10 @@ class TransitLookup:
 
         n_unique_routes = len({(r["short"] or r["long"]).strip() or rid for rid, r in routes.items() if r["short"] or r["long"]})
         unique_agencies = sorted({r.get("agency", "") for r in routes.values() if r.get("agency")})
-        print(f"[Transit] Parsed {feed_id}: {len(stops)} stops, "
+        miab_log("navigation", f"[Transit] Parsed {feed_id}: {len(stops)} stops, "
               f"{len(routes)} route variants ({n_unique_routes} unique), "
               f"{len(stop_departures)} stops with departures, "
-              f"{len(unique_agencies)} agencies.")
+              f"{len(unique_agencies)} agencies.", getattr(self, "settings", None))
 
         return {
             "feed_id":         feed_id,
@@ -1480,13 +1481,13 @@ class TransitLookup:
         try:
             import pandas as pd
         except ImportError:
-            print("[Transit] pandas not available — catalog lookup disabled.")
+            miab_log("errors", "[Transit] pandas not available — catalog lookup disabled.", getattr(self, "settings", None))
             return None
 
         with self._catalog_lock:
             p = self._catalog_csv_path()
             if self._catalog_is_stale():
-                print("[Transit] Downloading MobilityData catalog CSV…")
+                miab_log("navigation", "[Transit] Downloading MobilityData catalog CSV…", getattr(self, "settings", None))
                 try:
                     req = urllib.request.Request(
                         CATALOG_CSV_URL,
@@ -1496,9 +1497,9 @@ class TransitLookup:
                         data = r.read()
                     with open(p, "wb") as f:
                         f.write(data)
-                    print(f"[Transit] Catalog downloaded: {len(data) // 1024} KB")
+                    miab_log("navigation", f"[Transit] Catalog downloaded: {len(data) // 1024} KB", getattr(self, "settings", None))
                 except Exception as exc:
-                    print(f"[Transit] Catalog download failed: {exc}")
+                    miab_log("errors", f"[Transit] Catalog download failed: {exc}", getattr(self, "settings", None))
                     if not os.path.exists(p):
                         return None
 
@@ -1550,7 +1551,7 @@ class TransitLookup:
             ) / 2
             return df_bbox
         except Exception as exc:
-            print(f"[Transit] Catalog parse failed: {exc}")
+            miab_log("errors", f"[Transit] Catalog parse failed: {exc}", getattr(self, "settings", None))
             return None
 
     def validate_catalog_columns(self) -> tuple[bool, set]:

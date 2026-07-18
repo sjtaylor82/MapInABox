@@ -47,7 +47,7 @@ def _fetch_route_pois(host, sample_coords: list) -> list:
         )
         return pois or []
     except Exception as exc:
-        print(f"[Nav] Route POI fetch failed: {exc}")
+        miab_log("errors", f"[Nav] Route POI fetch failed: {exc}", getattr(host, "settings", None))
         return []
 
 
@@ -231,7 +231,7 @@ def start_narrative_briefing(host) -> None:
                         if features:
                             digest["pedestrian_features"] = [f["sv_desc"] for f in features]
             except Exception as _exc:
-                print(f"[Nav] Pedestrian feature lookup failed: {_exc}")
+                miab_log("errors", f"[Nav] Pedestrian feature lookup failed: {_exc}", getattr(host, "settings", None))
 
             text = mistral.narrative_directions(digest)
             if not text:
@@ -249,7 +249,7 @@ def start_narrative_briefing(host) -> None:
                 return
             wx.CallAfter(host._nav_briefing_enter, steps)
         except Exception as exc:
-            print(f"[Nav] Narrative briefing failed: {exc}")
+            miab_log("errors", f"[Nav] Narrative briefing failed: {exc}", getattr(host, "settings", None))
             wx.CallAfter(
                 host._announce_transient,
                 "Briefing failed. Falling back to step list.")

@@ -15,6 +15,7 @@ import html
 import re
 import urllib.parse
 import urllib.request
+from logging_utils import miab_log
 
 _CACHE_VERSION = "v4"
 
@@ -30,7 +31,7 @@ def fetch_official_source_text(directory_url: str, centre_name: str) -> tuple[st
             html_text = resp.read().decode("utf-8", errors="replace")
             page_url = resp.geturl()
     except Exception as exc:
-        print(f"[MallDir] Official source fetch failed for {url}: {exc}")
+        miab_log("errors", f"[MallDir] Official source fetch failed for {url}: {exc}", None)
         return "", []
 
     links = []
@@ -55,7 +56,7 @@ def fetch_official_source_text(directory_url: str, centre_name: str) -> tuple[st
             with urllib.request.urlopen(req, timeout=20) as resp:
                 link_html = resp.read().decode("utf-8", errors="replace")
         except Exception as exc:
-            print(f"[MallDir] Official candidate fetch failed for {link}: {exc}")
+            miab_log("errors", f"[MallDir] Official candidate fetch failed for {link}: {exc}", None)
             continue
         texts.append(f"SOURCE: {link}\n{_html_to_text(link_html)}")
 

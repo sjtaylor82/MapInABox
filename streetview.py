@@ -12,6 +12,7 @@ import urllib.parse
 import urllib.request
 import json
 from typing import Optional, Tuple
+from logging_utils import miab_log
 
 from cache_utils import _get_cached, _load_cache, _save_cache, _set_cached
 
@@ -43,7 +44,7 @@ def _streetview_available(lat: float, lon: float, api_key: str) -> bool:
             data = json.loads(resp.read())
             return data.get("status") == "OK"
     except Exception as e:
-        print(f"[StreetView] Metadata check failed: {e}")
+        miab_log("errors", f"[StreetView] Metadata check failed: {e}", None)
         return False
 
 
@@ -72,7 +73,7 @@ def _fetch_streetview_image(
                 return None
             return data
     except Exception as e:
-        print(f"[StreetView] Image fetch failed (heading {heading:.0f}deg): {e}")
+        miab_log("errors", f"[StreetView] Image fetch failed (heading {heading:.0f}deg): {e}", None)
         return None
 
 
@@ -111,20 +112,20 @@ def lookup_streetview_description(
     cached_desc = _get_cached(cache, cache_key, ttl_days=30)
 
     if cached_desc and not include_images:
-        print(f"[StreetView] Cache hit for {cache_key} (text only).")
+        miab_log("verbose", f"[StreetView] Cache hit for {cache_key} (text only).", None)
         return ([], cached_desc)
 
     # ── Coverage check ─────────────────────────────────────────────────────
-    print(f"[StreetView] Checking coverage at ({lat:.4f}, {lon:.4f})...")
+    miab_log("verbose", f"[StreetView] Checking coverage at ({lat:.4f}, {lon:.4f})...", None)
     if not _streetview_available(lat, lon, google_api_key):
-        print("[StreetView] No Street View coverage at this location.")
+        miab_log("verbose", "[StreetView] No Street View coverage at this location.", None)
         return None
 
     mistral_ready = bool(mistral_client and getattr(mistral_client, "is_configured", False))
 
     # ── Determine headings ─────────────────────────────────────────────────
     # ── Fetch images ───────────────────────────────────────────────────────
-    print(f"[StreetView] Fetching images (headings {h1:.0f}deg and {h2:.0f}deg)...")
+    miab_log("verbose", f"[StreetView] Fetching images (headings {h1:.0f}deg and {h2:.0f}deg)...", None)
     img_a = _fetch_streetview_image(lat, lon, h1, google_api_key)
     img_b = _fetch_streetview_image(lat, lon, h2, google_api_key)
 
@@ -135,14 +136,14 @@ def lookup_streetview_description(
         images.append((img_b, h2))
 
     if not images:
-        print("[StreetView] Image fetch returned no usable frames.")
+        miab_log("verbose", "[StreetView] Image fetch returned no usable frames.", None)
         return None
 
     image_bytes_list = [img for img, _ in images]
 
     # ── Description (cached text reused with fresh images) ─────────────────
     if cached_desc:
-        print(f"[StreetView] Cache hit for {cache_key}.")
+        miab_log("verbose", f"[StreetView] Cache hit for {cache_key}.", None)
         return (image_bytes_list if include_images else [], cached_desc)
 
     if not mistral_ready:
@@ -155,7 +156,7 @@ def lookup_streetview_description(
     try:
         description = mistral_client.describe_streetview_images(image_bytes_list, headings, mode=mode)
     except Exception as exc:
-        print(f"[StreetView] Mistral description failed: {exc}")
+        miab_log("errors", f"[StreetView] Mistral description failed: {exc}", None)
         description = ""
     if not description:
         description = (
