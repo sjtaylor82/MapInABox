@@ -20,6 +20,7 @@ import urllib.request
 import wx
 
 from logging_utils import miab_log
+from wx_utils import IS_MAC
 
 
 class LookupsMixin:
@@ -30,9 +31,15 @@ class LookupsMixin:
 
     def announce_facts(self):
         """F6 — display facts about the current country."""
+        def say(message: str) -> None:
+            if IS_MAC:
+                wx.CallLater(180, self._status_update, message, True)
+            else:
+                self._status_update(message, force=True)
+
         if not self.last_country_found or self.last_country_found == "Open Water":
             self._set_country_facts_panel({}, "Open Water")
-            self._status_update("No facts for open water.", force=True)
+            say("No facts for open water.")
             return
         canonical = self._country_aliases().get(
             self.last_country_found, self.last_country_found).lower()
@@ -43,17 +50,16 @@ class LookupsMixin:
         )
         if found:
             self._set_country_facts_panel(found, self.last_country_found)
-            self._status_update(
+            say(
                 f"{found.get('name')}.  "
                 f"Capital: {found.get('capital')}.  "
                 f"Continent: {found.get('continent')}.  "
                 f"Currency: {found.get('currency')}.  "
-                f"Fact: {found.get('fact')}",
-                force=True
+                f"Fact: {found.get('fact')}"
             )
         else:
             self._set_country_facts_panel({}, self.last_country_found)
-            self._status_update(f"No facts found for {self.last_country_found}.", force=True)
+            say(f"No facts found for {self.last_country_found}.")
 
     def announce_wikipedia_summary(self):
         """Shift+F6 — Wikipedia summary near the current coordinate."""
@@ -921,9 +927,15 @@ class LookupsMixin:
         involved. facts.json already has capital data for 200 countries,
         works offline, and can't break due to a third party's API change.
         """
+        def say(message: str) -> None:
+            if IS_MAC:
+                wx.CallLater(180, self._status_update, message, True)
+            else:
+                self._status_update(message, force=True)
+
         country = getattr(self, 'last_country_found', '')
         if not country or country == 'Open Water':
-            self._status_update("No country to look up.", force=True)
+            say("No country to look up.")
             return
         canonical = self._country_aliases().get(country, country).lower()
         found = next(
@@ -933,9 +945,9 @@ class LookupsMixin:
         )
         capital = (found or {}).get('capital')
         if capital and capital != 'None':
-            self._status_update(f"You are in {country}.  Capital: {capital}.", force=True)
+            say(f"You are in {country}.  Capital: {capital}.")
         else:
-            self._status_update(f"No capital data found for {country}.", force=True)
+            say(f"No capital data found for {country}.")
 
     def _announce_currency(self):
         """$ key — currency of current country. Looks up currency_data.json (static file)."""

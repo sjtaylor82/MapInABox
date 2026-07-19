@@ -67,7 +67,7 @@ import mall_directory
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0.20'
+APP_VERSION   = '1.0.21'
 
 POI_LIVE_COOLDOWN_SECS = 3.0
 POI_BACKGROUND_WAIT_SECS = 2.0
@@ -2278,7 +2278,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
         self.map_display_mode = "world"
         self.map_panel = WorldMapPanel(root, owner=self)
-        self._h_sizer.Add(self.map_panel, 3, wx.EXPAND | wx.ALL, 4)
+        self._map_sizer_item = self._h_sizer.Add(self.map_panel, 3, wx.EXPAND | wx.ALL, 4)
         self.map_panel.Bind(wx.EVT_MOTION, self._on_map_mouse_motion)
         self.map_panel.Bind(wx.EVT_LEFT_DOWN, self._on_map_mouse_click)
         self.map_panel.Bind(wx.EVT_LEFT_DCLICK, self._on_map_mouse_click)
@@ -2297,10 +2297,10 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._list_vsizer = wx.BoxSizer(wx.VERTICAL)
         self._list_vsizer.Add(self.listbox, 1, wx.EXPAND | wx.ALL, 4)
         self._list_vsizer.Add(self._btn_ai_summary, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
-        self._h_sizer.Add(self._list_vsizer, 1, wx.EXPAND)
+        self._list_sizer_item = self._h_sizer.Add(self._list_vsizer, 1, wx.EXPAND)
 
         self.info_panel = self._build_info_panel(root)
-        self._h_sizer.Add(self.info_panel, 1, wx.EXPAND | wx.ALL, 4)
+        self._info_sizer_item = self._h_sizer.Add(self.info_panel, 1, wx.EXPAND | wx.ALL, 4)
 
         root.SetSizer(self._h_sizer)
         self._map_fullscreen = False
@@ -9254,26 +9254,31 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
     def _toggle_map_fullscreen(self):
         """F9 — toggle the map panel between full screen and normal split view."""
         self._map_fullscreen = not self._map_fullscreen
+        status = ""
         if self._map_fullscreen:
             self.Maximize(True)
-            self._h_sizer.GetItem(self.map_panel).SetProportion(999)
-            self._h_sizer.GetItem(self.listbox).SetProportion(1)
-            self._h_sizer.GetItem(self.listbox).SetMinSize((1, -1))
-            self._h_sizer.GetItem(self.info_panel).SetProportion(0)
-            self._h_sizer.GetItem(self.info_panel).SetMinSize((1, -1))
+            self._map_sizer_item.SetProportion(999)
+            self._list_sizer_item.SetProportion(1)
+            self._list_sizer_item.SetMinSize((1, -1))
+            self._info_sizer_item.SetProportion(0)
+            self._info_sizer_item.SetMinSize((1, -1))
             self.info_panel.Hide()
-            self._status_update("Map maximised.", force=True)
+            status = "Map maximised."
         else:
-            self._h_sizer.GetItem(self.map_panel).SetProportion(3)
-            self._h_sizer.GetItem(self.listbox).SetProportion(1)
-            self._h_sizer.GetItem(self.listbox).SetMinSize((-1, -1))
+            self._map_sizer_item.SetProportion(3)
+            self._list_sizer_item.SetProportion(1)
+            self._list_sizer_item.SetMinSize((-1, -1))
             self.info_panel.Show()
-            self._h_sizer.GetItem(self.info_panel).SetProportion(1)
-            self._h_sizer.GetItem(self.info_panel).SetMinSize((250, -1))
-            self._status_update("Map restored.", force=True)
+            self._info_sizer_item.SetProportion(1)
+            self._info_sizer_item.SetMinSize((250, -1))
+            status = "Map restored."
         self._h_sizer.Layout()
         self.map_panel.Refresh()
         self.listbox.SetFocus()
+        if IS_MAC:
+            wx.CallLater(180, self._status_update, status, True)
+        else:
+            self._status_update(status, force=True)
 
     def _spatial_tone_bounds(self):
         """Return tone-normalisation bounds for the selected spatial tone mode."""
