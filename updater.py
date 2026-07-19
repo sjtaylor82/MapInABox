@@ -26,6 +26,7 @@ import re
 import sys
 import tempfile
 import threading
+import time
 import urllib.request
 from logging_utils import miab_log
 from app_paths import APP_DIR, PORTABLE_MODE
@@ -200,7 +201,7 @@ class UpdateChecker:
 
     @staticmethod
     def _schedule_portable_replacement(zip_path: str) -> None:
-        """Start a detached PowerShell helper to replace and restart the app."""
+        """Start a detached helper that applies changed files and restarts."""
         import subprocess
 
         # Confirm the portable folder is writable before closing the app.
@@ -214,35 +215,112 @@ class UpdateChecker:
             except OSError:
                 pass
 
+        update_lock = os.path.join(APP_DIR, ".update-in-progress")
+        with open(update_lock, "w", encoding="utf-8") as lock_file:
+            lock_file.write("A portable update is being installed.\n")
+
         script_path = os.path.join(
             tempfile.gettempdir(), f"MapInABox-portable-update-{os.getpid()}.ps1")
+        ready_path = os.path.join(
+            tempfile.gettempdir(), f"MapInABox-portable-ready-{os.getpid()}.txt")
         script = r'''param(
     [int]$MapInABoxProcessId,
     [string]$ZipPath,
     [string]$AppDirectory,
-    [string]$ExecutablePath
+    [string]$ExecutablePath,
+    [string]$ReadyPath
 )
 $ErrorActionPreference = "Stop"
-Wait-Process -Id $MapInABoxProcessId -ErrorAction SilentlyContinue
 $staging = Join-Path ([System.IO.Path]::GetTempPath()) ("MapInABox-update-" + [guid]::NewGuid())
+$updateLock = Join-Path $AppDirectory ".update-in-progress"
+$dataDirectory = Join-Path $AppDirectory "Data"
+$updateLog = Join-Path $dataDirectory "update.log"
+$success = $false
+$appWasClosed = $false
+$soundPlayer = $null
+New-Item -ItemType Directory -Path $dataDirectory -Force | Out-Null
+function Write-UpdateLog([string]$Message) {
+    $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    Add-Content -LiteralPath $updateLog -Value "[$stamp] $Message" -Encoding UTF8
+}
 try {
+    Write-UpdateLog "Portable update started."
+    $processingSound = Join-Path $env:WINDIR "Media\Windows Background.wav"
+    if (Test-Path -LiteralPath $processingSound) {
+        $soundPlayer = New-Object System.Media.SoundPlayer $processingSound
+        $soundPlayer.PlayLooping()
+    } else {
+        [System.Media.SystemSounds]::Asterisk.Play()
+    }
     Expand-Archive -LiteralPath $ZipPath -DestinationPath $staging -Force
     $source = Join-Path $staging "MapInABox"
     if (-not (Test-Path -LiteralPath $source)) { $source = $staging }
-    Get-ChildItem -LiteralPath $source -Force | ForEach-Object {
-        Copy-Item -LiteralPath $_.FullName -Destination $AppDirectory -Recurse -Force
+    $changedFiles = New-Object System.Collections.Generic.List[object]
+    $unchanged = 0
+    Get-ChildItem -LiteralPath $source -Recurse -Force -File | ForEach-Object {
+        $relativePath = $_.FullName.Substring($source.Length).TrimStart('\')
+        $destination = Join-Path $AppDirectory $relativePath
+        $different = -not (Test-Path -LiteralPath $destination -PathType Leaf)
+        if (-not $different) {
+            $destinationItem = Get-Item -LiteralPath $destination
+            if ($destinationItem.Length -ne $_.Length) {
+                $different = $true
+            } else {
+                $sourceHash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+                $destinationHash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
+                $different = $sourceHash -ne $destinationHash
+            }
+        }
+        if ($different) {
+            $changedFiles.Add([pscustomobject]@{
+                Source = $_.FullName
+                Destination = $destination
+            })
+        } else {
+            $unchanged++
+        }
     }
+    Write-UpdateLog ("Preparation complete: " + $changedFiles.Count +
+        " changed; $unchanged unchanged. Waiting for the app to close.")
+    Set-Content -LiteralPath $ReadyPath -Value "ready" -Encoding ASCII
+    Wait-Process -Id $MapInABoxProcessId -ErrorAction SilentlyContinue
+    $appWasClosed = $true
+    foreach ($file in $changedFiles) {
+        $destinationDirectory = Split-Path -Parent $file.Destination
+        New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
+        $temporaryDestination = $file.Destination + ".update-new"
+        Copy-Item -LiteralPath $file.Source -Destination $temporaryDestination -Force
+        Move-Item -LiteralPath $temporaryDestination -Destination $file.Destination -Force
+    }
+    Write-UpdateLog ("Files applied: " + $changedFiles.Count +
+        " changed; $unchanged unchanged.")
     $internalMarker = Join-Path $AppDirectory "_internal\_portable"
     $legacyMarker = Join-Path $AppDirectory "portable.flag"
     if ((Test-Path -LiteralPath $internalMarker) -and
             (Test-Path -LiteralPath $legacyMarker)) {
         Remove-Item -LiteralPath $legacyMarker -Force
     }
-    Start-Process -FilePath $ExecutablePath
+    $success = $true
+    Write-UpdateLog "Portable update completed successfully."
+} catch {
+    Write-UpdateLog ("Portable update failed: " + $_.Exception.Message)
+    $env:MIAB_PORTABLE_UPDATE_FAILED = $updateLog
+    if (-not (Test-Path -LiteralPath $ReadyPath)) {
+        Set-Content -LiteralPath $ReadyPath -Value "error" -Encoding ASCII
+    }
 } finally {
+    if ($soundPlayer) { $soundPlayer.Stop() }
     Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+    if ($success) {
+        Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
+    }
+    Remove-Item -LiteralPath $updateLock -Force -ErrorAction SilentlyContinue
+    if ($appWasClosed -and (Test-Path -LiteralPath $ExecutablePath)) {
+        Start-Process -FilePath $ExecutablePath
+    }
+    if ($success) {
+        Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+    }
 }
 '''
         with open(script_path, "w", encoding="utf-8-sig") as script_file:
@@ -250,15 +328,38 @@ try {
 
         executable_path = os.path.join(APP_DIR, "MapInABox.exe")
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        subprocess.Popen(
-            [
-                "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                "-WindowStyle", "Hidden", "-File", script_path,
-                "-MapInABoxProcessId", str(os.getpid()),
-                "-ZipPath", zip_path,
-                "-AppDirectory", APP_DIR,
-                "-ExecutablePath", executable_path,
-            ],
-            creationflags=creation_flags,
-            close_fds=True,
-        )
+        try:
+            helper = subprocess.Popen(
+                [
+                    "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-WindowStyle", "Hidden", "-File", script_path,
+                    "-MapInABoxProcessId", str(os.getpid()),
+                    "-ZipPath", zip_path,
+                    "-AppDirectory", APP_DIR,
+                    "-ExecutablePath", executable_path,
+                    "-ReadyPath", ready_path,
+                ],
+                creationflags=creation_flags,
+                close_fds=True,
+            )
+        except Exception:
+            try:
+                os.remove(update_lock)
+            except OSError:
+                pass
+            raise
+        deadline = time.monotonic() + 1800
+        while not os.path.isfile(ready_path):
+            if helper.poll() is not None:
+                raise RuntimeError("Portable update helper stopped during preparation")
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Portable update preparation timed out")
+            time.sleep(0.2)
+        with open(ready_path, "r", encoding="ascii", errors="replace") as ready_file:
+            ready_status = ready_file.read().strip().lower()
+        try:
+            os.remove(ready_path)
+        except OSError:
+            pass
+        if ready_status != "ready":
+            raise RuntimeError("Portable update preparation failed; see Data\\update.log")

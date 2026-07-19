@@ -64,11 +64,11 @@ from free import FreeExploreEngine
 from nav import NavigationEngine
 from here_poi import HereClient as HerePoi
 import mall_directory
-from app_paths import CACHE_DIR, PORTABLE_MODE, RESOURCE_DIR, USER_DIR
+from app_paths import APP_DIR, CACHE_DIR, PORTABLE_MODE, RESOURCE_DIR, USER_DIR
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0.0.27'
+APP_VERSION   = '1.0.0.28'
 
 POI_LIVE_COOLDOWN_SECS = 3.0
 POI_BACKGROUND_WAIT_SECS = 2.0
@@ -14318,6 +14318,25 @@ if __name__ == "__main__":
     # the native per-user instance lock. Installed and portable editions use
     # the same name so they cannot run over one another.
     app = wx.App(False)
+    _portable_update_lock = os.path.join(APP_DIR, ".update-in-progress")
+    if PORTABLE_MODE and os.path.isfile(_portable_update_lock):
+        try:
+            _update_lock_age = time.time() - os.path.getmtime(_portable_update_lock)
+        except OSError:
+            _update_lock_age = 0
+        if _update_lock_age < 1800:
+            wx.MessageBox(
+                "Map in a Box is still being updated. Please wait for the "
+                "processing sound to stop; the new version will open "
+                "automatically.",
+                "Portable Update in Progress",
+                wx.OK | wx.ICON_INFORMATION,
+            )
+            sys.exit(0)
+        try:
+            os.remove(_portable_update_lock)
+        except OSError:
+            pass
     _instance_checker = wx.SingleInstanceChecker(
         f"MapInABox-{wx.GetUserId()}")
     if _instance_checker.IsAnotherRunning():
@@ -14328,6 +14347,17 @@ if __name__ == "__main__":
             wx.OK | wx.ICON_INFORMATION,
         )
         sys.exit(0)
+
+    _portable_update_failure_log = os.environ.pop(
+        "MIAB_PORTABLE_UPDATE_FAILED", "")
+    if _portable_update_failure_log:
+        wx.MessageBox(
+            "The portable update could not be completed. Your existing copy "
+            "has been reopened. Details were written to:\n\n" +
+            _portable_update_failure_log,
+            "Portable Update Failed",
+            wx.OK | wx.ICON_ERROR,
+        )
 
     _LOG_PATH = os.path.join(USER_DIR, "miab.log")
     os.environ["MIAB_LOG_PATH"] = _LOG_PATH
