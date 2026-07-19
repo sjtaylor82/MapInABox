@@ -26,6 +26,15 @@ try:
 except ImportError:
     RouteTools = None
 
+# Airports currently advertised in Virgin Australia's direct network.
+_AIRLINE_DIRECT_AIRPORTS = {
+    "Virgin Australia": frozenset("""
+        ADL ASP BNK BNE BME CNS CBR DRW EMD GLT OOL HTI HBA KGI KTA KNX
+        LST MKY MEL ISA NTL ZNE ONS PER PHE PPP ROK MCY SYD TSV AYQ DPS
+        NAN ZQN APW VLI LHR CDG FCO ATH DOH
+    """.split()),
+}
+
 # Dialogs imported lazily to avoid circular imports
 
 def _get_dialogs():
@@ -628,6 +637,8 @@ class ToolsMixin:
                     self._tool_departure_board()
                 elif selected_tool == "flight_search":
                     self._tool_flight_search()
+                elif selected_tool == "virgin_booking":
+                    self._tool_virgin_australia_booking()
                 elif selected_tool == "hotel_search":
                     self._tool_hotel_search()
                 elif selected_tool == "find_food":
@@ -1422,6 +1433,85 @@ class ToolsMixin:
                 wx.CallAfter(self._finish_thinking)
 
         threading.Thread(target=_calc, daemon=True).start()
+
+    def _tool_virgin_australia_booking(self):
+        """Collect an accessible flight search and hand it to Virgin Australia."""
+        values = self._collect_airline_booking("Virgin Australia")
+        if values is None:
+            return
+
+        def _fmt(value):
+            return value.strftime("%m-%d-%Y")
+
+        params = {
+            "ADT": str(values["adults"]),
+            "CHD": str(values["children"]),
+            "INF": str(values["infants"]),
+            "awardBooking": "false",
+            "pos": "au-en",
+            "journeyType": "round-trip" if values["return"] else "one-way",
+            "date": _fmt(values["depart_date"]),
+            "origin": values["origin"],
+            "destination": values["destination"],
+            "fareType": "REVENUE",
+            "cabinType": "E",
+        }
+        if values["return"]:
+            params.update({
+                "date1": _fmt(values["return_date"]),
+                "origin1": values["destination"],
+                "destination1": values["origin"],
+            })
+        url = ("https://book.virginaustralia.com/dx/VADX/#/flight-selection?"
+               + urllib.parse.urlencode(params))
+        miab_log(
+            "navigation",
+            f"Opening Virgin Australia search: {values['origin']} to "
+            f"{values['destination']}, {params['journeyType']}, "
+            f"{values['adults']} adult(s), {values['children']} child(ren), "
+            f"{values['infants']} infant(s).",
+            self.settings,
+        )
+        try:
+            import webbrowser
+            opened = webbrowser.open(url)
+            if opened is False:
+                raise RuntimeError("The web browser did not accept the booking link.")
+            self._status_update("Virgin Australia flight selection opened in your browser.",
+                                force=True)
+        except Exception as exc:
+            wx.MessageBox(
+                f"Could not open Virgin Australia:\n\n{exc}\n\nBooking link:\n{url}",
+                "Virgin Australia Booking", wx.OK | wx.ICON_ERROR)
+
+    def _collect_airline_booking(self, airline_name):
+        """Collect all airline fields in one explicitly-labelled tab order."""
+        airports_csv = self._ensure_airports_csv()
+        if not airports_csv:
+            self._status_update("Airport data not available.", force=True)
+            return None
+        import csv
+        allowed = _AIRLINE_DIRECT_AIRPORTS.get(airline_name, frozenset())
+        choices = []
+        with open(airports_csv, encoding="utf-8") as airport_file:
+            for row in csv.DictReader(airport_file):
+                code = (row.get("iata_code") or "").strip()
+                if code not in allowed:
+                    continue
+                city = (row.get("municipality") or row.get("name") or code).strip()
+                country = (row.get("iso_country") or "").strip()
+                choices.append((f"{city}, {country} ({code})", code))
+        choices.sort(key=lambda item: item[0].lower())
+
+        from dialogs import VirginAustraliaBookingDialog
+        dlg = VirginAustraliaBookingDialog(
+            self, airline_name=airline_name, airport_choices=choices)
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy()
+            return None
+        values = dlg.values()
+        dlg.Destroy()
+        return values
 
     def _tool_journey_planner(self):
         """Journey Planner — public transit with alternatives."""

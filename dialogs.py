@@ -23,6 +23,30 @@ from wx_utils import _log_key_event, _primary_down
 from logging_utils import miab_log
 
 
+class _ExplicitNameAccessible(getattr(wx, "Accessible", object)):
+    """Expose a reliable MSAA name when wx control names are ignored by NVDA."""
+
+    def __init__(self, name):
+        super().__init__()
+        self._name = name
+
+    def GetName(self, childId):
+        return wx.ACC_OK, self._name
+
+
+def _set_explicit_accessible_name(owner, control, name):
+    control.SetName(name)
+    # wx.Accessible is implemented on Windows.  SetName remains the portable
+    # fallback on macOS and on wx builds without MSAA support.
+    try:
+        accessible = _ExplicitNameAccessible(name)
+        control.SetAccessible(accessible)
+        owner._named_accessibles = getattr(owner, "_named_accessibles", [])
+        owner._named_accessibles.append(accessible)
+    except Exception:
+        pass
+
+
 def _return_parent_focus(dialog) -> None:
     parent = dialog.GetParent()
     suppress = getattr(parent, "_suppress_map_focus_repeat", None)
@@ -822,6 +846,7 @@ class ToolsMenuDialog(wx.Dialog):
         ("Airport Amenity Guide", "airport_amenity_guide"),
         ("Departure Board",    "departure_board"),
         ("Flight Search",      "flight_search"),
+        ("Virgin Australia Booking", "virgin_booking"),
         ("Hotel Search",       "hotel_search"),
         ("Find Food",          "find_food"),
     ]
@@ -1179,6 +1204,186 @@ class RendezvousResultsDialog(wx.Dialog):
 # ---------------------------------------------------------------------------
 # Journey Planner dialogs
 # ---------------------------------------------------------------------------
+
+class VirginAustraliaBookingDialog(wx.Dialog):
+    """Accessible collection of Virgin Australia's flight-search fields."""
+
+    def __init__(self, parent, airline_name="Virgin Australia", airport_choices=None):
+        self.airline_name = airline_name
+        super().__init__(parent, title=f"{airline_name} Booking",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        # Prevent MSAA/NVDA from deriving the dialog name by concatenating all
+        # of its static field labels.
+        _set_explicit_accessible_name(self, self, f"{airline_name} Booking")
+        import datetime as _dt
+
+        panel = wx.Panel(self)
+        outer = wx.BoxSizer(wx.VERTICAL)
+
+        grid = wx.FlexGridSizer(cols=2, vgap=8, hgap=10)
+        grid.AddGrowableCol(1, 1)
+
+        self.trip_type = wx.Choice(panel, choices=["One way", "Return"])
+        _set_explicit_accessible_name(self, self.trip_type, "Trip type")
+        self.trip_type.SetSelection(0)
+        self._airport_codes = dict(airport_choices or [])
+        airport_labels = list(self._airport_codes)
+        self.origin = wx.ComboBox(panel, choices=airport_labels, style=wx.CB_DROPDOWN)
+        _set_explicit_accessible_name(self, self.origin, "Origin")
+        self.destination = wx.ComboBox(panel, choices=airport_labels, style=wx.CB_DROPDOWN)
+        _set_explicit_accessible_name(self, self.destination, "Destination")
+
+        today = _dt.date.today()
+        depart = today + _dt.timedelta(days=7)
+        returning = depart + _dt.timedelta(days=7)
+        self.depart_date = self._make_date_picker(panel, "Departure", depart)
+        self.return_date = self._make_date_picker(panel, "Return", returning)
+
+        # Choices are used instead of SpinCtrl because the Windows SpinCtrl's
+        # embedded edit field is exposed to screen readers without its name.
+        self.adults = wx.Choice(panel, choices=[str(i) for i in range(1, 10)])
+        self.adults.SetSelection(0)
+        _set_explicit_accessible_name(self, self.adults, "Adults age 12 and over")
+        self.children = wx.Choice(panel, choices=[str(i) for i in range(0, 9)])
+        self.children.SetSelection(0)
+        _set_explicit_accessible_name(self, self.children, "Children age 2 to 11")
+        self.infants = wx.Choice(panel, choices=[str(i) for i in range(0, 9)])
+        self.infants.SetSelection(0)
+        _set_explicit_accessible_name(self, self.infants, "Infants under 2")
+
+        fields = [
+            ("Trip type:", self.trip_type),
+            ("Origin:", self.origin),
+            ("Destination:", self.destination),
+            ("Departure date:", self.depart_date["sizer"]),
+            ("Return date:", self.return_date["sizer"]),
+            ("Adults, age 12 and over:", self.adults),
+            ("Children, age 2 to 11:", self.children),
+            ("Infants, under 2:", self.infants),
+        ]
+        for label, control in fields:
+            grid.Add(wx.StaticText(panel, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
+            grid.Add(control, 1, wx.EXPAND)
+        outer.Add(grid, 1, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
+
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        search_btn = wx.Button(panel, wx.ID_OK, f"Open {airline_name}")
+        cancel_btn = wx.Button(panel, wx.ID_CANCEL, "Cancel")
+        buttons.Add(search_btn, 0, wx.RIGHT, 8)
+        buttons.Add(cancel_btn, 0)
+        outer.Add(buttons, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        panel.SetSizer(outer)
+        self.SetSize(560, 430)
+        self.trip_type.Bind(wx.EVT_CHOICE, self._on_trip_type)
+        search_btn.Bind(wx.EVT_BUTTON, self._on_submit)
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+        self._on_trip_type()
+        # Establish focus before ShowModal so screen readers announce the first
+        # field rather than treating every static label as dialog description.
+        self.trip_type.SetFocus()
+        wx.CallAfter(self.trip_type.SetFocus)
+
+    def _on_trip_type(self, event=None):
+        enabled = self.trip_type.GetSelection() == 1
+        for control in (self.return_date["day"], self.return_date["month"],
+                        self.return_date["year"]):
+            control.Enable(enabled)
+
+    @staticmethod
+    def _make_date_picker(parent, prefix, value):
+        """Three named selectors: portable and predictable for screen readers."""
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        day = wx.Choice(parent, choices=[str(i) for i in range(1, 32)])
+        _set_explicit_accessible_name(parent.GetParent(), day, f"{prefix} day")
+        month = wx.Choice(parent, choices=[
+            "January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December",
+        ])
+        _set_explicit_accessible_name(parent.GetParent(), month, f"{prefix} month")
+        current_year = __import__("datetime").date.today().year
+        years = [str(y) for y in range(current_year, current_year + 3)]
+        year = wx.Choice(parent, choices=years)
+        _set_explicit_accessible_name(parent.GetParent(), year, f"{prefix} year")
+        day.SetSelection(value.day - 1)
+        month.SetSelection(value.month - 1)
+        year.SetStringSelection(str(value.year))
+        row.Add(day, 0, wx.RIGHT, 6)
+        row.Add(month, 1, wx.RIGHT | wx.EXPAND, 6)
+        row.Add(year, 0)
+        return {"sizer": row, "day": day, "month": month, "year": year}
+
+    @staticmethod
+    def _date_value(control):
+        return __import__("datetime").date(
+            int(control["year"].GetStringSelection()),
+            control["month"].GetSelection() + 1,
+            control["day"].GetSelection() + 1,
+        )
+
+    def values(self):
+        def _airport_code(control):
+            text = control.GetValue().strip()
+            return self._airport_codes.get(text, text.upper())
+        return {
+            "return": self.trip_type.GetSelection() == 1,
+            "origin": _airport_code(self.origin),
+            "destination": _airport_code(self.destination),
+            "depart_date": self._date_value(self.depart_date),
+            "return_date": self._date_value(self.return_date),
+            "adults": int(self.adults.GetStringSelection()),
+            "children": int(self.children.GetStringSelection()),
+            "infants": int(self.infants.GetStringSelection()),
+        }
+
+    def _on_submit(self, event=None):
+        try:
+            values = self.values()
+        except ValueError:
+            wx.MessageBox("That day does not exist in the selected month and year.",
+                          "Invalid date", wx.OK | wx.ICON_WARNING)
+            self.depart_date["day"].SetFocus()
+            return
+        if not re.fullmatch(r"[A-Z]{3}", values["origin"]):
+            wx.MessageBox("Select an origin airport.",
+                          "Invalid origin", wx.OK | wx.ICON_WARNING)
+            self.origin.SetFocus()
+            return
+        if not re.fullmatch(r"[A-Z]{3}", values["destination"]):
+            wx.MessageBox("Select a destination airport.",
+                          "Invalid destination", wx.OK | wx.ICON_WARNING)
+            self.destination.SetFocus()
+            return
+        if values["origin"] == values["destination"]:
+            wx.MessageBox("Origin and destination must be different.",
+                          "Invalid journey", wx.OK | wx.ICON_WARNING)
+            return
+        import datetime as _dt
+        if values["depart_date"] < _dt.date.today():
+            wx.MessageBox("Departure date cannot be in the past.",
+                          "Invalid date", wx.OK | wx.ICON_WARNING)
+            return
+        if values["return"] and values["return_date"] < values["depart_date"]:
+            wx.MessageBox("Return date cannot be before the departure date.",
+                          "Invalid date", wx.OK | wx.ICON_WARNING)
+            return
+        total = values["adults"] + values["children"] + values["infants"]
+        if total > 9:
+            wx.MessageBox("This search supports up to 9 guests.",
+                          "Too many guests", wx.OK | wx.ICON_WARNING)
+            return
+        if values["infants"] > values["adults"]:
+            wx.MessageBox("Each infant must travel with an adult.",
+                          "Invalid guests", wx.OK | wx.ICON_WARNING)
+            return
+        self.EndModal(wx.ID_OK)
+
+    def _on_char_hook(self, event):
+        if event.GetKeyCode() == wx.WXK_ESCAPE:
+            self.EndModal(wx.ID_CANCEL)
+            return
+        event.Skip()
+
 
 class DateTimePickerDialog(wx.Dialog):
     """Choice-based date/time picker. Returns a datetime object."""
