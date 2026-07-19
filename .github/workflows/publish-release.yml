@@ -47,7 +47,7 @@ jobs:
       - name: Build Windows portable zip
         shell: powershell
         run: |
-          New-Item -Path dist\MapInABox\portable.flag -ItemType File -Force
+          New-Item -Path dist\MapInABox\_internal\_portable -ItemType File -Force
           Compress-Archive -Path dist\MapInABox -DestinationPath MapInABox-Windows-portable.zip -Force
 
       - name: Upload Windows installer artifact

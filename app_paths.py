@@ -10,7 +10,15 @@ RESOURCE_DIR = getattr(
     sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 APP_DIR = (os.path.dirname(os.path.abspath(sys.executable))
            if getattr(sys, "frozen", False) else RESOURCE_DIR)
-PORTABLE_MODE = os.path.isfile(os.path.join(APP_DIR, "portable.flag"))
+_INTERNAL_PORTABLE_MARKER = os.path.join(RESOURCE_DIR, "_portable")
+_LEGACY_PORTABLE_MARKER = os.path.join(APP_DIR, "portable.flag")
+# New portable packages keep their marker with the bundled runtime files so it
+# is not presented to users as an apparently disposable empty file.  Continue
+# recognising the original root marker while existing copies migrate.
+PORTABLE_MODE = (
+    os.path.isfile(_INTERNAL_PORTABLE_MARKER)
+    or os.path.isfile(_LEGACY_PORTABLE_MARKER)
+)
 
 
 def writable_dirs(
@@ -36,4 +44,3 @@ def writable_dirs(
 
 
 USER_DIR, CACHE_DIR = writable_dirs()
-

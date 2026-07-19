@@ -232,6 +232,12 @@ try {
     Get-ChildItem -LiteralPath $source -Force | ForEach-Object {
         Copy-Item -LiteralPath $_.FullName -Destination $AppDirectory -Recurse -Force
     }
+    $internalMarker = Join-Path $AppDirectory "_internal\_portable"
+    $legacyMarker = Join-Path $AppDirectory "portable.flag"
+    if ((Test-Path -LiteralPath $internalMarker) -and
+            (Test-Path -LiteralPath $legacyMarker)) {
+        Remove-Item -LiteralPath $legacyMarker -Force
+    }
     Start-Process -FilePath $ExecutablePath
 } finally {
     Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue

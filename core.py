@@ -68,7 +68,7 @@ from app_paths import CACHE_DIR, PORTABLE_MODE, RESOURCE_DIR, USER_DIR
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0.0.26'
+APP_VERSION   = '1.0.0.27'
 
 POI_LIVE_COOLDOWN_SECS = 3.0
 POI_BACKGROUND_WAIT_SECS = 2.0
@@ -1504,6 +1504,7 @@ class WorldMapPanel(wx.Panel):
         self._bg_bitmap   = None
         self._bg_bitmap_mode = None
         self._label_cache_size = (-1, -1)
+        self._classroom_trail = []
         self.Bind(wx.EVT_PAINT, self._on_paint)
         self.Bind(wx.EVT_SIZE,  self._on_size)
 
@@ -1515,11 +1516,129 @@ class WorldMapPanel(wx.Panel):
         event.Skip()
 
     def set_position(self, lat, lon, street_mode=False, street_label=""):
+        if self._classroom_mode_active():
+            point = (float(lat), float(lon), bool(street_mode))
+            if not self._classroom_trail or point[:2] != self._classroom_trail[-1][:2]:
+                self._classroom_trail.append(point)
+                self._classroom_trail = self._classroom_trail[-120:]
         self.lat          = lat
         self.lon          = lon
         self.street_mode  = street_mode
         self.street_label = street_label
         self.Refresh()
+
+    def set_classroom_mode(self, enabled):
+        """Start or stop a visual map session without adding focusable UI."""
+        if enabled:
+            self._classroom_trail = [(float(self.lat), float(self.lon), bool(self.street_mode))]
+        self.Refresh()
+
+    def _classroom_mode_active(self):
+        return bool(self._owner and getattr(self._owner, "_map_fullscreen", False))
+
+    @staticmethod
+    def _coordinate_text(value, positive, negative):
+        return f"{abs(float(value)):.3f}\N{DEGREE SIGN} {positive if value >= 0 else negative}"
+
+    def _draw_classroom_trail(self, gc, w, h, geo_kwargs=None):
+        if not self._classroom_mode_active() or len(self._classroom_trail) < 2:
+            return
+        geo_kwargs = geo_kwargs or {}
+        expected_street = bool(geo_kwargs)
+        points = []
+        last_lon = None
+        gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(wx.Colour(0, 235, 255, 230)).Width(4)))
+        for lat, lon, street in self._classroom_trail:
+            if street != expected_street:
+                points = []
+                last_lon = None
+                continue
+            if not expected_street and last_lon is not None and abs(lon - last_lon) > 180:
+                points = []
+            px, py = self._geo_to_px(lon, lat, w, h, **geo_kwargs)
+            if 0 <= px <= w and 0 <= py <= h:
+                if points:
+                    gc.StrokeLine(points[-1][0], points[-1][1], px, py)
+                points.append((px, py))
+            last_lon = lon
+
+    def _draw_classroom_destination(self, gc, w, h, geo_kwargs=None):
+        owner = self._owner
+        destination = getattr(owner, "_map_destination", None) if owner else None
+        if not self._classroom_mode_active() or not destination:
+            return
+        try:
+            lat, lon = destination["coords"]
+            px, py = self._geo_to_px(lon, lat, w, h, **(geo_kwargs or {}))
+        except (KeyError, TypeError, ValueError):
+            return
+        if not (0 <= px <= w and 0 <= py <= h):
+            return
+        size = max(8, min(15, int(min(w, h) / 50)))
+        path = gc.CreatePath()
+        path.MoveToPoint(px, py - size)
+        path.AddLineToPoint(px + size, py)
+        path.AddLineToPoint(px, py + size)
+        path.AddLineToPoint(px - size, py)
+        path.CloseSubpath()
+        gc.SetBrush(gc.CreateBrush(wx.Brush(wx.Colour(255, 210, 0))))
+        gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(wx.Colour(20, 20, 20)).Width(3)))
+        gc.DrawPath(path)
+
+    def _draw_classroom_hud(self, gc, w, h):
+        if not self._classroom_mode_active() or w < 240 or h < 160:
+            return
+        owner = self._owner
+        title = (getattr(owner, "last_location_str", "") or self.street_label or
+                 getattr(owner, "last_country_found", "") or "Current position")
+        title = str(title).strip()
+        if len(title) > 72:
+            title = title[:69].rstrip() + "..."
+        context = []
+        for value in (getattr(owner, "last_state_found", ""),
+                      getattr(owner, "last_country_found", ""),
+                      getattr(owner, "current_continent", "")):
+            value = str(value or "").strip()
+            if value and value not in context and value.lower() != title.lower():
+                context.append(value)
+        if getattr(owner, "_walking_mode", False):
+            mode = "Walking map"
+        elif self.street_mode:
+            mode = "Street map"
+        else:
+            mode = "World map"
+        coords = (self._coordinate_text(self.lat, "N", "S") + "   " +
+                  self._coordinate_text(self.lon, "E", "W"))
+        detail = "  \N{BULLET}  ".join(context)
+        font_size = max(13, min(24, int(h / 32)))
+        small_size = max(10, min(17, int(font_size * .7)))
+        pad = max(10, int(font_size * .65))
+        band_h = int(font_size * 3.5)
+        gc.SetBrush(gc.CreateBrush(wx.Brush(wx.Colour(5, 16, 30, 225))))
+        gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(wx.Colour(0, 235, 255)).Width(2)))
+        gc.DrawRoundedRectangle(pad, pad, max(1, w - pad * 2), band_h, 8)
+        gc.SetFont(gc.CreateFont(wx.Font(font_size, wx.FONTFAMILY_SWISS,
+                                        wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)),
+                   wx.Colour(255, 255, 255))
+        gc.DrawText(title, pad * 2, pad * 1.45)
+        gc.SetFont(gc.CreateFont(wx.Font(small_size, wx.FONTFAMILY_SWISS,
+                                        wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)),
+                   wx.Colour(190, 245, 255))
+        second_line = detail or mode
+        if detail:
+            second_line += "  \N{BULLET}  " + mode
+        gc.DrawText(second_line, pad * 2, pad * 1.55 + font_size * 1.25)
+        gc.DrawText(coords, pad * 2, pad * 1.55 + font_size * 2.05)
+        # Shape plus label means north is not communicated by colour alone.
+        nx, ny = w - pad * 3, pad + band_h + pad * 2
+        gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(wx.Colour(255, 255, 255)).Width(3)))
+        gc.StrokeLine(nx, ny + 24, nx, ny)
+        gc.StrokeLine(nx, ny, nx - 7, ny + 10)
+        gc.StrokeLine(nx, ny, nx + 7, ny + 10)
+        gc.SetFont(gc.CreateFont(wx.Font(small_size, wx.FONTFAMILY_SWISS,
+                                        wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)),
+                   wx.Colour(255, 255, 255))
+        gc.DrawText("N", nx - small_size / 2, ny - small_size * 1.4)
 
     def set_flash(self, name, rings_idx, centroid_lon, centroid_lat):
         self._flash_name  = name
@@ -1589,12 +1708,18 @@ class WorldMapPanel(wx.Panel):
         gc = wx.GraphicsContext.Create(dc)
         if gc:
             self._draw_mode_overlay(gc, w, h)
+            self._draw_classroom_trail(gc, w, h)
+            self._draw_classroom_destination(gc, w, h)
             px, py = self._geo_to_px(self.lon, self.lat, w, h)
+            marker_size = 14 if self._classroom_mode_active() else 8
             gc.SetBrush(gc.CreateBrush(wx.Brush(COL_RING)))
             gc.SetPen(wx.NullPen)
-            gc.DrawEllipse(px - 8, py - 8, 16, 16)
+            gc.DrawEllipse(px - marker_size, py - marker_size,
+                           marker_size * 2, marker_size * 2)
             gc.SetBrush(gc.CreateBrush(wx.Brush(COL_DOT)))
-            gc.DrawEllipse(px - 5, py - 5, 10, 10)
+            dot_size = max(5, marker_size - 5)
+            gc.DrawEllipse(px - dot_size, py - dot_size, dot_size * 2, dot_size * 2)
+            self._draw_classroom_hud(gc, w, h)
 
     def _draw_label(self, gc, text, cx, cy, size):
         font = wx.Font(size, wx.FONTFAMILY_SWISS,
@@ -1854,18 +1979,24 @@ class WorldMapPanel(wx.Panel):
             x2, y2 = self._geo_to_px(lon_max, glat, w, h, **kw)
             gc.StrokeLine(x1, y1, x2, y2)
             glat += step
+        self._draw_classroom_trail(gc, w, h, kw)
+        self._draw_classroom_destination(gc, w, h, kw)
         px, py = self._geo_to_px(self.lon, self.lat, w, h, **kw)
+        marker_size = 17 if self._classroom_mode_active() else 12
         gc.SetBrush(gc.CreateBrush(wx.Brush(COL_RING)))
         gc.SetPen(wx.NullPen)
-        gc.DrawEllipse(px - 12, py - 12, 24, 24)
+        gc.DrawEllipse(px - marker_size, py - marker_size,
+                       marker_size * 2, marker_size * 2)
         gc.SetBrush(gc.CreateBrush(wx.Brush(COL_DOT)))
-        gc.DrawEllipse(px - 8, py - 8, 16, 16)
+        dot_size = max(7, marker_size - 5)
+        gc.DrawEllipse(px - dot_size, py - dot_size, dot_size * 2, dot_size * 2)
         if self.street_label:
             gc.SetFont(gc.CreateFont(
                 wx.Font(10, wx.FONTFAMILY_DEFAULT,
                         wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD),
                 wx.Colour(220, 220, 220)))
             gc.DrawText("STREET  " + self.street_label, 8, 8)
+        self._draw_classroom_hud(gc, w, h)
 
 
 # ---------------------------------------------------------------------------
@@ -2883,7 +3014,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         add_item(map_menu, "currency", "C&urrency",
                  lambda e: self._announce_currency())
         map_menu.AppendSeparator()
-        add_item(map_menu, "fullscreen", "Full Screen &Map\tF9",
+        add_item(map_menu, "fullscreen", "Classroom / Full Screen &Map\tF9",
                  lambda e: self._toggle_map_fullscreen())
         menubar.Append(map_menu, "&Map")
 
@@ -9311,10 +9442,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             wx.CallLater(2000, self._restore_poi_listbox)
 
     def _toggle_map_fullscreen(self):
-        """F9 — toggle the map panel between full screen and normal split view."""
+        """F9 — toggle the shared Windows/macOS classroom map presentation."""
         self._map_fullscreen = not self._map_fullscreen
         status = ""
         if self._map_fullscreen:
+            self._map_was_maximized = self.IsMaximized()
             self.Maximize(True)
             self._map_sizer_item.SetProportion(999)
             self._list_sizer_item.SetProportion(1)
@@ -9322,7 +9454,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self._info_sizer_item.SetProportion(0)
             self._info_sizer_item.SetMinSize((1, -1))
             self.info_panel.Hide()
-            status = "Map maximised."
+            status = "Classroom map on."
         else:
             self._map_sizer_item.SetProportion(3)
             self._list_sizer_item.SetProportion(1)
@@ -9330,7 +9462,10 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self.info_panel.Show()
             self._info_sizer_item.SetProportion(1)
             self._info_sizer_item.SetMinSize((250, -1))
-            status = "Map restored."
+            if not getattr(self, "_map_was_maximized", False):
+                self.Maximize(False)
+            status = "Classroom map off."
+        self.map_panel.set_classroom_mode(self._map_fullscreen)
         self._h_sizer.Layout()
         self.map_panel.Refresh()
         self.listbox.SetFocus()
@@ -12801,7 +12936,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             "F7: toggle sounds.",
             "F8: flash country on map.",
             "Shift+F8: cycle world view and country view.",
-            "F9: toggle full-screen map.",
+            "F9: toggle the classroom full-screen map.",
             "F10: country discovery challenge.",
             "Ctrl+F10: scored challenge session.",
             "Shift+F10: repeat challenge target.",
