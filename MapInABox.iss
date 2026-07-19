@@ -7,13 +7,13 @@
 ;      iscc MapInABox.iss
 
 #define AppName    "Map in a Box"
-#define AppVersion "1.0.21"
+#define AppVersion "1.0.22"
 #define AppExe     "MapInABox.exe"
 #define AppDir     "dist\MapInABox"
 
 [Setup]
 AppName={#AppName}
-AppVersion=1.0.21
+AppVersion=1.0.22
 AppVerName={#AppName} {#AppVersion}
 AppPublisher=Sam Taylor
 AppPublisherURL=https://github.com/sjtaylor82/MapInABox
@@ -55,7 +55,7 @@ UninstallDisplayIcon={app}\{#AppExe}
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
+Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 
 [Files]
 ; Everything PyInstaller built

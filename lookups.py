@@ -12,6 +12,7 @@ import gzip
 import json
 import math
 import os
+import ssl
 import threading
 import time
 import urllib.parse
@@ -21,6 +22,12 @@ import wx
 
 from logging_utils import miab_log
 from wx_utils import IS_MAC
+
+try:
+    import certifi
+    _HTTPS_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+except Exception:
+    _HTTPS_CONTEXT = ssl.create_default_context()
 
 
 class LookupsMixin:
@@ -76,9 +83,11 @@ class LookupsMixin:
                 return
             self._wiki_ensure_cache()
             cache_key = f"ocean|{ocean}"
-            if cache_key in self._wiki_cache:
-                self._status_update(self._wiki_cache[cache_key], force=True)
+            cached = self._wiki_cache.get(cache_key, "")
+            if cached and not cached.startswith("Lookup failed:"):
+                self._status_update(cached, force=True)
                 return
+            self._wiki_cache.pop(cache_key, None)
             self._status_update(f"Looking up {ocean}...")
             def _fetch_ocean(ocean=ocean, cache_key=cache_key):
                 try:
@@ -89,7 +98,8 @@ class LookupsMixin:
                     req = urllib.request.Request(
                         f"https://en.wikipedia.org/w/api.php?{params}",
                         headers={"User-Agent": "MapInABox/1.0"})
-                    with urllib.request.urlopen(req, timeout=10) as r:
+                    with urllib.request.urlopen(
+                            req, timeout=10, context=_HTTPS_CONTEXT) as r:
                         data = json.loads(r.read().decode())
                     titles = data[1] if isinstance(data, list) and len(data) > 1 else []
                     if not titles:
@@ -100,7 +110,8 @@ class LookupsMixin:
                     req2  = urllib.request.Request(
                         f"https://en.wikipedia.org/api/rest_v1/page/summary/{title}",
                         headers={"User-Agent": "MapInABox/1.0"})
-                    with urllib.request.urlopen(req2, timeout=10) as r2:
+                    with urllib.request.urlopen(
+                            req2, timeout=10, context=_HTTPS_CONTEXT) as r2:
                         pg = json.loads(r2.read().decode())
                     extract  = (pg.get("extract") or "").strip()
                     if not extract:
@@ -122,15 +133,18 @@ class LookupsMixin:
         lat = float(getattr(self, "lat", 0.0))
         lon = float(getattr(self, "lon", 0.0))
         cache_key = f"geo|{lat:.3f}|{lon:.3f}"
-        if cache_key in self._wiki_cache:
-            self._status_update(self._wiki_cache[cache_key], force=True)
+        cached = self._wiki_cache.get(cache_key, "")
+        if cached and not cached.startswith("Lookup failed:"):
+            self._status_update(cached, force=True)
             return
+        self._wiki_cache.pop(cache_key, None)
 
         self._status_update("Looking up nearby Wikipedia articles...")
 
         def _http(url):
             req = urllib.request.Request(url, headers={"User-Agent": "MapInABox/1.0"})
-            with urllib.request.urlopen(req, timeout=10) as r:
+            with urllib.request.urlopen(
+                    req, timeout=10, context=_HTTPS_CONTEXT) as r:
                 return json.loads(r.read().decode())
 
         def _summary(title):
@@ -212,7 +226,13 @@ class LookupsMixin:
             WIKI_CACHE_PATH = None
         if not hasattr(self, '_wiki_cache'):
             self._wiki_cache = {}
-        self._wiki_cache[cache_key] = summary
+        # Network and certificate failures are transient. Never persist them,
+        # otherwise one failed request disables Wikipedia at that coordinate
+        # until the user manually removes the cache file.
+        if summary.startswith("Lookup failed:"):
+            self._wiki_cache.pop(cache_key, None)
+        else:
+            self._wiki_cache[cache_key] = summary
         if WIKI_CACHE_PATH:
             try:
                 with open(WIKI_CACHE_PATH, "w", encoding="utf-8") as f:

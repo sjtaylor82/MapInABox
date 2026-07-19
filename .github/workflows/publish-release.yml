@@ -36,7 +36,7 @@ jobs:
         shell: powershell
         run: |
           python -m pip install --upgrade pip "setuptools<70" wheel
-          python -m pip install pyinstaller wxPython numpy pandas Pillow pygame shapely h3 tzfpy pycountry accessible-output2 google-genai google-api-core proto-plus
+          python -m pip install pyinstaller wxPython numpy pandas Pillow pygame shapely h3 tzfpy pycountry accessible-output2 google-genai google-api-core proto-plus certifi
           choco install innosetup -y --no-progress
 
       - name: Build Windows installer
@@ -90,7 +90,8 @@ jobs:
             accessible-output2 \
             google-genai \
             google-api-core \
-            proto-plus
+            proto-plus \
+            certifi
 
       - name: Build macOS app bundle
         run: |
