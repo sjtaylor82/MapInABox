@@ -1295,16 +1295,19 @@ class JourneyResultsDialog(wx.Dialog):
         self._sizer.Add(self.detail, 1, wx.ALL | wx.EXPAND, 10)
         self.detail.Hide()
 
-        # Action buttons — "Show Platforms" only applies to transit journeys.
+        # Action buttons — platform and stop data only apply to transit journeys.
         self._has_transit = any(
             leg.get("type") == "transit"
             for r in routes for leg in (r.get("legs") or [])
         )
         action_row = wx.BoxSizer(wx.HORIZONTAL)
         self._platforms_btn = None
+        self._stops_btn = None
         if self._has_transit:
             self._platforms_btn = wx.Button(panel, label="Show Platforms")
             action_row.Add(self._platforms_btn, 0, wx.RIGHT, 10)
+            self._stops_btn = wx.Button(panel, label="Show Stops")
+            action_row.Add(self._stops_btn, 0, wx.RIGHT, 10)
         self._sizer.Add(action_row, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
 
         accessible_row = wx.BoxSizer(wx.HORIZONTAL)
@@ -1322,6 +1325,8 @@ class JourneyResultsDialog(wx.Dialog):
 
         if self._platforms_btn:
             self._platforms_btn.Bind(wx.EVT_BUTTON, self._on_show_platforms)
+        if self._stops_btn:
+            self._stops_btn.Bind(wx.EVT_BUTTON, self._on_show_stops)
         self._accessible_osm_btn.Bind(wx.EVT_BUTTON, self._on_accessible_osm)
         close_btn.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CLOSE))
         self.listbox.Bind(wx.EVT_LISTBOX_DCLICK, lambda e: self._show_detail())
@@ -1394,6 +1399,50 @@ class JourneyResultsDialog(wx.Dialog):
             parent._fetch_journey_platforms(self._routes, self._on_platforms_ready)
         else:
             self._platforms_btn.SetLabel("Not available")
+
+    def _on_show_stops(self, event=None):
+        if not self._stops_btn:
+            return
+        idx = self._selected_route_index()
+        if idx == wx.NOT_FOUND:
+            return
+        self._stops_btn.Disable()
+        self._stops_btn.SetLabel("Loading stops…")
+        parent = self.GetParent()
+        if hasattr(parent, "_fetch_journey_stops"):
+            parent._fetch_journey_stops(self._routes, idx, self._on_stops_ready)
+        else:
+            self._stops_btn.SetLabel("Not available")
+
+    def _on_stops_ready(self, title, items):
+        if self._stops_btn:
+            self._stops_btn.Enable()
+            self._stops_btn.SetLabel("Show Stops")
+        dlg = wx.Dialog(self, title=title,
+                        style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        stops = wx.ListBox(dlg, choices=items or ["No stop data available."],
+                           style=wx.LB_SINGLE)
+        if stops.GetCount():
+            stops.SetSelection(0)
+        stops.SetMinSize((560, 320))
+        sizer.Add(stops, 1, wx.EXPAND | wx.ALL, 10)
+        close_btn = wx.Button(dlg, wx.ID_CLOSE, "Close")
+        sizer.Add(close_btn, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        dlg.SetSizer(sizer)
+        dlg.SetSize(620, 440)
+        close_btn.Bind(wx.EVT_BUTTON, lambda e: dlg.EndModal(wx.ID_CLOSE))
+        dlg.Bind(wx.EVT_CHAR_HOOK,
+                 lambda e: dlg.EndModal(wx.ID_CLOSE)
+                 if e.GetKeyCode() in (wx.WXK_ESCAPE, wx.WXK_BACK)
+                 else e.Skip())
+        wx.CallAfter(stops.SetFocus)
+        dlg.ShowModal()
+        dlg.Destroy()
+        if self._showing_detail:
+            self.detail.SetFocus()
+        else:
+            self.listbox.SetFocus()
 
     def _on_accessible_osm(self, event=None):
         idx = self._selected_route_index()
@@ -1605,6 +1654,10 @@ class TransitLookupDialog(wx.Dialog):
 
         close_btn.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CLOSE))
         self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+        for list_ctrl in (
+                self.listbox, self.dep_listbox,
+                self.cand_listbox, self.stops_listbox):
+            list_ctrl.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
         wx.CallAfter(self.listbox.SetFocus)
 
     def _on_key_down(self, event):
@@ -1700,14 +1753,14 @@ class TransitLookupDialog(wx.Dialog):
         stops = result if isinstance(result, list) else []
         coords_stops = []
         if stops:
-            for i, s in enumerate(stops, 1):
+            for s in stops:
                 if isinstance(s, dict):
                     name = s.get("name", s.get("stop_name", "?"))
                     if s.get("lat") and s.get("lon"):
                         coords_stops.append(s)
                 else:
                     name = str(s)
-                self.stops_listbox.Append(f"{i}. {name}")
+                self.stops_listbox.Append(name)
             self.stops_listbox.SetSelection(0)
         else:
             self.stops_listbox.Append("No timetable data available for this service.")
@@ -1734,8 +1787,8 @@ class TransitLookupDialog(wx.Dialog):
         self._title_label.SetLabel(f"Stops: {candidate['label']}:")
         self.stops_listbox.Clear()
         if stop_names:
-            for i, name in enumerate(stop_names, 1):
-                self.stops_listbox.Append(f"{i}. {name}")
+            for name in stop_names:
+                self.stops_listbox.Append(name)
             self.stops_listbox.SetSelection(0)
         else:
             self.stops_listbox.Append("No stop data for this route variant.")
@@ -1803,7 +1856,9 @@ class TransitLookupDialog(wx.Dialog):
                 self._show_stops()
             elif self._level == 2:
                 self._show_stops_for_candidate()
-        if _hook_detail_list(self, event, self._level == 3, _show_list, _show_detail,
+        # Every level above the station list is a detail level.  Passing only
+        # level 3 here made Backspace a no-op on departures and candidates.
+        if _hook_detail_list(self, event, self._level > 0, _show_list, _show_detail,
                              escape_id=wx.ID_CLOSE, on_primary=_on_primary):
             return
         event.Skip()

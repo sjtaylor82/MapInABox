@@ -1766,6 +1766,15 @@ class RouteTools:
         # Parse and deduplicate
         seen_keys: set[str] = set()
         parsed: list[dict] = []
+        allowed_vehicle_types = {
+            "train": {
+                "RAIL", "TRAIN", "HEAVY_RAIL", "COMMUTER_TRAIN",
+                "HIGH_SPEED_TRAIN", "LONG_DISTANCE_TRAIN", "METRO_RAIL",
+                "SUBWAY", "TRAM", "LIGHT_RAIL", "MONORAIL",
+            },
+            "bus": {"BUS", "INTERCITY_BUS", "TROLLEYBUS", "SHARE_TAXI"},
+            "ferry": {"FERRY"},
+        }
         for raw in routes_raw:
             raw = _gd(raw)
             first_leg = _gd((raw.get("legs") or [{}])[0])
@@ -1774,6 +1783,25 @@ class RouteTools:
                 r = self._parse_google_walking_route(raw, 0)
             else:
                 r = self._parse_transit_route(raw, 0)  # number assigned after sort
+            if travel_mode != "walking" and transit_filter in allowed_vehicle_types:
+                transit_legs = [leg for leg in r.get("legs", [])
+                                if leg.get("type") == "transit"]
+                vehicle_types = {
+                    (leg.get("vehicle_type") or "").strip().upper()
+                    for leg in transit_legs
+                }
+                allowed = allowed_vehicle_types[transit_filter]
+                # The selected filter is a hard constraint, not a preference:
+                # every transit leg must be of the requested kind.
+                if (not transit_legs or not vehicle_types
+                        or not vehicle_types.issubset(allowed)):
+                    miab_log(
+                        "navigation",
+                        f"Journey {transit_filter}-only filter rejected route with "
+                        f"transit vehicle types {sorted(vehicle_types)}.",
+                        getattr(self, "settings", None),
+                    )
+                    continue
             if travel_mode == "walking" and origin_coords and dest_coords:
                 straight_m = int(round(_haversine_m(
                     origin_coords[0], origin_coords[1], dest_coords[0], dest_coords[1]

@@ -1461,17 +1461,28 @@ class ToolsMixin:
             return
         d_lat, d_lon, d_name = dest
 
-        from dialogs import ChoiceDialog
-        trip_choices = ["Walking directions", "Transit directions"]
-        dlg = ChoiceDialog(self, "What kind of journey?", "Journey Type", trip_choices)
-        if dlg.ShowModal() != wx.ID_OK:
-            dlg.Destroy()
-            self._status_update("Journey planner cancelled.", force=True)
-            return
-        trip_sel = dlg.GetSelection()
-        dlg.Destroy()
+        # Do not offer implausible long-distance walking routes.  This uses
+        # straight-line distance, so any real walking route would be longer.
+        walk_limit_km = 25.0
+        direct_km = math.sqrt(
+            ((o_lat - d_lat) * 111.0) ** 2
+            + ((o_lon - d_lon) * 111.0
+               * math.cos(math.radians((o_lat + d_lat) / 2.0))) ** 2)
 
-        travel_mode = "walking" if trip_sel == 0 else "transit"
+        from dialogs import ChoiceDialog
+        if direct_km > walk_limit_km:
+            travel_mode = "transit"
+        else:
+            # Transit is the normal Journey Planner mode; walking is secondary.
+            trip_choices = ["Transit directions", "Walking directions"]
+            dlg = ChoiceDialog(self, "What kind of journey?", "Journey Type", trip_choices)
+            if dlg.ShowModal() != wx.ID_OK:
+                dlg.Destroy()
+                self._status_update("Journey planner cancelled.", force=True)
+                return
+            trip_sel = dlg.GetSelection()
+            dlg.Destroy()
+            travel_mode = "transit" if trip_sel == 0 else "walking"
         timing_mode = "now"
         timestamp = None
 
@@ -1825,6 +1836,144 @@ class ToolsMixin:
             wx.CallAfter(done_cb, routes)
 
         threading.Thread(target=_fetch, daemon=True).start()
+
+    def _fetch_journey_stops(self, routes, selected_index, done_cb):
+        """Load ordered GTFS stops for the selected journey's transit legs."""
+        if not routes:
+            return
+        if selected_index < 0 or selected_index >= len(routes):
+            selected_index = 0
+        route = routes[selected_index]
+
+        def _fetch():
+            alarm_on = False
+            items = []
+            try:
+                wx.CallAfter(
+                    self._status_update,
+                    "Loading route stops. Transit data may be downloaded…", True)
+                try:
+                    self.sound.play_file(r"c:\windows\media\alarm09.wav", loops=-1)
+                    alarm_on = True
+                except Exception:
+                    pass
+
+                transit_legs = [leg for leg in route.get("legs", [])
+                                if leg.get("type") == "transit"]
+                for leg_num, leg in enumerate(transit_legs, 1):
+                    line = leg.get("line_name") or leg.get("vehicle_type") or "Service"
+                    direction = leg.get("headsign") or leg.get("arrival_stop") or ""
+                    heading = f"{line} to {direction}" if direction else line
+                    result = self._gtfs_stops_for_journey_leg(leg)
+                    if len(transit_legs) > 1:
+                        items.append(f"Service {leg_num}: {heading}")
+                    if isinstance(result, dict) and "__candidates__" in result:
+                        candidates = result.get("__candidates__") or []
+                        result = candidates[0].get("stop_list", []) if candidates else []
+                        if candidates:
+                            items.append(f"Possible GTFS match: {candidates[0].get('label', heading)}")
+                    if not isinstance(result, list) or not result:
+                        items.append("No stop sequence available for this service.")
+                    else:
+                        for stop in result:
+                            name = (stop.get("name", stop.get("stop_name", "Unknown"))
+                                    if isinstance(stop, dict) else str(stop))
+                            items.append(name)
+
+                if not items:
+                    items = ["No transit legs were found in this journey."]
+                miab_log("navigation",
+                         f"Journey stop lookup finished: {len(transit_legs)} transit leg(s), "
+                         f"{len(items)} display row(s).", self.settings)
+            except Exception as exc:
+                miab_log("errors", f"Journey stop lookup failed: {exc}", self.settings)
+                items = [f"Could not load route stops: {exc}"]
+            finally:
+                if alarm_on:
+                    try:
+                        self.sound.stop()
+                    except Exception:
+                        pass
+            wx.CallAfter(self._status_update, "Route stops ready.", True)
+            wx.CallAfter(done_cb, "Journey Planner - Route Stops", items)
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _gtfs_stops_for_journey_leg(self, leg):
+        """Match a journey leg by its known boarding and alighting points.
+
+        Google service codes and GTFS route names often differ (for example
+        WST versus a feed's route identifier).  Endpoints are therefore the
+        authoritative match for Journey Planner, just as coordinates are for
+        platform lookup.  The returned list is only the travelled segment.
+        """
+        dep_lat = leg.get("departure_stop_lat")
+        dep_lon = leg.get("departure_stop_lon")
+        arr_lat = leg.get("arrival_stop_lat")
+        arr_lon = leg.get("arrival_stop_lon")
+        if None in (dep_lat, dep_lon, arr_lat, arr_lon):
+            return ["No stop coordinates are available for this service."]
+
+        feed_ids = self._transit._ensure_feeds_for_location(dep_lat, dep_lon)
+        if not feed_ids:
+            return ["No GTFS feed is available for this service."]
+
+        def _distance_sq(stop, lat, lon):
+            return (((float(stop.get("lat", lat)) - lat) * 111_000) ** 2
+                    + ((float(stop.get("lon", lon)) - lon) * 111_000
+                       * math.cos(math.radians(lat))) ** 2)
+
+        line_key = (leg.get("line_name") or "").strip().lower()
+        headsign_key = (leg.get("headsign") or "").strip().lower()
+        best = None
+        for feed_id in feed_ids:
+            data = self._transit._feeds.get(feed_id, {})
+            routes = data.get("routes", {})
+            for (route_id, headsign), sequence in data.get("route_stops", {}).items():
+                if len(sequence) < 2:
+                    continue
+                dep_idx, dep_stop = min(
+                    enumerate(sequence), key=lambda pair: _distance_sq(pair[1], dep_lat, dep_lon))
+                dep_d2 = _distance_sq(dep_stop, dep_lat, dep_lon)
+                onward = sequence[dep_idx:]
+                if not onward:
+                    continue
+                rel_arr_idx, arr_stop = min(
+                    enumerate(onward), key=lambda pair: _distance_sq(pair[1], arr_lat, arr_lon))
+                arr_d2 = _distance_sq(arr_stop, arr_lat, arr_lon)
+                arr_idx = dep_idx + rel_arr_idx
+                # Both endpoints must genuinely belong to this sequence.  Two
+                # kilometres accommodates large station/platform complexes.
+                if dep_d2 > 2_000 ** 2 or arr_d2 > 2_000 ** 2:
+                    continue
+                route_info = routes.get(route_id, {})
+                names = " ".join((route_info.get("short", ""),
+                                  route_info.get("long", ""))).lower()
+                score = dep_d2 + arr_d2
+                if line_key and line_key in names:
+                    score *= 0.5
+                if headsign_key and (headsign_key in (headsign or "").lower()
+                                     or headsign_key in sequence[-1].get("name", "").lower()):
+                    score *= 0.5
+                candidate = (score, feed_id, route_id, headsign,
+                             sequence[dep_idx:arr_idx + 1], dep_d2, arr_d2)
+                if best is None or candidate[0] < best[0]:
+                    best = candidate
+
+        if best is None:
+            miab_log("errors",
+                     f"Journey GTFS endpoint match failed for "
+                     f"{leg.get('departure_stop', '')!r} to {leg.get('arrival_stop', '')!r}.",
+                     self.settings)
+            return ["No GTFS stop sequence matched this journey's boarding and alighting stops."]
+
+        _, feed_id, route_id, headsign, stops, dep_d2, arr_d2 = best
+        miab_log("navigation",
+                 f"Journey GTFS endpoint match: feed {feed_id}, route {route_id}, "
+                 f"headsign={headsign!r}, {len(stops)} travelled stop(s), "
+                 f"endpoint distances={math.sqrt(dep_d2):.0f}m/{math.sqrt(arr_d2):.0f}m.",
+                 self.settings)
+        return stops
 
     def _show_journey_results(self, routes):
         """Display journey results in the two-level dialog."""
@@ -2799,13 +2948,18 @@ class ToolsMixin:
         self._finish_thinking()
         self.listbox.SetFocus()
 
-    def _gtfs_stops_for_departure(self, departure):
+    def _gtfs_stops_for_departure(self, departure, allow_destination_feed=True):
         """Try to find GTFS stop sequence matching a HERE departure.
 
         Strategy:
         1. Search local feeds (by station coordinates) for matching route
         2. If no match, search the MobilityData catalog by operator name,
            download that feed, and search it
+
+        ``allow_destination_feed`` is disabled by the Journey Planner so its
+        Show Stops action remains non-interactive, like Show Platforms.  The
+        Departure Board keeps the destination fallback because users can drill
+        into ambiguous service data there.
 
         Returns list of stop name strings, or a single-item error list.
         """
@@ -3165,7 +3319,7 @@ class ToolsMixin:
         # Perth/Adelaide are >2500km — Great Southern Rail isn't in any
         # GTFS feed anyway, so don't waste time downloading.
         _dest_feed_ids: list = []
-        if _dest_query and not candidates:
+        if allow_destination_feed and _dest_query and not candidates:
             try:
                 rt_obj = self._get_route_tools()
             except Exception:

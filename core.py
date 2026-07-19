@@ -67,7 +67,7 @@ import mall_directory
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0.22'
+APP_VERSION   = '1.0.0.23'
 
 POI_LIVE_COOLDOWN_SECS = 3.0
 POI_BACKGROUND_WAIT_SECS = 2.0
