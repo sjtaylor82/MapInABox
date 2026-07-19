@@ -68,7 +68,7 @@ from app_paths import CACHE_DIR, PORTABLE_MODE, RESOURCE_DIR, USER_DIR
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0.0.25'
+APP_VERSION   = '1.0.0.26'
 
 POI_LIVE_COOLDOWN_SECS = 3.0
 POI_BACKGROUND_WAIT_SECS = 2.0
