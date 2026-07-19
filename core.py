@@ -850,6 +850,8 @@ DEFAULT_SETTINGS = {
     "walk_poi_radius_m":      80,
     "walk_announce_category": True,
     "announce_climate_zones": True,
+    "check_updates_at_startup": True,
+    "skipped_update_version": "",
     "spatial_tones_mode":     "world",  # "world", "country", or "region"
     "challenge_direction_mode": "map",  # "map" or "globe"
     "poi_browse_radius_km":    1,
@@ -2483,7 +2485,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         threading.Thread(target=self._ensure_airports_csv, daemon=True).start()
         # Update check — silent background thread
         self._updater = None
-        if UpdateChecker:
+        if UpdateChecker and self.settings.get("check_updates_at_startup", True):
             self._updater = UpdateChecker(
                 current_version = APP_VERSION,
                 repo            = "sjtaylor82/MapInABox",
@@ -2491,24 +2493,71 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             )
             self._updater.start()
 
-    def _on_update_found(self, latest_version: str) -> None:
+    def _on_update_found(self, latest_version: str, manual: bool = False) -> None:
+        if (not manual
+                and self.settings.get("skipped_update_version", "") == latest_version):
+            return
         self._update_dialog_active = True
-        dlg = wx.MessageDialog(
+        dlg = wx.RichMessageDialog(
             self,
             f"Version {latest_version} of Map in a Box is available.\n\nWould you like to update now?",
             "Update Available",
             wx.YES_NO | wx.YES_DEFAULT | wx.ICON_INFORMATION,
         )
+        dlg.ShowCheckBox("Skip this version")
+        skip_version = False
         try:
             result = dlg.ShowModal()
+            skip_version = dlg.IsCheckBoxChecked()
         finally:
             self._update_dialog_active = False
             dlg.Destroy()
+
+        if skip_version and result != wx.ID_YES:
+            self.settings["skipped_update_version"] = latest_version
+            save_settings(self.settings)
 
         if result == wx.ID_YES:
             self._show_update_progress_dialog()
             self._update_last_announced_pct = -1
             threading.Thread(target=self._run_update_download, daemon=True).start()
+
+    def _check_for_updates(self) -> None:
+        """Run an explicit update check and always report its outcome."""
+        if not UpdateChecker:
+            wx.MessageBox("Update checking is unavailable in this build.",
+                          "Check for Updates", wx.OK | wx.ICON_ERROR)
+            return
+        if getattr(self, "_manual_update_checking", False):
+            self._status_update("An update check is already in progress.", force=True)
+            return
+        self._manual_update_checking = True
+        self._status_update("Checking for updates...", force=True)
+
+        def _found(version):
+            self._manual_update_checking = False
+            self._on_update_found(version, manual=True)
+
+        def _current():
+            self._manual_update_checking = False
+            wx.MessageBox(
+                f"You are using the latest version, {APP_VERSION}.",
+                "Check for Updates", wx.OK | wx.ICON_INFORMATION)
+
+        def _failed():
+            self._manual_update_checking = False
+            wx.MessageBox(
+                "Could not check for updates. Please check your internet connection.",
+                "Check for Updates", wx.OK | wx.ICON_ERROR)
+
+        self._updater = UpdateChecker(
+            current_version=APP_VERSION,
+            repo="sjtaylor82/MapInABox",
+            on_update_found=_found,
+            on_no_update=_current,
+            on_check_error=_failed,
+        )
+        self._updater.start()
 
     def _show_update_progress_dialog(self) -> None:
         """Show a native progress bar so screen readers can report progress."""
@@ -2725,7 +2774,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             "add_fav": new_id(),
             "tools": new_id(), "sounds": new_id(), "challenge": new_id(),
             "challenge_multi": new_id(),
-            "help": new_id(), "about": new_id(), "manual": new_id(), "donate": new_id(),
+            "help": new_id(), "about": new_id(), "manual": new_id(),
+            "check_updates": new_id(), "donate": new_id(),
         }
         self._menu_ids = ids
 
@@ -2879,6 +2929,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                  lambda e: self.show_help())
         add_item(help_menu, "manual", "&Manual",
                  lambda e: os.startfile(os.path.join(BASE_DIR, "manual.html")))
+        add_item(help_menu, "check_updates", "Check for &Updates",
+                 lambda e: self._check_for_updates())
         add_item(help_menu, "about", "&About",
                  lambda e: self._show_about())
         help_menu.AppendSeparator()

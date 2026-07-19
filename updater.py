@@ -69,10 +69,13 @@ def _pick_asset(assets: list[dict]) -> dict | None:
 class UpdateChecker:
     """Check for updates in a background thread and notify the app."""
 
-    def __init__(self, current_version: str, repo: str, on_update_found):
+    def __init__(self, current_version: str, repo: str, on_update_found,
+                 on_no_update=None, on_check_error=None):
         self.current_version = current_version
         self.repo            = repo
         self.on_update_found = on_update_found  # callable(latest_version: str)
+        self.on_no_update = on_no_update
+        self.on_check_error = on_check_error
         self.latest_version: str       = ""
         self._asset:         dict | None = None
         self._lock           = threading.Lock()
@@ -95,6 +98,9 @@ class UpdateChecker:
             assets = data.get("assets", [])
 
             if not _is_newer(tag, self.current_version):
+                if self.on_no_update:
+                    import wx
+                    wx.CallAfter(self.on_no_update)
                 return
 
             asset = _pick_asset(assets)
@@ -110,6 +116,9 @@ class UpdateChecker:
         except Exception as e:
             # Never raise — update check should be completely silent on failure
             miab_log("errors", f"[Updater] Check failed (non-fatal): {e}", getattr(self, "settings", None))
+            if self.on_check_error:
+                import wx
+                wx.CallAfter(self.on_check_error)
 
     def download_and_install(self, progress_cb=None) -> bool:
         """Download the release asset and launch it.  Returns False on error.

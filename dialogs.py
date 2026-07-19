@@ -317,6 +317,11 @@ class SettingsDialog(wx.Dialog):
         self.gtfs_refreshed = False
         self.btn_gtfs.Bind(wx.EVT_BUTTON, self._on_gtfs_refresh)
 
+        general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        self.cb_auto_updates = wx.CheckBox(
+            self.general_page, label=_("Automatically check for updates at startup"))
+        general_vs.Add(self.cb_auto_updates, 0, wx.LEFT | wx.BOTTOM, 8)
+
         self.general_page.SetSizer(general_vs)
 
         api_vs.Add(wx.StaticText(self.api_page, label=_("Google API key - enhanced geocoding/routing, satellite/street view, Google navigation:")), 0, wx.ALL, 8)
@@ -429,6 +434,7 @@ class SettingsDialog(wx.Dialog):
         self.cb_walk_cat.SetValue(settings.get("walk_announce_category", True))
         self.cb_climate_zones.SetValue(settings.get("announce_climate_zones", True))
         self.cb_suburb_size.SetValue(settings.get("announce_suburb_size", False))
+        self.cb_auto_updates.SetValue(settings.get("check_updates_at_startup", True))
         spatial_mode = settings.get("spatial_tones_mode", "world")
         self.combo_spatial_tones.SetSelection(
             {"world": 0, "country": 1, "region": 2, "city": 2}.get(spatial_mode, 0))
@@ -494,6 +500,7 @@ class SettingsDialog(wx.Dialog):
             "walk_announce_category": self.cb_walk_cat.GetValue(),
             "announce_climate_zones": self.cb_climate_zones.GetValue(),
             "announce_suburb_size":   self.cb_suburb_size.GetValue(),
+            "check_updates_at_startup": self.cb_auto_updates.GetValue(),
             "spatial_tones_mode":     spatial_mode,
             "challenge_direction_mode": challenge_direction,
             "weather_temperature_unit": weather_units,
