@@ -64,28 +64,17 @@ from free import FreeExploreEngine
 from nav import NavigationEngine
 from here_poi import HereClient as HerePoi
 import mall_directory
+from app_paths import CACHE_DIR, RESOURCE_DIR, USER_DIR
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0.0.24'
+APP_VERSION   = '1.0.0.25'
 
 POI_LIVE_COOLDOWN_SECS = 3.0
 POI_BACKGROUND_WAIT_SECS = 2.0
 
-# Bundled read-only resources — inside the exe (_MEIPASS) or next to the script.
-BASE_DIR      = getattr(_sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
-
-# User data — platform-appropriate location.
-if _sys.platform == 'darwin':
-    USER_DIR  = os.path.join(os.path.expanduser('~'), 'Library', 'Application Support', 'MapInABox')
-else:
-    USER_DIR  = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'MapInABox')
-
-# Machine-local caches — platform-appropriate location.
-if _sys.platform == 'darwin':
-    CACHE_DIR = os.path.join(os.path.expanduser('~'), 'Library', 'Caches', 'MapInABox')
-else:
-    CACHE_DIR = os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'MapInABox', 'Cache')
+# Bundled read-only resources — inside the executable bundle or source tree.
+BASE_DIR = RESOURCE_DIR
 
 for _d in (USER_DIR, CACHE_DIR):
     os.makedirs(_d, exist_ok=True)
@@ -98,13 +87,13 @@ COUNTRY_DIR            = os.path.join(SOUNDS_DIR, "countries")
 REGION_DIR             = os.path.join(SOUNDS_DIR, "regions")
 GEO_FEATURES_DIR       = os.path.join(BASE_DIR,  "GeoFeatures")
 
-# ── User data (%APPDATA%\MapInABox) ──────────────────────────────────────────
+# ── User data (AppData, or Data in portable mode) ────────────────────────────
 SETTINGS_PATH          = os.path.join(USER_DIR,  "settings.json")
 SUPPRESSED_POIS_PATH   = os.path.join(USER_DIR,  "suppressed_pois.json")
 RENAMED_POIS_PATH      = os.path.join(USER_DIR,  "renamed_pois.json")
 PERSONAL_POIS_PATH     = os.path.join(USER_DIR,  "personal_pois.json")
 
-# ── Caches (%LOCALAPPDATA%\MapInABox\Cache) ───────────────────────────────────
+# ── Caches (local AppData, or Data\Cache in portable mode) ──────────────────
 CACHE_PATH             = os.path.join(CACHE_DIR, "worldcities.pkl")
 WIKI_CACHE_PATH        = os.path.join(CACHE_DIR, "wiki_cache.json")
 PLACE_CACHE_PATH       = os.path.join(CACHE_DIR, "place_cache.json")

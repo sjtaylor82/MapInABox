@@ -13,13 +13,13 @@ import time
 import uuid
 
 import wx
+from app_paths import USER_DIR
 
 from geo import bearing_deg, compass_name
 
 
-_user_dir = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'MapInABox')
-os.makedirs(_user_dir, exist_ok=True)
-FAVOURITES_PATH = os.path.join(_user_dir, "favourites.json")
+os.makedirs(USER_DIR, exist_ok=True)
+FAVOURITES_PATH = os.path.join(USER_DIR, "favourites.json")
 
 
 def load_favourites(path: str = FAVOURITES_PATH) -> list[dict]:

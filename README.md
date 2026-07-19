@@ -26,7 +26,7 @@ https://github.com/sjtaylor82/MapInABox/releases
 
 On Windows, download and run `MapInABox-<version>-setup.exe`. The installer creates Start Menu entries for the app and for uninstalling it. You can also uninstall Map in a Box from Windows Settings or Control Panel.
 
-Windows portable zip builds are also published for users who cannot use an installer. Extract the zip to a folder you can write to, then run `MapInABox.exe` from inside the extracted `MapInABox` folder.
+Windows portable zip builds are also published for users who cannot use an installer. Extract the zip to a folder you can write to, then run `MapInABox.exe` from inside the extracted `MapInABox` folder. Portable settings, logs, favourites, downloads, and caches remain inside its `Data` folder; the portable build does not write Map in a Box data to AppData.
 
 On macOS, download `MapInABox-macOS.zip`, extract it, and follow the included `README.txt` and `install-macos.sh` instructions. To uninstall the macOS build, remove `MapInABox.app` from Applications or from the folder where you placed it.
 
