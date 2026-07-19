@@ -1393,10 +1393,10 @@ class DateTimePickerDialog(wx.Dialog):
         import datetime as _dt
         now = _dt.datetime.now()
         # Round up to next 5 minutes
-        mins = now.minute
-        remainder = mins % 5
+        remainder = now.minute % 5
         if remainder:
-            now = now.replace(minute=mins + (5 - remainder), second=0, microsecond=0)
+            now = (now + _dt.timedelta(minutes=5 - remainder)).replace(
+                second=0, microsecond=0)
         else:
             now = now.replace(second=0, microsecond=0)
 
