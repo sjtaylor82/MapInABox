@@ -64,7 +64,7 @@ from free import FreeExploreEngine
 from nav import NavigationEngine
 from here_poi import HereClient as HerePoi
 import mall_directory
-from app_paths import CACHE_DIR, RESOURCE_DIR, USER_DIR
+from app_paths import CACHE_DIR, PORTABLE_MODE, RESOURCE_DIR, USER_DIR
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
@@ -2622,7 +2622,12 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         success = self._updater.download_and_install(progress_cb=_progress)
         wx.CallAfter(self._close_update_progress_dialog)
         if success:
-            # On Windows the installer is launching — close the app cleanly
+            if PORTABLE_MODE and not self._updater.portable_restart_scheduled:
+                wx.CallAfter(self._portable_update_requires_manual_download)
+                return
+            # Installed Windows launches its installer. Portable Windows has
+            # scheduled a helper which replaces the app after this process
+            # exits and then restarts it. Both must close cleanly here.
             import sys as _sys
             if _sys.platform != "darwin":
                 wx.CallAfter(self.Close)
@@ -2633,6 +2638,16 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 "Update Failed",
                 wx.OK | wx.ICON_ERROR,
             )
+
+    def _portable_update_requires_manual_download(self) -> None:
+        wx.MessageBox(
+            "The release page has been opened because a portable update ZIP "
+            "was not available. Map in a Box will remain open.",
+            "Portable Update",
+            wx.OK | wx.ICON_INFORMATION,
+        )
+        self._return_focus_to_map(repeat=False)
+        wx.CallAfter(self._resume_location_sound)
 
     def _build_info_panel(self, parent):
         """Create the sighted-user information panel. It never takes focus."""
@@ -14164,6 +14179,21 @@ if __name__ == "__main__":
     import atexit, sys
     _startup_t0 = time.perf_counter()
 
+    # Keep this object alive until MainLoop exits; releasing it also releases
+    # the native per-user instance lock. Installed and portable editions use
+    # the same name so they cannot run over one another.
+    app = wx.App(False)
+    _instance_checker = wx.SingleInstanceChecker(
+        f"MapInABox-{wx.GetUserId()}")
+    if _instance_checker.IsAnotherRunning():
+        wx.MessageBox(
+            "Map in a Box is already running. Close the existing copy before "
+            "opening another one.",
+            "Map in a Box Already Running",
+            wx.OK | wx.ICON_INFORMATION,
+        )
+        sys.exit(0)
+
     _LOG_PATH = os.path.join(USER_DIR, "miab.log")
     os.environ["MIAB_LOG_PATH"] = _LOG_PATH
 
@@ -14208,7 +14238,6 @@ if __name__ == "__main__":
     import atexit as _atexit2
     _atexit2.register(lambda: miab_log("navigation", "Map in a Box closed.", None))
 
-    app   = wx.App(False)
     miab_log("verbose", f"Startup: wx.App ready in {time.perf_counter() - _startup_t0:.2f}s", {"logging": {"verbose": True}})
     data  = load_offline_data()
     miab_log("verbose", f"Startup: city data loaded in {time.perf_counter() - _startup_t0:.2f}s", {"logging": {"verbose": True}})

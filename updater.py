@@ -28,6 +28,7 @@ import tempfile
 import threading
 import urllib.request
 from logging_utils import miab_log
+from app_paths import APP_DIR, PORTABLE_MODE
 
 
 GITHUB_API = "https://api.github.com/repos/{repo}/releases/latest"
@@ -49,15 +50,23 @@ def _is_newer(latest: str, current: str) -> bool:
 
 # ── Asset selection ────────────────────────────────────────────────────────────
 
-def _pick_asset(assets: list[dict]) -> dict | None:
+def _pick_asset(assets: list[dict], portable: bool = PORTABLE_MODE,
+                platform: str = sys.platform) -> dict | None:
     """Return the most appropriate release asset for the current platform."""
-    if sys.platform == "darwin":
+    if platform == "darwin":
         # Prefer a file with 'macos' or 'mac' in the name
         for a in assets:
             if re.search(r"mac(os)?", a["name"], re.IGNORECASE):
                 return a
     else:
-        # Windows — prefer .exe installer
+        if portable:
+            # A portable copy must never hand off to the Windows installer.
+            for a in assets:
+                name = a["name"].lower()
+                if "windows-portable" in name and name.endswith(".zip"):
+                    return a
+            return None
+        # Installed Windows build — prefer the installer.
         for a in assets:
             if a["name"].lower().endswith(".exe"):
                 return a
@@ -78,6 +87,8 @@ class UpdateChecker:
         self.on_check_error = on_check_error
         self.latest_version: str       = ""
         self._asset:         dict | None = None
+        self.downloaded_asset_path: str = ""
+        self.portable_restart_scheduled = False
         self._lock           = threading.Lock()
 
     def start(self) -> None:
@@ -123,7 +134,10 @@ class UpdateChecker:
     def download_and_install(self, progress_cb=None) -> bool:
         """Download the release asset and launch it.  Returns False on error.
 
-        On Windows: downloads the .exe installer, launches it, app should exit.
+        On installed Windows: downloads and launches the installer.
+        On portable Windows: downloads the portable ZIP and starts a hidden
+        helper which waits for this process to exit, replaces the program
+        files while preserving Data, and restarts the app.
         On macOS:   opens the release page in the browser (replacing a running
                     .app is not safe to do in-process).
 
@@ -151,7 +165,8 @@ class UpdateChecker:
             return True
 
         if not asset:
-            # No installer asset found — fall back to releases page
+            # No matching asset found — fall back to the release page. Portable
+            # mode deliberately does not fall back to an installer executable.
             webbrowser.open(f"https://github.com/{self.repo}/releases/latest")
             return True
 
@@ -171,9 +186,73 @@ class UpdateChecker:
         try:
             miab_log("verbose", f"[Updater] Downloading {url} ...", getattr(self, "settings", None))
             urllib.request.urlretrieve(url, dest, reporthook=_reporthook)
-            miab_log("verbose", f"[Updater] Launching {dest}", getattr(self, "settings", None))
-            os.startfile(dest)   # Windows only — we only reach here on Windows
+            self.downloaded_asset_path = dest
+            if PORTABLE_MODE:
+                self._schedule_portable_replacement(dest)
+                self.portable_restart_scheduled = True
+            else:
+                miab_log("verbose", f"[Updater] Launching {dest}", getattr(self, "settings", None))
+                os.startfile(dest)   # Installed Windows build: launch installer.
             return True
         except Exception as e:
             miab_log("errors", f"[Updater] Download/launch failed: {e}", getattr(self, "settings", None))
             return False
+
+    @staticmethod
+    def _schedule_portable_replacement(zip_path: str) -> None:
+        """Start a detached PowerShell helper to replace and restart the app."""
+        import subprocess
+
+        # Confirm the portable folder is writable before closing the app.
+        probe = os.path.join(APP_DIR, ".update-write-test")
+        try:
+            with open(probe, "w", encoding="utf-8") as probe_file:
+                probe_file.write("ok")
+        finally:
+            try:
+                os.remove(probe)
+            except OSError:
+                pass
+
+        script_path = os.path.join(
+            tempfile.gettempdir(), f"MapInABox-portable-update-{os.getpid()}.ps1")
+        script = r'''param(
+    [int]$MapInABoxProcessId,
+    [string]$ZipPath,
+    [string]$AppDirectory,
+    [string]$ExecutablePath
+)
+$ErrorActionPreference = "Stop"
+Wait-Process -Id $MapInABoxProcessId -ErrorAction SilentlyContinue
+$staging = Join-Path ([System.IO.Path]::GetTempPath()) ("MapInABox-update-" + [guid]::NewGuid())
+try {
+    Expand-Archive -LiteralPath $ZipPath -DestinationPath $staging -Force
+    $source = Join-Path $staging "MapInABox"
+    if (-not (Test-Path -LiteralPath $source)) { $source = $staging }
+    Get-ChildItem -LiteralPath $source -Force | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $AppDirectory -Recurse -Force
+    }
+    Start-Process -FilePath $ExecutablePath
+} finally {
+    Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+}
+'''
+        with open(script_path, "w", encoding="utf-8-sig") as script_file:
+            script_file.write(script)
+
+        executable_path = os.path.join(APP_DIR, "MapInABox.exe")
+        creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.Popen(
+            [
+                "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-WindowStyle", "Hidden", "-File", script_path,
+                "-MapInABoxProcessId", str(os.getpid()),
+                "-ZipPath", zip_path,
+                "-AppDirectory", APP_DIR,
+                "-ExecutablePath", executable_path,
+            ],
+            creationflags=creation_flags,
+            close_fds=True,
+        )
