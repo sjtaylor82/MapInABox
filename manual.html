@@ -24,7 +24,7 @@
 <body>
 
 <h1>Map in a Box — User Manual</h1>
-<p><strong>Version 1.0.19</strong> &nbsp;|&nbsp; Windows &amp; macOS</p>
+<p><strong>Version 1.0.20</strong> &nbsp;|&nbsp; Windows &amp; macOS</p>
 
 
 <nav aria-label="Table of contents">
@@ -510,6 +510,15 @@
 
 
 <h2 id="key-reference">20. Quick key reference</h2>
+
+<h3>20.0 macOS modifier and function-key equivalents</h3>
+<p>On macOS, use <code>Command</code> wherever the tables show <code>Ctrl</code>, and <code>Option</code> wherever they show <code>Alt</code>. For example, Settings is <code>Command+,</code>, refresh POIs is <code>Command+Option+P</code>, and the city data wizard is <code>Command+Shift+F11</code>.</p>
+<p>On the tested Mac, bare <code>F11</code> was not delivered to wxPython even though other function keys worked normally. The verified alternative is:</p>
+<table>
+  <tr><th>Documented key</th><th>Mac alternative</th><th>Action</th></tr>
+  <tr><td><code>F11</code></td><td><code>Control+F11</code></td><td>Toggle street mode</td></tr>
+</table>
+<p>Bare <code>F12</code> opens Tools normally on the tested Mac. Do not generally substitute physical <code>Control</code> where a table specifies <code>Ctrl</code>; those shortcuts use <code>Command</code> on Mac. Thus Windows <code>Ctrl+F12</code> becomes Mac <code>Command+F12</code> for address announcement mode.</p>
 
 <h3>20.1 Global hotkeys</h3>
 <p>These behave the same wherever you press them — map mode, street mode, walking mode, free mode, doesn't matter.</p>

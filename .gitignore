@@ -85,3 +85,6 @@ gitdir/
 __pycache_check__/
 tmp_*.pyc.*
 streetview_cache.json
+collect-macos-logs.sh
+run-macos.sh
+mac-diagnostics.txt

@@ -29,3 +29,20 @@ Then drag MapInABox.app to your Applications folder and open it normally.
 
 For help and support visit:
   https://github.com/sjtaylor82/MapInABox
+
+
+macOS Keyboard Notes
+====================
+
+Shortcuts written as Ctrl use Command on macOS. Shortcuts written as Alt use
+Option. On the tested Mac, use Control+F11 when bare F11 does not reach Map in
+a Box. Bare F12 opens Tools normally. Physical Control is not a general
+substitute for Ctrl in the documentation; a documented Ctrl+F12 action uses
+Command+F12 on macOS.
+
+
+Logs
+====
+
+The application log is stored at:
+  ~/Library/Application Support/MapInABox/miab.log

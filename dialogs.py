@@ -217,18 +217,16 @@ class SettingsDialog(wx.Dialog):
         general_vs.Add(self.cb_walk, 0, wx.LEFT | wx.BOTTOM, 12)
 
         general_vs.Add(wx.StaticText(self.general_page, label=_("POIs to announce while walking:")), 0, wx.LEFT, 8)
-        self.combo_cat = wx.ComboBox(
+        self.combo_cat = wx.Choice(
             self.general_page,
-            choices=[_(label) for _, label in POI_CATEGORY_CHOICES],
-            style=wx.CB_READONLY,
+            choices=[_(label) for _key, label in POI_CATEGORY_CHOICES],
         )
         general_vs.Add(self.combo_cat, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
         general_vs.Add(wx.StaticText(self.general_page, label=_("Announce POIs within:")), 0, wx.LEFT, 8)
-        self.combo_radius = wx.ComboBox(
+        self.combo_radius = wx.Choice(
             self.general_page,
             choices=[_("50 metres"), _("80 metres"), _("120 metres")],
-            style=wx.CB_READONLY,
         )
         general_vs.Add(self.combo_radius, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
@@ -244,55 +242,49 @@ class SettingsDialog(wx.Dialog):
 
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         general_vs.Add(wx.StaticText(self.general_page, label=_("Spatial tones:")), 0, wx.LEFT, 8)
-        self.combo_spatial_tones = wx.ComboBox(
+        self.combo_spatial_tones = wx.Choice(
             self.general_page,
             choices=[_("World"), _("Country"), _("Region")],
-            style=wx.CB_READONLY,
         )
         general_vs.Add(self.combo_spatial_tones, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         general_vs.Add(wx.StaticText(self.general_page, label=_("Challenge direction:")), 0, wx.LEFT, 8)
-        self.combo_challenge_direction = wx.ComboBox(
+        self.combo_challenge_direction = wx.Choice(
             self.general_page,
             choices=[_("Map learning"), _("Shortest globe")],
-            style=wx.CB_READONLY,
         )
         general_vs.Add(self.combo_challenge_direction, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         general_vs.Add(wx.StaticText(self.general_page, label=_("Weather temperature units:")), 0, wx.LEFT, 8)
-        self.combo_weather_units = wx.ComboBox(
+        self.combo_weather_units = wx.Choice(
             self.general_page,
             choices=[_("Automatic (country-based)"), _("Celsius"), _("Fahrenheit")],
-            style=wx.CB_READONLY,
         )
         general_vs.Add(self.combo_weather_units, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         general_vs.Add(wx.StaticText(self.general_page, label=_("POI database (for street/free mode):")), 0, wx.LEFT, 8)
-        self.combo_poi_source = wx.ComboBox(
+        self.combo_poi_source = wx.Choice(
             self.general_page,
             choices=[_("OpenStreetMap"), _("HERE")],
-            style=wx.CB_READONLY,
         )
         general_vs.Add(self.combo_poi_source, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         general_vs.Add(wx.StaticText(self.general_page, label=_("Navigation provider (walking routes):")), 0, wx.LEFT, 8)
-        self.combo_nav = wx.ComboBox(
+        self.combo_nav = wx.Choice(
             self.general_page,
             choices=[_("OpenStreetMap"), _("Google Maps"), _("HERE")],
-            style=wx.CB_READONLY,
         )
         general_vs.Add(self.combo_nav, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         general_vs.Add(wx.StaticText(self.general_page, label=_("Departure board source:")), 0, wx.LEFT, 8)
-        self.combo_departure_board = wx.ComboBox(
+        self.combo_departure_board = wx.Choice(
             self.general_page,
             choices=[_("GTFS data"), _("Google Places")],
-            style=wx.CB_READONLY,
         )
         general_vs.Add(self.combo_departure_board, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
@@ -567,10 +559,9 @@ class POICategoryDialog(wx.Dialog):
         vs.Add(self.txt_street, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
 
         vs.Add(wx.StaticText(panel, label="Category:"), 0, wx.LEFT, 10)
-        self.combo = wx.ComboBox(
+        self.combo = wx.Choice(
             panel,
             choices=[label for _, label in POI_CATEGORY_CHOICES],
-            style=wx.CB_READONLY | wx.TE_PROCESS_ENTER,
         )
         keys = [key for key, _ in POI_CATEGORY_CHOICES]
         initial_idx = keys.index(initial_key) if initial_key in keys else 0
@@ -579,10 +570,9 @@ class POICategoryDialog(wx.Dialog):
 
         vs.Add(wx.StaticText(panel, label="Radius:"), 0, wx.LEFT, 10)
         self._radius_values = [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000]
-        self.combo_radius = wx.ComboBox(
+        self.combo_radius = wx.Choice(
             panel,
             choices=["1 km", "2 km", "3 km", "4 km", "5 km", "6 km", "7 km", "8 km", "9 km", "10 km"],
-            style=wx.CB_READONLY,
         )
         try:
             radius_idx = self._radius_values.index(int(initial_radius))
@@ -594,10 +584,9 @@ class POICategoryDialog(wx.Dialog):
         vs.Add(wx.StaticText(panel, label="Source:"), 0, wx.LEFT, 10)
         source_labels = {"osm": "OpenStreetMap", "here": "HERE", "google": "Google Maps"}
         self._source_keys = sources
-        self.combo_source = wx.ComboBox(
+        self.combo_source = wx.Choice(
             panel,
             choices=[source_labels.get(s, s) for s in sources],
-            style=wx.CB_READONLY,
         )
         default_idx = sources.index(preferred_source) if preferred_source in sources else 0
         self.combo_source.SetSelection(default_idx)
@@ -612,10 +601,23 @@ class POICategoryDialog(wx.Dialog):
         panel.SetSizer(vs)
 
         go_btn.Bind(wx.EVT_BUTTON, self._on_go)
-        self.combo.Bind(wx.EVT_COMBOBOX, self._on_choice)
-        self.combo.Bind(wx.EVT_TEXT_ENTER, self._on_go)
+        self.combo.Bind(wx.EVT_CHOICE, self._on_choice)
         self.txt_name.Bind(wx.EVT_TEXT_ENTER, self._on_go)
         self.txt_street.Bind(wx.EVT_TEXT_ENTER, self._on_go)
+        self._tab_order = [
+            self.txt_name,
+            self.txt_street,
+            self.combo,
+            self.combo_radius,
+            self.combo_source,
+            go_btn,
+            cancel_btn,
+        ]
+        for prev, cur in zip(self._tab_order, self._tab_order[1:]):
+            try:
+                cur.MoveAfterInTabOrder(prev)
+            except Exception:
+                pass
         self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
         self.txt_name.SetFocus()
         self.CentreOnParent()
@@ -1179,7 +1181,7 @@ class RendezvousResultsDialog(wx.Dialog):
 # ---------------------------------------------------------------------------
 
 class DateTimePickerDialog(wx.Dialog):
-    """Combo-based date/time picker. Returns a datetime object."""
+    """Choice-based date/time picker. Returns a datetime object."""
 
     def __init__(self, parent, title="Choose date and time"):
         super().__init__(parent, title=title, style=wx.DEFAULT_DIALOG_STYLE)
@@ -1197,38 +1199,33 @@ class DateTimePickerDialog(wx.Dialog):
         vs = wx.BoxSizer(wx.VERTICAL)
 
         vs.Add(wx.StaticText(panel, label="Day:"), 0, wx.LEFT | wx.TOP, 8)
-        self.combo_day = wx.ComboBox(
-            panel, choices=[str(d) for d in range(1, 32)],
-            style=wx.CB_READONLY)
+        self.combo_day = wx.Choice(
+            panel, choices=[str(d) for d in range(1, 32)])
         self.combo_day.SetSelection(now.day - 1)
         vs.Add(self.combo_day, 0, wx.LEFT | wx.RIGHT | wx.EXPAND, 8)
 
         vs.Add(wx.StaticText(panel, label="Month:"), 0, wx.LEFT | wx.TOP, 8)
         months = ["January", "February", "March", "April", "May", "June",
                   "July", "August", "September", "October", "November", "December"]
-        self.combo_month = wx.ComboBox(
-            panel, choices=months, style=wx.CB_READONLY)
+        self.combo_month = wx.Choice(panel, choices=months)
         self.combo_month.SetSelection(now.month - 1)
         vs.Add(self.combo_month, 0, wx.LEFT | wx.RIGHT | wx.EXPAND, 8)
 
         vs.Add(wx.StaticText(panel, label="Year:"), 0, wx.LEFT | wx.TOP, 8)
         years = [str(now.year), str(now.year + 1)]
-        self.combo_year = wx.ComboBox(
-            panel, choices=years, style=wx.CB_READONLY)
+        self.combo_year = wx.Choice(panel, choices=years)
         self.combo_year.SetSelection(0)
         vs.Add(self.combo_year, 0, wx.LEFT | wx.RIGHT | wx.EXPAND, 8)
 
         vs.Add(wx.StaticText(panel, label="Hour:"), 0, wx.LEFT | wx.TOP, 8)
-        self.combo_hour = wx.ComboBox(
-            panel, choices=[f"{h:02d}" for h in range(24)],
-            style=wx.CB_READONLY)
+        self.combo_hour = wx.Choice(
+            panel, choices=[f"{h:02d}" for h in range(24)])
         self.combo_hour.SetSelection(now.hour)
         vs.Add(self.combo_hour, 0, wx.LEFT | wx.RIGHT | wx.EXPAND, 8)
 
         vs.Add(wx.StaticText(panel, label="Minute:"), 0, wx.LEFT | wx.TOP, 8)
-        self.combo_min = wx.ComboBox(
-            panel, choices=[f"{m:02d}" for m in range(0, 60, 5)],
-            style=wx.CB_READONLY)
+        self.combo_min = wx.Choice(
+            panel, choices=[f"{m:02d}" for m in range(0, 60, 5)])
         self.combo_min.SetSelection(min(now.minute // 5, 11))
         vs.Add(self.combo_min, 0, wx.LEFT | wx.RIGHT | wx.EXPAND, 8)
 

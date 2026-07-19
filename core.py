@@ -67,7 +67,7 @@ import mall_directory
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0.19'
+APP_VERSION   = '1.0.20'
 
 POI_LIVE_COOLDOWN_SECS = 3.0
 POI_BACKGROUND_WAIT_SECS = 2.0
@@ -1911,10 +1911,15 @@ class _StreetSearchFrame(wx.Frame):
         lbl_street.SetForegroundColour(wx.Colour(220, 220, 220))
         vsz.Add(lbl_street, 0, wx.LEFT | wx.TOP, 10)
 
-        self._combo = wx.ComboBox(panel, style=wx.CB_DROPDOWN | wx.TE_PROCESS_ENTER)
-        self._combo.SetBackgroundColour(wx.Colour(20, 40, 70))
-        self._combo.SetForegroundColour(wx.Colour(220, 220, 220))
-        vsz.Add(self._combo, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
+        self._search = wx.TextCtrl(panel, style=wx.TE_PROCESS_ENTER)
+        self._search.SetBackgroundColour(wx.Colour(20, 40, 70))
+        self._search.SetForegroundColour(wx.Colour(220, 220, 220))
+        vsz.Add(self._search, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
+
+        self._list = wx.ListBox(panel, style=wx.LB_SINGLE)
+        self._list.SetBackgroundColour(wx.Colour(20, 40, 70))
+        self._list.SetForegroundColour(wx.Colour(220, 220, 220))
+        vsz.Add(self._list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
 
         lbl_num = wx.StaticText(panel, label="House number (optional):")
         lbl_num.SetForegroundColour(wx.Colour(220, 220, 220))
@@ -1937,12 +1942,20 @@ class _StreetSearchFrame(wx.Frame):
         self.Fit()
 
         self._all_names: list[str] = []
+        self._filtered_names: list[str] = []
+        self._last_filter_query = None
+        self._selected_street_name = ""
 
         self._timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self._on_timer, self._timer)
         self._timer.Start(800)
 
-        self._combo.Bind(wx.EVT_TEXT_ENTER,  self._on_jump)
+        self._search.Bind(wx.EVT_TEXT,       self._on_search_text)
+        self._search.Bind(wx.EVT_TEXT_ENTER, self._on_jump)
+        self._search.Bind(wx.EVT_KEY_DOWN,   self._on_search_key)
+        self._list.Bind(wx.EVT_LISTBOX,       self._on_list_select)
+        self._list.Bind(wx.EVT_LISTBOX_DCLICK, self._on_jump)
+        self._list.Bind(wx.EVT_KEY_DOWN,     self._on_list_key)
         self._num.Bind(wx.EVT_TEXT_ENTER,    self._on_jump)
         self._ok_btn.Bind(wx.EVT_BUTTON,     self._on_jump)
         self._cancel_btn.Bind(wx.EVT_BUTTON, self._on_close)
@@ -1951,7 +1964,7 @@ class _StreetSearchFrame(wx.Frame):
 
         self._refresh_combo(force=True)
         self.Layout()
-        wx.CallAfter(self._combo.SetFocus)
+        wx.CallAfter(self._search.SetFocus)
         self.CentreOnParent()
 
     def _street_names_from_segments(self) -> list[str]:
@@ -1979,10 +1992,7 @@ class _StreetSearchFrame(wx.Frame):
         if not force and new_names == self._all_names:
             return
         self._all_names = new_names
-        prev = self._combo.GetValue()
-        self._combo.Set(new_names)
-        if prev:
-            self._combo.SetValue(prev)
+        self._refresh_filtered_names()
         loading = getattr(self._nav, '_loading', False)
         n = len(new_names)
         if loading:
@@ -1991,15 +2001,113 @@ class _StreetSearchFrame(wx.Frame):
             self.SetTitle(f"Street Search — {n} streets")
             self._timer.Stop()
 
+    def _matching_street_names(self, query: str) -> list[str]:
+        needle = query.strip().lower()
+        if not needle:
+            return list(self._all_names)
+        matches = [
+            name for name in self._all_names
+            if needle in name.lower()
+        ]
+        def match_rank(name: str) -> tuple[int, str]:
+            haystack = name.lower()
+            words = re.findall(r"[a-z0-9]+", haystack)
+            if haystack == needle:
+                rank = 0
+            elif haystack.startswith(needle):
+                rank = 1
+            elif any(word.startswith(needle) for word in words):
+                rank = 2
+            else:
+                rank = 3
+            return rank, haystack
+        matches.sort(key=match_rank)
+        return matches
+
+    def _refresh_filtered_names(self) -> None:
+        query = self._search.GetValue().strip().lower()
+        old_selection = ""
+        idx = self._list.GetSelection()
+        if 0 <= idx < len(self._filtered_names):
+            old_selection = self._filtered_names[idx]
+        self._filtered_names = self._matching_street_names(query)
+        self._list.Set(self._filtered_names)
+        if self._filtered_names:
+            if old_selection in self._filtered_names:
+                self._list.SetSelection(self._filtered_names.index(old_selection))
+            else:
+                self._list.SetSelection(0)
+        self._last_filter_query = query
+
+    def _on_search_text(self, event) -> None:
+        self._selected_street_name = ""
+        self._refresh_filtered_names()
+        event.Skip()
+
+    def _on_search_key(self, event) -> None:
+        code = event.GetKeyCode()
+        if code in (wx.WXK_DOWN, wx.WXK_UP) and self._filtered_names:
+            self._list.SetFocus()
+            idx = 0 if code == wx.WXK_DOWN else len(self._filtered_names) - 1
+            self._list.SetSelection(idx)
+            self._selected_street_name = self._filtered_names[idx]
+            return
+        event.Skip()
+
+    def _sync_selected_from_list(self) -> None:
+        idx = self._list.GetSelection()
+        if 0 <= idx < len(self._filtered_names):
+            self._selected_street_name = self._filtered_names[idx]
+
+    def _on_list_select(self, event) -> None:
+        self._sync_selected_from_list()
+        event.Skip()
+
+    def _on_list_key(self, event) -> None:
+        code = event.GetKeyCode()
+        if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
+            self._sync_selected_from_list()
+            self._on_jump(event)
+            return
+        if code in (wx.WXK_BACK, wx.WXK_DELETE):
+            self._search.SetFocus()
+            return
+        event.Skip()
+        wx.CallAfter(self._sync_selected_from_list)
+
     def _on_timer(self, event) -> None:
         self._refresh_combo()
 
     def _on_jump(self, event) -> None:
-        sel = self._combo.GetValue().strip()
+        query = self._search.GetValue().strip()
+        house_number = self._num.GetValue().strip()
+        matches = self._matching_street_names(query)
+        if query and not matches:
+            self._nav._status_update(f"No street matching {query}.", force=True)
+            self._search.SetFocus()
+            return
+        sel = ""
+        if self._selected_street_name in matches:
+            sel = self._selected_street_name.strip()
+        if query and not sel:
+            sel = matches[0].strip()
+        elif not sel and matches:
+            sel = matches[0].strip()
+        if not sel:
+            sel = query
+        if house_number and not query and self.FindFocus() != self._list:
+            self._nav._status_update("Type or select a street before entering a house number.", force=True)
+            self._search.SetFocus()
+            return
         if not sel:
             return
-        house_number = self._num.GetValue().strip()
         nav = self._nav
+        preview = matches[:5]
+        miab_log(
+            "snap",
+            f"street search jump: query={query!r} selected={sel!r} house_number={house_number!r} matches={preview!r}",
+            getattr(nav, "settings", None),
+        )
         self._timer.Stop()
         nav._street_search_dlg = None
         nav._suppress_status_until = time.time() + 4.0
@@ -2147,6 +2255,19 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._geo_features_prefetched = set()
         self._geo_features_prefetching = set()
         self.settings = load_settings()
+        # Source-test launcher support: allow diagnostics to be enabled before
+        # Settings is usable.  This is intentionally opt-in and does not alter
+        # the saved settings file.
+        if os.environ.get("MIAB_FORCE_DIAGNOSTICS") == "1":
+            log_cfg = dict(self.settings.get("logging", {}))
+            log_cfg.update({
+                "errors": True,
+                "street": True,
+                "feature_usage": True,
+                "navigation": True,
+                "verbose": True,
+            })
+            self.settings["logging"] = log_cfg
         set_language(self.settings.get("language") or None)
         self.settings["_log_path"] = os.path.join(USER_DIR, "miab.log")
         self.speech = SpeechDispatch(trace_cb=self._verbose_trace)
@@ -2631,6 +2752,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         file_menu = wx.Menu()
         add_item(file_menu, "settings", "&Settings\tCtrl+,",
                  lambda e: self._open_settings())
+        if IS_MAC:
+            self.Bind(wx.EVT_MENU, lambda e: self._open_settings(), id=wx.ID_PREFERENCES)
         file_menu.AppendSeparator()
         add_item(file_menu, "exit", "E&xit\tAlt+F4",
                  lambda e: self.Close())
@@ -2641,7 +2764,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                  lambda e: self.show_jump_dialog())
         add_item(go_menu, "jump_history", "Jump &History\tCtrl+H",
                  lambda e: self.show_jump_history())
-        add_item(go_menu, "street", "&Street Mode\tF11",
+        street_mode_label = "&Street Mode\tControl+F11" if IS_MAC else "&Street Mode\tF11"
+        add_item(go_menu, "street", street_mode_label,
                  lambda e: self._menu_toggle_street_mode())
         add_item(go_menu, "prefetch", "Pre-download &Streets\tShift+F11",
                  lambda e: self._prefetch_streets())
@@ -2677,13 +2801,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                  lambda e: self._announce_nearby_features())
         map_menu.AppendSeparator()
         add_item(map_menu, "latitude", "&Latitude\tF3",
-                 lambda e: self._status_update(
-                     f"{abs(self.lat):.4f} {'North' if self.lat >= 0 else 'South'}",
-                     force=True))
+                 lambda e: self._announce_latitude())
         add_item(map_menu, "longitude", "L&ongitude\tF4",
-                 lambda e: self._status_update(
-                     f"{abs(self.lon):.4f} {'East' if self.lon >= 0 else 'West'}",
-                     force=True))
+                 lambda e: self._announce_longitude())
         add_item(map_menu, "capital", "&Capital City\tShift+F1",
                  lambda e: self._announce_capital())
         map_menu.AppendSeparator()
@@ -2778,11 +2898,22 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         menubar.Append(help_menu, "&Help")
 
         self.SetMenuBar(menubar)
+        # Register important application shortcuts with wx's native accelerator
+        # machinery as well as handling them in EVT_CHAR_HOOK.  On macOS some
+        # function keys are delivered as menu/accelerator events rather than
+        # character-hook events, even when other function keys reach the hook.
+        # Keeping both paths makes the behaviour consistent across controls and
+        # platforms.  wx.ACCEL_CMD is the native Command modifier on macOS.
+        primary_accel = getattr(wx, "ACCEL_CMD", wx.ACCEL_CTRL) if IS_MAC else wx.ACCEL_CTRL
         self._accelerator_table = wx.AcceleratorTable([
             (wx.ACCEL_SHIFT | wx.ACCEL_ALT, ord('M'), int(ids["mark_distances"])),
             (wx.ACCEL_SHIFT | wx.ACCEL_ALT, ord('m'), int(ids["mark_distances"])),
             (wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord('P'), int(ids["personal_poi"])),
             (wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord('p'), int(ids["personal_poi"])),
+            (wx.ACCEL_NORMAL, wx.WXK_F3, int(ids["latitude"])),
+            (wx.ACCEL_NORMAL, wx.WXK_F4, int(ids["longitude"])),
+            (wx.ACCEL_NORMAL, wx.WXK_F11, int(ids["street"])),
+            (primary_accel, ord(','), int(ids["settings"])),
         ])
         self.SetAcceleratorTable(self._accelerator_table)
         self.Bind(wx.EVT_MENU_OPEN, self._on_main_menu_open)
@@ -2843,7 +2974,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self._menu_items[key].Enable(street)
         self._menu_items["walking"].Enable(has_streets)
 
-        street_label = "Exit &Street Mode\tF11" if street else "&Street Mode\tF11"
+        street_shortcut = "Control+F11" if IS_MAC else "F11"
+        street_label = (
+            f"Exit &Street Mode\t{street_shortcut}"
+            if street else f"&Street Mode\t{street_shortcut}"
+        )
         self._menu_items["street"].SetItemLabel(street_label)
 
         toolbar = self.GetToolBar()
@@ -9253,7 +9388,18 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 label, _ = self._nearest_road(self.lat, self.lon)
             suburb = getattr(self, "_current_suburb", "") or ""
             if label and label not in ("", "Unknown", "No street data", "No street data nearby"):
-                num = self._nearest_address_number(self.lat, self.lon, label, radius=200)
+                pinned_num = getattr(self, "_jump_address_number", None)
+                pinned_street = getattr(self, "_jump_address_street", None)
+                pin_lat = getattr(self, "_jump_street_pin_lat", None)
+                pin_lon = getattr(self, "_jump_street_pin_lon", None)
+                pin_active = (
+                    pinned_num and pinned_street
+                    and pin_lat is not None and pin_lon is not None
+                    and pinned_street.lower() == label.lower()
+                    and dist_metres(self.lat, self.lon, pin_lat, pin_lon) <= 150.0
+                )
+                num = pinned_num if pin_active else self._nearest_address_number(
+                    self.lat, self.lon, label, radius=200)
                 addr = f"{num} {label}" if num else label
                 name = f"{addr}, {suburb}" if suburb else addr
                 return coords, name
@@ -9900,7 +10046,10 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 self._last_focus_return_repeat_at = now
                 _speak(label)
 
-        wx.CallLater(delay_ms, _repeat_if_current)
+        # wxOSX asserts when a one-shot timer is started with 0 ms.  Several
+        # dialog/menu return paths intentionally request an immediate repeat,
+        # so clamp that request to the smallest valid timer interval.
+        wx.CallLater(max(1, int(delay_ms)), _repeat_if_current)
 
     def _force_listbox_refocus(self) -> None:
         """Force a genuine blur+focus cycle on the listbox.
@@ -10502,7 +10651,23 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _open_settings(self):
         prev_focus = self.FindFocus()
-        dlg = SettingsDialog(self, self.settings, user_dir=USER_DIR)
+        try:
+            dlg = SettingsDialog(self, self.settings, user_dir=USER_DIR)
+        except Exception as exc:
+            # Settings used to fail silently in windowed release builds when
+            # constructing a platform-specific control raised.  The errors
+            # category is enabled by default, so this remains diagnosable even
+            # when the user cannot open Settings to turn verbose logging on.
+            import traceback
+            miab_log(
+                "errors",
+                f"Settings dialog failed to open: {exc!r}\n{traceback.format_exc()}",
+                self.settings,
+            )
+            self._announce_transient_then_return(
+                "Settings could not open. Details were written to miab.log."
+            )
+            return
         saved = dlg.ShowModal() == wx.ID_OK
         gtfs_refresh = dlg.gtfs_refreshed
         if saved:
@@ -10572,6 +10737,28 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         lat_str = f"{abs(self.lat):.5f} {'North' if self.lat >= 0 else 'South'}"
         lon_str = f"{abs(self.lon):.5f} {'East' if self.lon >= 0 else 'West'}"
         self._status_update(f"{lat_str}, {lon_str}.", force=True)
+
+    def _announce_coordinate(self, msg: str) -> None:
+        """Announce a coordinate after any native Mac menu speech settles.
+
+        On wxOSX, F3/F4 are native menu accelerators.  VoiceOver announces the
+        menu item name ("Latitude"/"Longitude") just after EVT_MENU runs, which
+        can interrupt synchronous AO2 speech containing the actual value.
+        """
+        if IS_MAC:
+            wx.CallLater(180, self._status_update, msg, True)
+        else:
+            self._status_update(msg, force=True)
+
+    def _announce_latitude(self) -> None:
+        self._announce_coordinate(
+            f"{abs(self.lat):.4f} {'North' if self.lat >= 0 else 'South'}"
+        )
+
+    def _announce_longitude(self) -> None:
+        self._announce_coordinate(
+            f"{abs(self.lon):.4f} {'East' if self.lon >= 0 else 'West'}"
+        )
 
     def _street_survey_bare(self, name):
         suffixes = {
@@ -11483,11 +11670,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         if shift and not primary and key == wx.WXK_F4:
             self._status_update(self.sound.volume_up(), force=True); return True
         if no_mod and key == wx.WXK_F3:
-            self._status_update(f"{abs(self.lat):.4f} {'North' if self.lat >= 0 else 'South'}", force=True); return True
+            self._announce_latitude(); return True
         if primary and key == ord(','):
             self._open_settings();  return True
         if no_mod and key == wx.WXK_F4:
-            self._status_update(f"{abs(self.lon):.4f} {'East' if self.lon >= 0 else 'West'}", force=True); return True
+            self._announce_longitude(); return True
         if no_mod and key == wx.WXK_F5:
             miab_log("feature_usage", "Key: F5 (continent)", self.settings)
             self.announce_continent();    return True
@@ -12691,6 +12878,12 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 line.replace("Ctrl+", "Command+").replace("Alt+", "Option+")
                 for line in lines
             ]
+            lines = [
+                "MAC KEYBOARD: Command replaces Ctrl and Option replaces Alt in the shortcuts below.",
+                "On Mac, Control+F11 is the verified alternative when bare F11 does not reach the app. Bare F12 opens Tools normally.",
+                "Physical Control is not a general substitute for Ctrl. For example, address mode is Command+F12.",
+                "",
+            ] + lines
         help_text = "MAP IN A BOX - " + title + "\n\n" + "\n".join(lines)
         dlg = wx.Dialog(self, title="Keyboard Help",
                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
@@ -13925,11 +14118,17 @@ if __name__ == "__main__":
     _LOG_PATH = os.path.join(USER_DIR, "miab.log")
     os.environ["MIAB_LOG_PATH"] = _LOG_PATH
 
+    # Truncate once at startup, then keep every writer in append mode.  stdout,
+    # stderr, and miab_log all target this path; independent write-mode handles
+    # otherwise overwrite one another (particularly visible on macOS).
+    open(_LOG_PATH, "w", encoding="utf-8").close()
+    _shared_log_file = open(_LOG_PATH, "a", encoding="utf-8", buffering=1)
+
     class _Tee:
         """Write to log file, and also to the original stream if one exists."""
-        def __init__(self, original):
+        def __init__(self, original, log_file):
             self._orig = original  # None when console=False in frozen exe
-            self._file = open(_LOG_PATH, "w", encoding="utf-8", buffering=1)
+            self._file = log_file
         def write(self, msg):
             if self._orig is not None:
                 try: self._orig.write(msg)
@@ -13942,20 +14141,16 @@ if __name__ == "__main__":
                 except Exception: pass
             try: self._file.flush()
             except Exception: pass
-        def close(self):
-            try: self._file.close()
-            except Exception: pass
-
-    _tee_out = _Tee(sys.stdout)
-    _tee_err = _Tee(sys.stderr)
+    _tee_out = _Tee(sys.stdout, _shared_log_file)
+    _tee_err = _Tee(sys.stderr, _shared_log_file)
     sys.stdout = _tee_out
     sys.stderr = _tee_err
 
     def _cleanup_log():
         sys.stdout = _tee_out._orig or sys.__stdout__
         sys.stderr = _tee_err._orig or sys.__stderr__
-        _tee_out.close()
-        _tee_err.close()
+        try: _shared_log_file.close()
+        except Exception: pass
 
     atexit.register(_cleanup_log)
 

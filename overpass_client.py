@@ -14,12 +14,19 @@ Usage::
 
 import json
 import os
+import ssl
 import sys
 import threading
 import time
 import urllib.error
 import urllib.request
 from logging_utils import miab_log
+
+try:
+    import certifi
+    _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+except Exception:
+    _SSL_CONTEXT = ssl.create_default_context()
 
 # ---------------------------------------------------------------------------
 # Mirror list — read from overpass_cache_url.txt if present, else defaults.
@@ -204,7 +211,9 @@ class OverpassClient:
                             "Content-Type": "application/x-www-form-urlencoded",
                         },
                     )
-                    with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    with urllib.request.urlopen(
+                        req, timeout=timeout, context=_SSL_CONTEXT
+                    ) as resp:
                         result = json.loads(resp.read().decode())
 
                     # Overpass returns a remark on runtime error
@@ -284,7 +293,9 @@ class OverpassClient:
                     "Content-Type": "application/x-www-form-urlencoded",
                 },
             )
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with urllib.request.urlopen(
+                req, timeout=timeout, context=_SSL_CONTEXT
+            ) as resp:
                 result = json.loads(resp.read().decode())
             if "remark" in result and not result.get("elements"):
                 miab_log("errors", f"[Overpass] {tag} error remark: {result['remark']}", getattr(self, "settings", None))
