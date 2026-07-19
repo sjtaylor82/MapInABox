@@ -131,6 +131,13 @@ result = subprocess.run(
 if result.returncode != 0:
     fail("PyInstaller exited with errors (see above)")
 
+# Keep legal notices visible at the top level of distributable packages.
+if not DO_MAC_APP:
+    dist_root = os.path.join(HERE, "dist", "MapInABox")
+    for notice_name in ("LICENSE", "THIRD_PARTY_NOTICES.txt"):
+        shutil.copy2(os.path.join(HERE, notice_name),
+                     os.path.join(dist_root, notice_name))
+
 if DO_MAC_APP:
     app_path = os.path.join(HERE, "dist", "MapInABox.app")
     print(f"\nMac app ready — test it before packaging:")

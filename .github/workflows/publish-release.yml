@@ -104,6 +104,8 @@ jobs:
           cp -r dist/MapInABox.app staging/MapInABox.app
           cp install-macos.sh staging/install-macos.sh
           cp README-macOS.txt staging/README.txt
+          cp LICENSE staging/LICENSE
+          cp THIRD_PARTY_NOTICES.txt staging/THIRD_PARTY_NOTICES.txt
           chmod +x staging/install-macos.sh
           cd staging && ditto -c -k --sequesterRsrc . ../MapInABox-macOS.zip
 

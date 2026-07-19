@@ -16,7 +16,7 @@ The program combines global geography with street-level navigation. You can expl
 
 ## License
 
-Map in a Box is released under the MIT License. See [LICENSE](LICENSE).
+Map in a Box source code is released under the MIT License. See [LICENSE](LICENSE). Bundled third-party software and data retain their own licences; see [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
 
 ## Downloads, install, and uninstall
 

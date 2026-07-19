@@ -2521,6 +2521,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self._show_update_progress_dialog()
             self._update_last_announced_pct = -1
             threading.Thread(target=self._run_update_download, daemon=True).start()
+        else:
+            self._return_focus_to_map(repeat=False)
+            wx.CallAfter(self._resume_location_sound)
 
     def _check_for_updates(self) -> None:
         """Run an explicit update check and always report its outcome."""

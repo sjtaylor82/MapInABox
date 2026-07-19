@@ -1,0 +1,60 @@
+Map in a Box — Third-Party Notices
+==================================
+
+Map in a Box source code is licensed under the MIT License. Third-party
+software and data retain their own licences. Inclusion here does not imply
+endorsement by their authors or providers.
+
+Bundled software
+----------------
+
+The packaged application includes these principal open-source components and
+their dependencies. Copyright notices and licence texts supplied by each
+project remain applicable.
+
+- Python — Python Software Foundation License 2.0
+- wxPython / wxWidgets — wxWindows Library Licence
+- NumPy — BSD-3-Clause
+- pandas — BSD-3-Clause
+- Pillow — MIT-CMU
+- pygame — LGPL-2.1-or-later
+- Shapely — BSD-3-Clause
+- H3 — Apache-2.0
+- tzfpy — MIT
+- pycountry — LGPL-2.1-or-later
+- accessible-output2 — MIT
+- Google Gen AI SDK, Google API Core, and proto-plus — Apache-2.0
+- certifi — MPL-2.0
+- PyInstaller bootloader — GPL-2.0-or-later with the PyInstaller exception
+
+Bundled and downloaded data
+---------------------------
+
+- Basic World Cities Database: Copyright SimpleMaps.com, licensed under
+  Creative Commons Attribution 4.0 International.
+  https://simplemaps.com/data/world-cities
+- GeoNames geographical features: licensed under Creative Commons Attribution
+  4.0 International. https://www.geonames.org/
+- Natural Earth country boundaries: public-domain Natural Earth data.
+  https://www.naturalearthdata.com/
+- OurAirports airport data: released to the public domain.
+  https://ourairports.com/data/
+- OpenStreetMap data obtained while using the app: Copyright OpenStreetMap
+  contributors, available under the Open Database License 1.0.
+  https://www.openstreetmap.org/copyright
+- GTFS feeds downloaded by the user retain the licence and terms specified by
+  their individual transport agencies and feed publishers.
+- Australian G-NAF results retain the applicable source-data attribution and
+  licensing terms of Geoscape Australia and the relevant government sources.
+
+Online services
+---------------
+
+Google, HERE, Mistral, OpenRouteService, OpenSky, AviationStack, Wikipedia,
+MobilityData, Mapillary, Priceline, Tripadvisor, Serper, RapidAPI, Virgin
+Australia, and other linked services are governed by their own terms. They are
+not relicensed under the Map in a Box MIT License.
+
+The authoritative licence is the licence distributed by each component or
+data provider. Project links above are provided to make those terms easier to
+locate.
