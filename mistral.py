@@ -955,66 +955,6 @@ class MistralClient:
                 return True
         return False
 
-    def _parse_url_list(self, text: str) -> list[str]:
-        text = str(text or "").strip()
-        if not text:
-            return []
-        return re.findall(r"https?://[^\s\]\)\"']+", text)
-
-    @staticmethod
-    def _clean_url_list(urls: list) -> list[str]:
-        clean = []
-        seen = set()
-        for url in urls or []:
-            url = str(url or "").strip().strip(".,;:)}]\"'")
-            if not url.lower().startswith(("http://", "https://")):
-                continue
-            key = url.lower().rstrip("/")
-            if key in seen:
-                continue
-            seen.add(key)
-            clean.append(url)
-        return clean
-
-    @staticmethod
-    def _clean_walk_instruction(text: str) -> str:
-        """Strip sighted-navigation geometry; keep street name + turn direction.
-
-        Returns the cleaned string, or "" if the instruction has nothing useful
-        for a blind pedestrian (e.g. pure visual landmark references).
-        """
-        import re as _re
-        text = text.strip()
-        if not text:
-            return ""
-
-        # "At the roundabout, take the Nth exit onto X" → "Continue onto X"
-        m = _re.match(r"at the roundabout[^,]*,?\s*take[^o]*onto (.+)", text, _re.I)
-        if m:
-            return f"Continue onto {m.group(1)}"
-
-        # "Head north/south/east/west on X toward Y" → "Along X"
-        # Strip cardinal direction and any trailing "toward [landmark]" — the landmark
-        # is a visual waypoint, not a turn the pedestrian makes, and passing it to the
-        # AI causes it to hallucinate a turn onto that street.
-        m = _re.match(r"head (?:north|south|east|west){1,2}(?:east|west)?\s+on (.+)", text, _re.I)
-        if m:
-            street = _re.sub(r"\s+toward\s+.+$", "", m.group(1), flags=_re.I).strip()
-            return f"Along {street}"
-
-        # "Walk toward/to [landmark]" with no street suffix → drop
-        # Use full words or suffixes that only appear after a street name,
-        # not abbreviations like "St" which could mean Saint.
-        if _re.match(r"walk (toward|to)\b", text, _re.I):
-            if not _re.search(
-                r"\b(street|road|avenue|drive|lane|way|crescent|boulevard|highway|terrace|place|close|parade|court|grove|circuit|mews)\b"
-                r"|(?<=[a-z])\s+(rd|ave|dr|ln|cres|blvd|hwy|tce|pde|pl|cl)\b",
-                text, _re.I,
-            ):
-                return ""
-
-        return text
-
     @staticmethod
     def _parse_json_list(text: str) -> list:
         if "```" in text:

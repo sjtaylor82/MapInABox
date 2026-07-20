@@ -84,38 +84,6 @@ def _play_sound_array(arr: np.ndarray, channel_idx: int = -1) -> None:
             ch.play(snd)
 
 
-def _make_beep(freq: float, dur: float, pan_right: float,
-               proximity: float = 0.0, sr: int = 44100) -> np.ndarray:
-    """Sawtooth beep whose pitch, volume and harshness all rise with proximity.
-
-    Far:   short, quiet, low pitch, soft timbre (few harmonics)
-    Close: longer, loud, high pitch, harsh saw timbre (many harmonics)
-    """
-    t = np.linspace(0, dur, int(sr * dur), False)
-
-    # Sawtooth via additive synthesis — more harmonics = harsher as you get closer
-    n_harmonics = int(3 + proximity * 7)   # 3 far → 10 close
-    wave = np.zeros_like(t)
-    for n in range(1, n_harmonics + 1):
-        wave += (1.0 / n) * np.sin(2 * np.pi * freq * n * t)
-
-    # Amplitude envelope
-    fade_in  = int(sr * 0.01)
-    fade_out = int(sr * dur * 0.4)
-    env = np.ones(len(t))
-    env[:fade_in]   *= np.linspace(0, 1, fade_in)
-    env[-fade_out:] *= np.linspace(1, 0, fade_out)
-    wave *= env
-
-    # Volume: audible when far, loud when close (6dB headroom for screen reader)
-    amplitude = 4000 + proximity * 9000
-
-    pan_left = 1.0 - pan_right
-    stereo = np.vstack([wave * pan_left, wave * pan_right]).T
-    peak = np.max(np.abs(stereo)) or 1.0
-    return (stereo * (amplitude / peak)).astype(np.int16)
-
-
 def _make_sonar_pulse(proximity: float = 0.0, sr: int = 44100) -> np.ndarray:
     """Subtle centred pulse; pitch rises as the target gets closer."""
     dur = 0.20

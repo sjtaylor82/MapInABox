@@ -138,6 +138,28 @@ if not DO_MAC_APP:
         shutil.copy2(os.path.join(HERE, notice_name),
                      os.path.join(dist_root, notice_name))
 
+    # A portable update treats the bundled sound tree as release-managed data.
+    # Refuse to produce either distribution if PyInstaller silently omits it.
+    source_sound_root = os.path.join(HERE, "sounds")
+    bundled_sound_root = os.path.join(dist_root, "_internal", "sounds")
+    source_sounds = {
+        os.path.relpath(os.path.join(root, name), source_sound_root)
+        for root, _dirs, names in os.walk(source_sound_root)
+        for name in names
+    }
+    bundled_sounds = {
+        os.path.relpath(os.path.join(root, name), bundled_sound_root)
+        for root, _dirs, names in os.walk(bundled_sound_root)
+        for name in names
+    }
+    if not source_sounds or "credits.txt" not in source_sounds:
+        fail("Source sound library is empty or missing credits.txt")
+    missing_sounds = source_sounds - bundled_sounds
+    if missing_sounds:
+        preview = ", ".join(sorted(missing_sounds)[:5])
+        fail(f"PyInstaller omitted {len(missing_sounds)} sound files: {preview}")
+    print(f"Verified bundled sound library: {len(bundled_sounds)} files")
+
 if DO_MAC_APP:
     app_path = os.path.join(HERE, "dist", "MapInABox.app")
     print(f"\nMac app ready — test it before packaging:")

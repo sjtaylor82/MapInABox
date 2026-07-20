@@ -48,6 +48,10 @@ jobs:
         shell: powershell
         run: |
           New-Item -Path dist\MapInABox\_internal\_portable -ItemType File -Force
+          $soundFiles = @(Get-ChildItem -LiteralPath dist\MapInABox\_internal\sounds -Recurse -File)
+          if ($soundFiles.Count -lt 2 -or -not (Test-Path -LiteralPath dist\MapInABox\_internal\sounds\credits.txt)) {
+            throw "Portable sound library is empty or incomplete."
+          }
           Compress-Archive -Path dist\MapInABox -DestinationPath MapInABox-Windows-portable.zip -Force
 
       - name: Upload Windows installer artifact

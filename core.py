@@ -68,7 +68,7 @@ from app_paths import APP_DIR, CACHE_DIR, PORTABLE_MODE, RESOURCE_DIR, USER_DIR
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0.0.30'
+APP_VERSION   = '1.0.0.31'
 
 POI_LIVE_COOLDOWN_SECS = 3.0
 POI_BACKGROUND_WAIT_SECS = 2.0
@@ -4120,6 +4120,10 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 ).start()
             wx.CallAfter(self._announce_transient, "Nearly Done.")
 
+        def _street_fetch_cancelled():
+            return (not self.street_mode
+                    or getattr(self, "_street_fetch_id", 0) != my_fetch_id)
+
         try:
             (
                 segs,
@@ -4143,6 +4147,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 use_gnaf=self.settings.get("gnaf_enabled", True),
                 osm_type=request_osm_type,
                 osm_id=request_osm_id,
+                cancel_cb=_street_fetch_cancelled,
             )
 
             if not self.street_mode or self._street_fetch_id != my_fetch_id:
@@ -4439,6 +4444,13 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                                  f"is {_wkm:.1f} km wide by {_hkm:.1f} km tall.")
 
         except Exception as e:
+            if _street_fetch_cancelled():
+                miab_log(
+                    "street",
+                    "[Street] Cancelled fetch stopped before further network work.",
+                    getattr(self, "settings", None),
+                )
+                return
             miab_log("errors", f"[Street] fetch error: {e}", getattr(self, "settings", None))
             self._loading = False
             self._street_data_fetch_in_progress = False
@@ -10004,10 +10016,6 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self._verbose_trace(f"transient suppressed while update dialog is active: {msg!r}")
             return
         self.speech.transient(msg, braille_msg)
-
-    def _announce_mode_change(self, msg) -> None:
-        """Announce map/street mode once, ignoring immediate duplicates."""
-        self.speech.mode_change(msg)
 
     def _announce_transient_then_return(self, msg, delay_ms=2000, focus_target=None) -> None:
         """Announce a warning, then return focus after a short pause."""

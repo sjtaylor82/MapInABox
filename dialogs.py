@@ -2429,16 +2429,6 @@ class FindFoodDialog(wx.Dialog):
             return place, None, None
         return place, coords, self._selected_place_name(place)
 
-    def _current_route_destination(self):
-        if self._route_destination:
-            return self._route_destination
-        parent = self.GetParent()
-        if parent and hasattr(parent, "_find_food_destination"):
-            return getattr(parent, "_find_food_destination", None)
-        if parent and hasattr(parent, "_map_destination"):
-            return getattr(parent, "_map_destination", None)
-        return None
-
     def _detail_announce(self, msg: str) -> None:
         parent = self.GetParent()
         if parent and hasattr(parent, "_poi_detail_announce"):
@@ -2583,16 +2573,6 @@ class FindFoodDialog(wx.Dialog):
         if not parent or not hasattr(parent, "_prompt_mark_slot"):
             return
         parent._prompt_mark_slot(remove=False, coords=coords, name=name)
-
-    def _set_selected_place_destination(self):
-        place, coords, name = self._selected_place_coords()
-        if not place or not coords:
-            return
-        parent = self.GetParent()
-        if not parent or not hasattr(parent, "_set_route_destination_from_coords"):
-            return
-        self._route_destination = {"coords": coords, "name": name}
-        parent._set_route_destination_from_coords(coords, name)
 
     def _handle_selected_place_key(self, event) -> bool:
         code = event.GetKeyCode()

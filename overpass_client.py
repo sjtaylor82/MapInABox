@@ -28,10 +28,6 @@ try:
 except Exception:
     _SSL_CONTEXT = ssl.create_default_context()
 
-# ---------------------------------------------------------------------------
-# Mirror list — read from overpass_cache_url.txt if present, else defaults.
-# ---------------------------------------------------------------------------
-
 _BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 
 # Human-readable labels matched by index to the URLs below — used in
@@ -47,27 +43,22 @@ OVERPASS_MIRRORS: list[str] = [
     "https://z.overpass-api.de/api/interpreter",
     "https://overpass.openstreetmap.fr/api/interpreter",
 ]
-# Kumi Systems (overpass.kumi.systems) was tried as a fourth mirror but
-# consistently hung for 20-45s before timing out in every observed test
-# run, never once succeeding — worse than not having it, since it delays
-# fallback to a working mirror. Dropped rather than kept as dead weight.
+# Kumi Systems and its successor private.coffee have both been excluded after
+# repeated request timeouts. Keeping them in the fallback list only delays a
+# retry against a responsive mirror.
 
 # How long to avoid retrying a mirror after it returns HTTP 429 (rate
 # limited). "Germany (main)" and "Germany (CDN)" are the same operator's
 # cluster and share a rate limit, so a 429 on one usually means the other
 # is limited too — better to jump straight to an independent provider
-# (Kumi Systems / France) than to burn another timeout re-trying them.
+# (France) than to burn another timeout re-trying them.
 RATE_LIMIT_COOLDOWN_SECS = 120.0
 
-# How long to avoid retrying a mirror after ANY other failure (5xx server
-# errors, connection errors, timeouts). A single street-mode entry can fire
-# several separate request() calls in a row (id-based boundary probe, then
-# a boundary probe, then the full name-based query) — without this, a
-# mirror that just failed with a 504 moments ago gets hit again in the very
-# next call with no memory of the failure, doubling or tripling the total
-# wait for no benefit. Shorter than the 429 cooldown since these tend to be
-# more transient (momentary overload) than a hard rate-limit block.
 TRANSIENT_FAIL_COOLDOWN_SECS = 30.0
+
+
+class OverpassRequestCancelled(RuntimeError):
+    """Raised before more network work when a caller supersedes a request."""
 
 
 # ---------------------------------------------------------------------------
@@ -75,15 +66,7 @@ TRANSIENT_FAIL_COOLDOWN_SECS = 30.0
 # ---------------------------------------------------------------------------
 
 class OverpassClient:
-    """Thread-safe Overpass API wrapper with cooldown and mirror fallback.
-
-    Parameters
-    ----------
-    cooldown_secs:
-        Minimum seconds between requests (default 8).
-    mirrors:
-        Override the default mirror list if desired.
-    """
+    """Thread-safe Overpass API wrapper with cooldown and mirror fallback."""
 
     def __init__(
         self,
@@ -111,10 +94,27 @@ class OverpassClient:
         while len(self._labels) < len(self._mirrors):
             self._labels.append(f"Server {len(self._labels) + 1}")
         self.status_cb = None  # optional callable(str) set by caller
-        self._last_successful_mirror = 0  # Rotate between servers
+        self._last_successful_mirror = 0
         self._rate_limited_until: dict[int, float] = {}  # mirror index -> epoch time
-        self._in_flight_mirrors: set[int] = set()
+        # The two overpass-api.de hostnames are one operator cluster. Treat
+        # them as one concurrency target so a street request and POI request
+        # do not hit main and CDN simultaneously and then retry into the same
+        # cluster's shared rate limit.
+        self._in_flight_groups: set[str] = set()
         self._mirror_lock = threading.Lock()
+
+    def _mirror_group(self, index: int, mirror_list: list[str]) -> str:
+        url = mirror_list[index].lower()
+        if "overpass-api.de" in url:
+            return "overpass-api.de"
+        return url.split("/api/", 1)[0]
+
+    def _cool_down_operator(self, index: int, until: float) -> None:
+        if index in (0, 1) and len(self._mirrors) > 1:
+            self._rate_limited_until[0] = until
+            self._rate_limited_until[1] = until
+        else:
+            self._rate_limited_until[index] = until
 
     # ------------------------------------------------------------------
     # Public API
@@ -127,6 +127,7 @@ class OverpassClient:
         mirrors: list[str] | None = None,
         start_index: int | None = None,
         max_mirrors: int | None = None,
+        cancel_cb=None,
     ) -> dict | None:
         """Send an Overpass QL query and return the parsed JSON response.
 
@@ -151,12 +152,18 @@ class OverpassClient:
         # batch fetch and a live F11 press). That risks tripping the public
         # server's own concurrency limits and causing timeouts on both,
         # rather than just queuing safely one at a time.
-        with self._sem:
+        while not self._sem.acquire(timeout=0.2):
+            if cancel_cb and cancel_cb():
+                raise OverpassRequestCancelled()
+        try:
+            if cancel_cb and cancel_cb():
+                raise OverpassRequestCancelled()
             if start_index is None:
-                # Start with the next server after the last known-good mirror.
-                # This spreads load across mirrors while still preserving the
-                # last working choice as a fallback point.
-                start_index = (self._last_successful_mirror + 1) % n_mirrors
+                # Start with the last server that actually worked. Concurrent
+                # callers still move to another available mirror below, but a
+                # user's next request should not pay to rediscover a known-good
+                # endpoint merely for round-robin distribution.
+                start_index = self._last_successful_mirror % n_mirrors
 
             # Order servers: rotated position first, but push any mirror
             # that was recently 429'd to the back of the queue so we don't
@@ -171,29 +178,37 @@ class OverpassClient:
                 ordered_indices = available_indices
             else:
                 ordered_indices.sort(key=lambda i: self._rate_limited_until.get(i, 0))
+            # Collapse host aliases belonging to one operator. This ensures
+            # max_mirrors means independent providers, rather than allowing
+            # Germany main and CDN to consume the whole retry budget.
+            independent_indices = []
+            seen_groups = set()
+            for i in ordered_indices:
+                group = self._mirror_group(i, mirror_list)
+                if group in seen_groups:
+                    continue
+                seen_groups.add(group)
+                independent_indices.append(i)
+            ordered_indices = independent_indices
             if max_mirrors is not None:
                 ordered_indices = ordered_indices[:max(1, int(max_mirrors))]
 
             for index in ordered_indices:
+                if cancel_cb and cancel_cb():
+                    raise OverpassRequestCancelled()
+                group = self._mirror_group(index, mirror_list)
                 with self._mirror_lock:
-                    if index in self._in_flight_mirrors:
-                        alternatives = [
-                            i for i in ordered_indices
-                            if i != index
-                            and i not in self._in_flight_mirrors
-                            and self._rate_limited_until.get(i, 0) <= time.time()
-                        ]
-                        if alternatives:
-                            miab_log(
-                                "verbose",
-                                f"[Overpass] Skipping {label_list[index]} for concurrent request; already in use.",
-                                getattr(self, "settings", None),
-                            )
-                            continue
-                    self._in_flight_mirrors.add(index)
+                    if group in self._in_flight_groups:
+                        miab_log(
+                            "verbose",
+                            f"[Overpass] Skipping {label_list[index]} for concurrent request; operator already in use.",
+                            getattr(self, "settings", None),
+                        )
+                        continue
+                    self._in_flight_groups.add(group)
                 url = mirror_list[index]
                 label = label_list[index]
-                self._wait(index)
+                self._wait(index, cancel_cb=cancel_cb)
 
                 msg = f"Connecting to street server {index + 1} of {n_mirrors}: {label}..."
                 miab_log("verbose", f"[Overpass] {msg}", getattr(self, "settings", None))
@@ -236,88 +251,44 @@ class OverpassClient:
 
                 except urllib.error.HTTPError as exc:
                     if exc.code == 429:
-                        self._rate_limited_until[index] = time.time() + RATE_LIMIT_COOLDOWN_SECS
-                        if not custom_mirrors and index in (0, 1):
-                            self._rate_limited_until[0] = time.time() + RATE_LIMIT_COOLDOWN_SECS
-                            self._rate_limited_until[1] = time.time() + RATE_LIMIT_COOLDOWN_SECS
+                        until = time.time() + RATE_LIMIT_COOLDOWN_SECS
+                        if custom_mirrors:
+                            self._rate_limited_until[index] = until
+                        else:
+                            self._cool_down_operator(index, until)
                     elif exc.code >= 500:
-                        self._rate_limited_until[index] = time.time() + TRANSIENT_FAIL_COOLDOWN_SECS
+                        until = time.time() + TRANSIENT_FAIL_COOLDOWN_SECS
+                        if custom_mirrors:
+                            self._rate_limited_until[index] = until
+                        else:
+                            self._cool_down_operator(index, until)
                     miab_log("errors", f"[Overpass] {label} failed: {exc}", getattr(self, "settings", None))
                     # Try next server
                     continue
                 except Exception as exc:
                     # Socket timeouts, connection errors, etc. — also
-                    # deprioritize briefly so a subsequent request() call
-                    # (boundary probe, full query) doesn't immediately
-                    # re-hit the same mirror that just failed.
-                    self._rate_limited_until[index] = time.time() + TRANSIENT_FAIL_COOLDOWN_SECS
+                    until = time.time() + TRANSIENT_FAIL_COOLDOWN_SECS
+                    if custom_mirrors:
+                        self._rate_limited_until[index] = until
+                    else:
+                        self._cool_down_operator(index, until)
                     miab_log("errors", f"[Overpass] {label} failed: {exc}", getattr(self, "settings", None))
                     # Try next server
                     continue
                 finally:
                     with self._mirror_lock:
-                        self._in_flight_mirrors.discard(index)
+                        self._in_flight_groups.discard(group)
 
             # All servers failed
             return None
-
-    def request_one(
-        self,
-        query_data: bytes,
-        url: str,
-        label: str = "",
-        timeout: int = 15,
-    ) -> dict | None:
-        """Try exactly one server URL — no rotation, no fallback.
-
-        Used by _live_fetch in street_data.py which drives its own
-        outer server loop (server1-name → server1-radius →
-        server2-name → server2-radius).
-
-        Returns parsed JSON dict, or ``None`` on any failure.
-        """
-        with self._sem:
-            self._wait()
-        tag = label or url
-        miab_log("verbose", f"[Overpass] Trying {tag} ...", getattr(self, "settings", None))
-        if self.status_cb:
-            try:
-                self.status_cb(f"Connecting to {tag}...")
-            except Exception:
-                pass
-        try:
-            req = urllib.request.Request(
-                url, data=query_data,
-                headers={
-                    "User-Agent":   "MapInABox/1.0",
-                    "Content-Type": "application/x-www-form-urlencoded",
-                },
-            )
-            with urllib.request.urlopen(
-                req, timeout=timeout, context=_SSL_CONTEXT
-            ) as resp:
-                result = json.loads(resp.read().decode())
-            if "remark" in result and not result.get("elements"):
-                miab_log("errors", f"[Overpass] {tag} error remark: {result['remark']}", getattr(self, "settings", None))
-                return None
-            miab_log("verbose", f"[Overpass] {tag} succeeded ({len(result.get('elements', []))} elements)", getattr(self, "settings", None))
-            return result
-        except Exception as exc:
-            miab_log("errors", f"[Overpass] {tag} failed: {exc}", getattr(self, "settings", None))
-            return None
+        finally:
+            self._sem.release()
 
     def poi_request(
         self,
         query_data: bytes,
         timeout: int = 15,
     ) -> dict | None:
-        """Like ``request`` but tries public mirrors first, proxy last.
-
-        POI queries are less likely to benefit from a caching proxy and
-        more likely to time out on it, so we swap the order.
-        """
-        # Keep the mirror list in its original order so labels stay aligned.
-        # Start on the public mirror when we have more than one server.
         start_index = 1 if len(self._mirrors) > 1 else 0
         return self.request(query_data, timeout=timeout, start_index=start_index)
 
@@ -326,14 +297,17 @@ class OverpassClient:
         query_data: bytes,
         timeout: int = 15,
         max_mirrors: int | None = None,
+        cancel_cb=None,
     ) -> dict | None:
         """Large radius queries with standard timeout."""
-        return self.request(query_data, timeout=timeout, max_mirrors=max_mirrors)
+        return self.request(
+            query_data, timeout=timeout, max_mirrors=max_mirrors,
+            cancel_cb=cancel_cb)
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 
-    def _wait(self, mirror_index: int | None = None) -> None:
+    def _wait(self, mirror_index: int | None = None, cancel_cb=None) -> None:
         """Enforce a cooldown, per mirror when a mirror is known."""
         now = time.time()
         if mirror_index is None:
@@ -341,8 +315,12 @@ class OverpassClient:
         else:
             last = self._last_request_by_mirror.get(mirror_index, 0.0)
         elapsed = now - last
-        if elapsed < self._cooldown:
-            time.sleep(self._cooldown - elapsed)
+        remaining = self._cooldown - elapsed
+        while remaining > 0:
+            if cancel_cb and cancel_cb():
+                raise OverpassRequestCancelled()
+            time.sleep(min(0.2, remaining))
+            remaining = self._cooldown - (time.time() - last)
         now = time.time()
         self._last_request = now
         if mirror_index is not None:

@@ -286,7 +286,7 @@ try {
             $destinationItem = Get-Item -LiteralPath $destination
             if ($destinationItem.Length -ne $sourceFile.Length) {
                 $different = $true
-            } elseif (-not $isSound) {
+            } else {
                 $sourceHash = (Get-FileHash -LiteralPath $sourceFile.FullName -Algorithm SHA256).Hash
                 $destinationHash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
                 $different = $sourceHash -ne $destinationHash
@@ -358,7 +358,7 @@ try {
     Write-Progress -Activity "Installing portable update" -Completed
     Write-UpdateLog ("Files applied: " + $changedFiles.Count +
         " changed; $unchanged unchanged; " + $obsoleteSoundFiles.Count +
-        " retired sounds removed. Sound comparisons used file size.")
+        " retired sounds removed. File comparisons used SHA-256.")
     $internalMarker = Join-Path $AppDirectory "_internal\_portable"
     $legacyMarker = Join-Path $AppDirectory "portable.flag"
     if ((Test-Path -LiteralPath $internalMarker) -and

@@ -4,13 +4,11 @@ F12 tools (detour calculator, route explorer, toll compare,
 journey planner, departure board) as a mixin class.
 """
 
-import json
 import math
 import os
 import re
 import sys
 import threading
-import time
 import urllib.parse
 import urllib.request
 
