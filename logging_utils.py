@@ -33,6 +33,14 @@ def miab_log(category: str, msg: str, settings=None) -> None:
         log_cfg = settings.get("logging", {})
         if not log_cfg.get(category, False):
             return
+    else:
+        enabled = {
+            value.strip()
+            for value in os.environ.get("MIAB_LOG_CATEGORIES", "").split(",")
+            if value.strip()
+        }
+        if category not in enabled:
+            return
     ts = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] [{category.upper()}] {msg}"
     log_path = _resolve_log_path(settings)

@@ -394,7 +394,7 @@ class SettingsDialog(wx.Dialog):
         self.cb_log_nav       = wx.CheckBox(self.logging_page, label=_("Navigation events - country entries, crossings, jumps"))
         self.cb_log_verbose   = wx.CheckBox(self.logging_page, label=_("Verbose diagnostics - key sequences and extra traces written to miab.log"))
         log_vs.Add(wx.StaticText(self.logging_page, label=_("Logging (miab.log):")), 0, wx.ALL, 8)
-        self.cb_log_errors.SetValue(log.get("errors",    True))
+        self.cb_log_errors.SetValue(log.get("errors",    False))
         self.cb_log_street.SetValue(log.get("street",    False))
         self.cb_log_snap.SetValue(log.get("snap",        False))
         self.cb_log_api.SetValue(log.get("api_calls",    False))

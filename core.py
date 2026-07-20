@@ -1,3 +1,7 @@
+import time
+
+_PROCESS_START_T0 = time.perf_counter()
+
 import csv
 import gzip
 import json
@@ -8,7 +12,6 @@ import pickle
 import shutil
 import tempfile
 import threading
-import time
 import urllib.parse
 import urllib.request
 
@@ -68,7 +71,7 @@ from app_paths import APP_DIR, CACHE_DIR, PORTABLE_MODE, RESOURCE_DIR, USER_DIR
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0.0.31'
+APP_VERSION   = '1.0.0.32'
 
 POI_LIVE_COOLDOWN_SECS = 3.0
 POI_BACKGROUND_WAIT_SECS = 2.0
@@ -872,7 +875,7 @@ DEFAULT_SETTINGS = {
     "gnaf_enabled":           True,    # Australian address point overlay
     "jump_history":           [],      # last 5 J-key destinations [{label,lat,lon}]
     "logging": {
-        "errors":        True,
+        "errors":        False,
         "street":        False,
         "snap":          False,
         "api_calls":     False,
@@ -1632,13 +1635,15 @@ class WorldMapPanel(wx.Panel):
         gc.SetBrush(gc.CreateBrush(wx.Brush(wx.Colour(5, 16, 30, 225))))
         gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(wx.Colour(0, 235, 255)).Width(2)))
         gc.DrawRoundedRectangle(pad, pad, max(1, w - pad * 2), band_h, 8)
-        gc.SetFont(gc.CreateFont(wx.Font(font_size, wx.FONTFAMILY_SWISS,
-                                        wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)),
-                   wx.Colour(255, 255, 255))
+        gc.SetFont(gc.CreateFont(
+            wx.Font(font_size, wx.FONTFAMILY_SWISS,
+                    wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD),
+            wx.Colour(255, 255, 255)))
         gc.DrawText(title, pad * 2, pad * 1.45)
-        gc.SetFont(gc.CreateFont(wx.Font(small_size, wx.FONTFAMILY_SWISS,
-                                        wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)),
-                   wx.Colour(190, 245, 255))
+        gc.SetFont(gc.CreateFont(
+            wx.Font(small_size, wx.FONTFAMILY_SWISS,
+                    wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL),
+            wx.Colour(190, 245, 255)))
         second_line = detail or mode
         if detail:
             second_line += "  \N{BULLET}  " + mode
@@ -1650,9 +1655,10 @@ class WorldMapPanel(wx.Panel):
         gc.StrokeLine(nx, ny + 24, nx, ny)
         gc.StrokeLine(nx, ny, nx - 7, ny + 10)
         gc.StrokeLine(nx, ny, nx + 7, ny + 10)
-        gc.SetFont(gc.CreateFont(wx.Font(small_size, wx.FONTFAMILY_SWISS,
-                                        wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)),
-                   wx.Colour(255, 255, 255))
+        gc.SetFont(gc.CreateFont(
+            wx.Font(small_size, wx.FONTFAMILY_SWISS,
+                    wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD),
+            wx.Colour(255, 255, 255)))
         gc.DrawText("N", nx - small_size / 2, ny - small_size * 1.4)
 
     def set_flash(self, name, rings_idx, centroid_lon, centroid_lat):
@@ -3029,7 +3035,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         add_item(map_menu, "currency", "C&urrency",
                  lambda e: self._announce_currency())
         map_menu.AppendSeparator()
-        add_item(map_menu, "fullscreen", "Classroom / Full Screen &Map\tF9",
+        add_item(map_menu, "fullscreen", "Visual Assist &Mode\tF9",
                  lambda e: self._toggle_map_fullscreen())
         menubar.Append(map_menu, "&Map")
 
@@ -7485,6 +7491,14 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             event.Skip()
             return
 
+        # At idle the listbox contains only the mode label.  Bare M has no
+        # command, so letting it reach the native listbox handler merely
+        # selects "Map mode" and causes a misleading screen-reader
+        # announcement.  Keep first-letter navigation available for actual
+        # POI/result lists, but consume M for the single idle mode row.
+        if not poi_list_open and no_mod and key in (ord('M'), ord('m')):
+            return
+
         self.on_key(event)
 
     def _transit_drill_or_jump(self):
@@ -9469,7 +9483,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             wx.CallLater(2000, self._restore_poi_listbox)
 
     def _toggle_map_fullscreen(self):
-        """F9 — toggle the shared Windows/macOS classroom map presentation."""
+        """F9 — toggle the shared Windows/macOS Visual Assist presentation."""
         self._map_fullscreen = not self._map_fullscreen
         status = ""
         if self._map_fullscreen:
@@ -9481,7 +9495,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self._info_sizer_item.SetProportion(0)
             self._info_sizer_item.SetMinSize((1, -1))
             self.info_panel.Hide()
-            status = "Classroom map on."
+            status = "Visual Assist mode on."
         else:
             self._map_sizer_item.SetProportion(3)
             self._list_sizer_item.SetProportion(1)
@@ -9491,7 +9505,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self._info_sizer_item.SetMinSize((250, -1))
             if not getattr(self, "_map_was_maximized", False):
                 self.Maximize(False)
-            status = "Classroom map off."
+            status = "Visual Assist mode off."
         self.map_panel.set_classroom_mode(self._map_fullscreen)
         self._h_sizer.Layout()
         self.map_panel.Refresh()
@@ -12959,7 +12973,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             "F7: toggle sounds.",
             "F8: flash country on map.",
             "Shift+F8: cycle world view and country view.",
-            "F9: toggle the classroom full-screen map.",
+            "F9: toggle Visual Assist mode.",
             "F10: country discovery challenge.",
             "Ctrl+F10: scored challenge session.",
             "Shift+F10: repeat challenge target.",
@@ -14333,14 +14347,18 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         txt.SetFocus()
 
 
+_CORE_LOADED_AT = time.perf_counter()
+
+
 if __name__ == "__main__":
     import atexit, sys
-    _startup_t0 = time.perf_counter()
+    _startup_t0 = _PROCESS_START_T0
 
     # Keep this object alive until MainLoop exits; releasing it also releases
     # the native per-user instance lock. Installed and portable editions use
     # the same name so they cannot run over one another.
     app = wx.App(False)
+    _wx_ready_at = time.perf_counter()
     _portable_update_lock = os.path.join(APP_DIR, ".update-in-progress")
     if PORTABLE_MODE and os.path.isfile(_portable_update_lock):
         try:
@@ -14381,14 +14399,31 @@ if __name__ == "__main__":
             wx.OK | wx.ICON_ERROR,
         )
 
-    _LOG_PATH = os.path.join(USER_DIR, "miab.log")
-    os.environ["MIAB_LOG_PATH"] = _LOG_PATH
+    _startup_settings = load_settings()
+    _startup_log_cfg = dict(_startup_settings.get("logging", {}))
+    if os.environ.get("MIAB_FORCE_DIAGNOSTICS") == "1":
+        for _category in (
+                "errors", "street", "snap", "api_calls", "challenges",
+                "feature_usage", "navigation", "verbose"):
+            _startup_log_cfg[_category] = True
+        _startup_settings["logging"] = _startup_log_cfg
 
-    # Truncate once at startup, then keep every writer in append mode.  stdout,
-    # stderr, and miab_log all target this path; independent write-mode handles
-    # otherwise overwrite one another (particularly visible on macOS).
-    open(_LOG_PATH, "w", encoding="utf-8").close()
-    _shared_log_file = open(_LOG_PATH, "a", encoding="utf-8", buffering=1)
+    _enabled_log_categories = {
+        name for name, enabled in _startup_log_cfg.items() if enabled
+    }
+    _LOG_PATH = os.path.join(USER_DIR, "miab.log")
+    _shared_log_file = None
+    if _enabled_log_categories:
+        os.environ["MIAB_LOG_PATH"] = _LOG_PATH
+        os.environ["MIAB_LOG_CATEGORIES"] = ",".join(
+            sorted(_enabled_log_categories))
+        # Truncate once at startup, then keep structured writers in append
+        # mode. Raw stderr is captured only when error logging is enabled.
+        open(_LOG_PATH, "w", encoding="utf-8").close()
+        _shared_log_file = open(_LOG_PATH, "a", encoding="utf-8", buffering=1)
+    else:
+        os.environ.pop("MIAB_LOG_PATH", None)
+        os.environ.pop("MIAB_LOG_CATEGORIES", None)
 
     class _Tee:
         """Write to log file, and also to the original stream if one exists."""
@@ -14407,27 +14442,30 @@ if __name__ == "__main__":
                 except Exception: pass
             try: self._file.flush()
             except Exception: pass
-    _tee_out = _Tee(sys.stdout, _shared_log_file)
-    _tee_err = _Tee(sys.stderr, _shared_log_file)
-    sys.stdout = _tee_out
-    sys.stderr = _tee_err
+    _tee_err = None
+    if _shared_log_file is not None and "errors" in _enabled_log_categories:
+        _tee_err = _Tee(sys.stderr, _shared_log_file)
+        sys.stderr = _tee_err
 
     def _cleanup_log():
-        sys.stdout = _tee_out._orig or sys.__stdout__
-        sys.stderr = _tee_err._orig or sys.__stderr__
-        try: _shared_log_file.close()
-        except Exception: pass
+        if _tee_err is not None:
+            sys.stderr = _tee_err._orig or sys.__stderr__
+        if _shared_log_file is not None:
+            try: _shared_log_file.close()
+            except Exception: pass
 
     atexit.register(_cleanup_log)
 
-    miab_log("navigation", "Map in a Box started.", None)
+    miab_log("navigation", "Map in a Box started.", _startup_settings)
 
     import atexit as _atexit2
-    _atexit2.register(lambda: miab_log("navigation", "Map in a Box closed.", None))
+    _atexit2.register(lambda: miab_log(
+        "navigation", "Map in a Box closed.", _startup_settings))
 
-    miab_log("verbose", f"Startup: wx.App ready in {time.perf_counter() - _startup_t0:.2f}s", {"logging": {"verbose": True}})
+    miab_log("verbose", f"Startup: core module loaded in {_CORE_LOADED_AT - _startup_t0:.2f}s", _startup_settings)
+    miab_log("verbose", f"Startup: wx.App ready in {_wx_ready_at - _startup_t0:.2f}s", _startup_settings)
     data  = load_offline_data()
-    miab_log("verbose", f"Startup: city data loaded in {time.perf_counter() - _startup_t0:.2f}s", {"logging": {"verbose": True}})
+    miab_log("verbose", f"Startup: city data loaded in {time.perf_counter() - _startup_t0:.2f}s", _startup_settings)
     if not data:
         wx.MessageBox(
             "worldcities.csv.gz not found.\n\n"
@@ -14436,7 +14474,7 @@ if __name__ == "__main__":
             "Missing Data File", wx.ICON_ERROR)
         os._exit(1)
     facts = load_facts()
-    miab_log("verbose", f"Startup: facts loaded in {time.perf_counter() - _startup_t0:.2f}s", {"logging": {"verbose": True}})
+    miab_log("verbose", f"Startup: facts loaded in {time.perf_counter() - _startup_t0:.2f}s", _startup_settings)
     MapNavigator(data, facts)
-    miab_log("verbose", f"Startup: main window constructed in {time.perf_counter() - _startup_t0:.2f}s", {"logging": {"verbose": True}})
+    miab_log("verbose", f"Startup: main window constructed in {time.perf_counter() - _startup_t0:.2f}s", _startup_settings)
     app.MainLoop()
