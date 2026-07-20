@@ -68,7 +68,7 @@ from app_paths import APP_DIR, CACHE_DIR, PORTABLE_MODE, RESOURCE_DIR, USER_DIR
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0.0.28'
+APP_VERSION   = '1.0.0.29'
 
 POI_LIVE_COOLDOWN_SECS = 3.0
 POI_BACKGROUND_WAIT_SECS = 2.0
@@ -1094,10 +1094,13 @@ class SoundEngine:
     _SOUND_FALLBACKS = {
         # Europe
         "Albania":                  "europe",
+        "Algeria":                  "africa",
         "Armenia":                  "europe",
         "Azerbaijan":               "europe",
+        "Bahrain":                  "middle_east",
         "Belarus":                  "europe",
         "Bosnia and Herzegovina":   "europe",
+        "Central African Republic": "africa",
         "Denmark":                  "europe",
         "Finland":                  "europe",
         "Gabon":                    "africa",
@@ -1120,8 +1123,10 @@ class SoundEngine:
         "Paraguay":                 "south_america",
         "Ecuador":                  "south_america",
         "Poland":                   "europe",
+        "Qatar":                    "middle_east",
         "Romania":                  "europe",
         "Rwanda":                   "africa",
+        "Senegal":                  "gambia",
         "Slovakia":                 "europe",
         "Somalia":                  "africa",
         "South Sudan":              "africa",

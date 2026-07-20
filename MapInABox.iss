@@ -7,13 +7,13 @@
 ;      iscc MapInABox.iss
 
 #define AppName    "Map in a Box"
-#define AppVersion "1.0.0.28"
+#define AppVersion "1.0.0.29"
 #define AppExe     "MapInABox.exe"
 #define AppDir     "dist\MapInABox"
 
 [Setup]
 AppName={#AppName}
-AppVersion=1.0.0.28
+AppVersion=1.0.0.29
 AppVerName={#AppName} {#AppVersion}
 AppPublisher=Sam Taylor
 AppPublisherURL=https://github.com/sjtaylor82/MapInABox
@@ -56,6 +56,13 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
+
+[InstallDelete]
+; Sounds are release-managed resources. Purge the previous set so files removed
+; from a release cannot remain behind and override regional fallbacks.
+Type: filesandordirs; Name: "{app}\_internal\sounds"
+; Clean up the layout used by older/alternative one-folder builds as well.
+Type: filesandordirs; Name: "{app}\sounds"
 
 [Files]
 ; Everything PyInstaller built

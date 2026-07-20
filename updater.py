@@ -238,6 +238,8 @@ $updateLog = Join-Path $dataDirectory "update.log"
 $success = $false
 $appWasClosed = $false
 $soundPlayer = $null
+$destinationSoundDirectory = $null
+$soundBackupDirectory = $null
 New-Item -ItemType Directory -Path $dataDirectory -Force | Out-Null
 function Write-UpdateLog([string]$Message) {
     $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -255,12 +257,27 @@ try {
     Expand-Archive -LiteralPath $ZipPath -DestinationPath $staging -Force
     $source = Join-Path $staging "MapInABox"
     if (-not (Test-Path -LiteralPath $source)) { $source = $staging }
+    $sourceSoundDirectory = Join-Path $source "_internal\sounds"
+    $soundRelativePath = "_internal\sounds"
+    if (-not (Test-Path -LiteralPath $sourceSoundDirectory -PathType Container)) {
+        $sourceSoundDirectory = Join-Path $source "sounds"
+        $soundRelativePath = "sounds"
+    }
+    if (Test-Path -LiteralPath $sourceSoundDirectory -PathType Container) {
+        $destinationSoundDirectory = Join-Path $AppDirectory $soundRelativePath
+        $soundBackupDirectory = $destinationSoundDirectory + ".update-old"
+    }
     $changedFiles = New-Object System.Collections.Generic.List[object]
     $unchanged = 0
     Get-ChildItem -LiteralPath $source -Recurse -Force -File | ForEach-Object {
         $relativePath = $_.FullName.Substring($source.Length).TrimStart('\')
         $destination = Join-Path $AppDirectory $relativePath
-        $different = -not (Test-Path -LiteralPath $destination -PathType Leaf)
+        $isBundledSound = ($destinationSoundDirectory -ne $null) -and
+            $_.FullName.StartsWith(
+                $sourceSoundDirectory + [System.IO.Path]::DirectorySeparatorChar,
+                [System.StringComparison]::OrdinalIgnoreCase)
+        $different = $isBundledSound -or
+            -not (Test-Path -LiteralPath $destination -PathType Leaf)
         if (-not $different) {
             $destinationItem = Get-Item -LiteralPath $destination
             if ($destinationItem.Length -ne $_.Length) {
@@ -285,6 +302,13 @@ try {
     Set-Content -LiteralPath $ReadyPath -Value "ready" -Encoding ASCII
     Wait-Process -Id $MapInABoxProcessId -ErrorAction SilentlyContinue
     $appWasClosed = $true
+    if ($destinationSoundDirectory) {
+        Remove-Item -LiteralPath $soundBackupDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $destinationSoundDirectory) {
+            Move-Item -LiteralPath $destinationSoundDirectory -Destination $soundBackupDirectory
+        }
+        Write-UpdateLog "Previous bundled sounds moved aside for complete replacement."
+    }
     foreach ($file in $changedFiles) {
         $destinationDirectory = Split-Path -Parent $file.Destination
         New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
@@ -300,10 +324,19 @@ try {
             (Test-Path -LiteralPath $legacyMarker)) {
         Remove-Item -LiteralPath $legacyMarker -Force
     }
+    if ($soundBackupDirectory) {
+        Remove-Item -LiteralPath $soundBackupDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    }
     $success = $true
     Write-UpdateLog "Portable update completed successfully."
 } catch {
     Write-UpdateLog ("Portable update failed: " + $_.Exception.Message)
+    if ($soundBackupDirectory -and
+            (Test-Path -LiteralPath $soundBackupDirectory -PathType Container)) {
+        Remove-Item -LiteralPath $destinationSoundDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        Move-Item -LiteralPath $soundBackupDirectory -Destination $destinationSoundDirectory -Force
+        Write-UpdateLog "Previous bundled sounds restored after update failure."
+    }
     $env:MIAB_PORTABLE_UPDATE_FAILED = $updateLog
     if (-not (Test-Path -LiteralPath $ReadyPath)) {
         Set-Content -LiteralPath $ReadyPath -Value "error" -Encoding ASCII
