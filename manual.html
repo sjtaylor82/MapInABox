@@ -24,7 +24,7 @@
 <body>
 
 <h1>Map in a Box — User Manual</h1>
-<p><strong>Version 1.0.0.29</strong> &nbsp;|&nbsp; Windows &amp; macOS</p>
+<p><strong>Version 1.0.0.30</strong> &nbsp;|&nbsp; Windows &amp; macOS</p>
 
 
 <nav aria-label="Table of contents">
@@ -33,6 +33,7 @@
     <li><a href="#overview">1. Overview</a></li>
     <li><a href="#starting">2. Starting out</a></li>
     <li><a href="#map-mode">3. Map mode</a></li>
+    <li><a href="#custom-sounds">3.1 Country sounds and custom sounds</a></li>
     <li><a href="#jumping">4. Jumping to a place</a></li>
     <li><a href="#marks">5. Marks</a></li>
     <li><a href="#favourites">6. Favourites</a></li>
@@ -95,6 +96,20 @@
 <p>Prefer menus over remembering keystrokes? Never fear. Everything here is also reachable from the menu bar with <code>Alt</code>.</p>
 
 <p>Let's talk about what happens when you navigate the world. Spatial tones give you an audio sense of your global or regional position. This is achieved via higher or lower pitches for latitude, and stereo panning for longitude, so you can hear roughly where countries, states, and cities sit relative to each other. Each country also has its own sound profile which helps tell neighbouring countries apart simply by listening to them. This is particularly engaging for young students who are learning about neighbours near and far in their Geography or HASS lessons. </p>
+
+<h3 id="custom-sounds">3.1 Country sounds and custom sounds</h3>
+
+<p>Map in a Box includes a managed library of country and region sounds. Updates may add, replace, or remove files in that bundled library, including its attribution licenses file, <code>credits.txt</code>. Do not put personal sounds in the application or <code>_internal</code> folders, because those folders belong to the installed program and may be refreshed by an update.</p>
+
+<p>To use your own sounds, place them in the user sound folders created by Map in a Box:</p>
+
+<ul>
+  <li><strong>Windows portable:</strong> <code>Data\sounds\countries</code> or <code>Data\sounds\regions</code>, beside the portable program.</li>
+  <li><strong>Installed Windows:</strong> <code>%APPDATA%\MapInABox\sounds\countries</code> or <code>%APPDATA%\MapInABox\sounds\regions</code>.</li>
+  <li><strong>macOS:</strong> <code>~/Library/Application Support/MapInABox/sounds/countries</code> or <code>~/Library/Application Support/MapInABox/sounds/regions</code>.</li>
+</ul>
+
+<p>Name a custom file after the country or region in lowercase, replacing spaces with underscores; for example, <code>new_zealand.ogg</code> or <code>south_america.mp3</code>. OGG and MP3 files are supported, with OGG preferred when both exist. On every launch, Map in a Box checks the user sound folders before the bundled library. Removing a custom file restores the bundled sound or normal regional fallback. Updates never alter the user sound folders.</p>
 
 
 <h2 id="jumping">4. Jumping to a place</h2>

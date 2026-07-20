@@ -68,7 +68,7 @@ from app_paths import APP_DIR, CACHE_DIR, PORTABLE_MODE, RESOURCE_DIR, USER_DIR
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0.0.29'
+APP_VERSION   = '1.0.0.30'
 
 POI_LIVE_COOLDOWN_SECS = 3.0
 POI_BACKGROUND_WAIT_SECS = 2.0
@@ -92,6 +92,11 @@ SETTINGS_PATH          = os.path.join(USER_DIR,  "settings.json")
 SUPPRESSED_POIS_PATH   = os.path.join(USER_DIR,  "suppressed_pois.json")
 RENAMED_POIS_PATH      = os.path.join(USER_DIR,  "renamed_pois.json")
 PERSONAL_POIS_PATH     = os.path.join(USER_DIR,  "personal_pois.json")
+USER_SOUNDS_DIR        = os.path.join(USER_DIR,  "sounds")
+USER_COUNTRY_DIR       = os.path.join(USER_SOUNDS_DIR, "countries")
+USER_REGION_DIR        = os.path.join(USER_SOUNDS_DIR, "regions")
+for _d in (USER_COUNTRY_DIR, USER_REGION_DIR):
+    os.makedirs(_d, exist_ok=True)
 
 # ── Caches (local AppData, or Data\Cache in portable mode) ──────────────────
 CACHE_PATH             = os.path.join(CACHE_DIR, "worldcities.pkl")
@@ -1153,36 +1158,41 @@ class SoundEngine:
         if canonical == self._current:
             return
 
-        # Build candidate paths — try original country name first,
-        # then canonical (parent country), then region fallbacks
-        candidates = []
         orig_stem = _safe_stem(country_name)
         can_stem  = _safe_stem(canonical)
 
-        # Original country name takes priority (e.g. new_caledonia.ogg over france.ogg)
-        for ext in ("ogg", "mp3"):
-            candidates.append(os.path.join(COUNTRY_DIR, f"{orig_stem}.{ext}"))
-        for ext in ("ogg", "mp3"):
-            candidates.append(os.path.join(REGION_DIR, f"{orig_stem}.{ext}"))
+        def _candidates_for(country_dir, region_dir):
+            paths = []
+            # Original country name takes priority (for example,
+            # new_caledonia.ogg over its canonical parent, france.ogg).
+            for ext in ("ogg", "mp3"):
+                paths.append(os.path.join(country_dir, f"{orig_stem}.{ext}"))
+            for ext in ("ogg", "mp3"):
+                paths.append(os.path.join(region_dir, f"{orig_stem}.{ext}"))
 
-        # Then canonical/parent country
-        if can_stem != orig_stem:
-            for ext in ("ogg", "mp3"):
-                candidates.append(os.path.join(COUNTRY_DIR, f"{can_stem}.{ext}"))
-            for ext in ("ogg", "mp3"):
-                candidates.append(os.path.join(REGION_DIR, f"{can_stem}.{ext}"))
+            if can_stem != orig_stem:
+                for ext in ("ogg", "mp3"):
+                    paths.append(os.path.join(country_dir, f"{can_stem}.{ext}"))
+                for ext in ("ogg", "mp3"):
+                    paths.append(os.path.join(region_dir, f"{can_stem}.{ext}"))
 
-        fallback = self._SOUND_FALLBACKS.get(canonical)
-        if fallback:
-            fb_stem = _safe_stem(fallback)
-            for ext in ("ogg", "mp3"):
-                for d in (COUNTRY_DIR, REGION_DIR):
-                    candidates.append(os.path.join(d, f"{fb_stem}.{ext}"))
+            fallback = self._SOUND_FALLBACKS.get(canonical)
+            if fallback:
+                fb_stem = _safe_stem(fallback)
+                for ext in ("ogg", "mp3"):
+                    for directory in (country_dir, region_dir):
+                        paths.append(os.path.join(directory, f"{fb_stem}.{ext}"))
 
-        if continent:
-            cont_stem = _safe_stem(continent)
-            for ext in ("ogg", "mp3"):
-                candidates.append(os.path.join(REGION_DIR, f"{cont_stem}.{ext}"))
+            if continent:
+                cont_stem = _safe_stem(continent)
+                for ext in ("ogg", "mp3"):
+                    paths.append(os.path.join(region_dir, f"{cont_stem}.{ext}"))
+            return paths
+
+        # User-owned overrides always win. The bundled tree remains disposable
+        # so installers can refresh it without deleting custom sounds.
+        candidates = _candidates_for(USER_COUNTRY_DIR, USER_REGION_DIR)
+        candidates.extend(_candidates_for(COUNTRY_DIR, REGION_DIR))
 
         for path in candidates:
             if os.path.exists(path):
@@ -14331,9 +14341,8 @@ if __name__ == "__main__":
             _update_lock_age = 0
         if _update_lock_age < 1800:
             wx.MessageBox(
-                "Map in a Box is still being updated. Please wait for the "
-                "processing sound to stop; the new version will open "
-                "automatically.",
+                "Map in a Box is still being updated. Please check the "
+                "portable update window; the new version will open automatically.",
                 "Portable Update in Progress",
                 wx.OK | wx.ICON_INFORMATION,
             )

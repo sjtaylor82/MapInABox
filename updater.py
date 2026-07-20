@@ -237,104 +237,152 @@ $dataDirectory = Join-Path $AppDirectory "Data"
 $updateLog = Join-Path $dataDirectory "update.log"
 $success = $false
 $appWasClosed = $false
-$soundPlayer = $null
-$destinationSoundDirectory = $null
-$soundBackupDirectory = $null
+$sourceInternalDirectory = $null
+$sourceSoundDirectory = $null
+$destinationSoundDirectory = Join-Path $AppDirectory "_internal\sounds"
+$soundBackupDirectory = Join-Path $staging "sound-backup"
+$obsoleteSoundFiles = New-Object System.Collections.Generic.List[string]
+$newSoundFiles = New-Object System.Collections.Generic.List[string]
 New-Item -ItemType Directory -Path $dataDirectory -Force | Out-Null
+$host.UI.RawUI.WindowTitle = "Map in a Box Portable Update"
 function Write-UpdateLog([string]$Message) {
     $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     Add-Content -LiteralPath $updateLog -Value "[$stamp] $Message" -Encoding UTF8
 }
 try {
     Write-UpdateLog "Portable update started."
-    $processingSound = Join-Path $env:WINDIR "Media\Windows Background.wav"
-    if (Test-Path -LiteralPath $processingSound) {
-        $soundPlayer = New-Object System.Media.SoundPlayer $processingSound
-        $soundPlayer.PlayLooping()
-    } else {
-        [System.Media.SystemSounds]::Asterisk.Play()
-    }
+    Write-Host "Preparing the Map in a Box portable update..."
     Expand-Archive -LiteralPath $ZipPath -DestinationPath $staging -Force
     $source = Join-Path $staging "MapInABox"
     if (-not (Test-Path -LiteralPath $source)) { $source = $staging }
-    $sourceSoundDirectory = Join-Path $source "_internal\sounds"
-    $soundRelativePath = "_internal\sounds"
-    if (-not (Test-Path -LiteralPath $sourceSoundDirectory -PathType Container)) {
-        $sourceSoundDirectory = Join-Path $source "sounds"
-        $soundRelativePath = "sounds"
+    $sourceInternalDirectory = Join-Path $source "_internal"
+    if (-not (Test-Path -LiteralPath $sourceInternalDirectory -PathType Container)) {
+        throw "The portable package does not contain the _internal directory."
     }
-    if (Test-Path -LiteralPath $sourceSoundDirectory -PathType Container) {
-        $destinationSoundDirectory = Join-Path $AppDirectory $soundRelativePath
-        $soundBackupDirectory = $destinationSoundDirectory + ".update-old"
+    $sourceSoundDirectory = Join-Path $sourceInternalDirectory "sounds"
+    $sourceSoundCredits = Join-Path $sourceSoundDirectory "credits.txt"
+    if (-not (Test-Path -LiteralPath $sourceSoundDirectory -PathType Container)) {
+        throw "The portable package does not contain the sound library."
+    }
+    if (-not (Test-Path -LiteralPath $sourceSoundCredits -PathType Leaf)) {
+        throw "The portable package does not contain sounds\credits.txt."
     }
     $changedFiles = New-Object System.Collections.Generic.List[object]
     $unchanged = 0
-    Get-ChildItem -LiteralPath $source -Recurse -Force -File | ForEach-Object {
-        $relativePath = $_.FullName.Substring($source.Length).TrimStart('\')
+    $sourceFiles = @(Get-ChildItem -LiteralPath $source -Recurse -Force -File)
+    $scanIndex = 0
+    foreach ($sourceFile in $sourceFiles) {
+        $scanIndex++
+        Write-Progress -Activity "Preparing portable update" `
+            -Status ("Checking file {0} of {1}" -f $scanIndex, $sourceFiles.Count) `
+            -PercentComplete ([int](100 * $scanIndex / [Math]::Max(1, $sourceFiles.Count)))
+        $relativePath = $sourceFile.FullName.Substring($source.Length).TrimStart('\')
         $destination = Join-Path $AppDirectory $relativePath
-        $isBundledSound = ($destinationSoundDirectory -ne $null) -and
-            $_.FullName.StartsWith(
-                $sourceSoundDirectory + [System.IO.Path]::DirectorySeparatorChar,
-                [System.StringComparison]::OrdinalIgnoreCase)
-        $different = $isBundledSound -or
-            -not (Test-Path -LiteralPath $destination -PathType Leaf)
+        $isSound = $sourceFile.FullName.StartsWith(
+            $sourceSoundDirectory + [System.IO.Path]::DirectorySeparatorChar,
+            [System.StringComparison]::OrdinalIgnoreCase)
+        $different = -not (Test-Path -LiteralPath $destination -PathType Leaf)
         if (-not $different) {
             $destinationItem = Get-Item -LiteralPath $destination
-            if ($destinationItem.Length -ne $_.Length) {
+            if ($destinationItem.Length -ne $sourceFile.Length) {
                 $different = $true
-            } else {
-                $sourceHash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+            } elseif (-not $isSound) {
+                $sourceHash = (Get-FileHash -LiteralPath $sourceFile.FullName -Algorithm SHA256).Hash
                 $destinationHash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
                 $different = $sourceHash -ne $destinationHash
             }
         }
         if ($different) {
             $changedFiles.Add([pscustomobject]@{
-                Source = $_.FullName
+                Source = $sourceFile.FullName
                 Destination = $destination
+                IsSound = $isSound
             })
+            if ($isSound -and -not (Test-Path -LiteralPath $destination -PathType Leaf)) {
+                $newSoundFiles.Add($destination)
+            }
         } else {
             $unchanged++
         }
     }
+    Write-Progress -Activity "Preparing portable update" -Completed
+    if (Test-Path -LiteralPath $destinationSoundDirectory -PathType Container) {
+        Get-ChildItem -LiteralPath $destinationSoundDirectory -Recurse -Force -File |
+                ForEach-Object {
+            $soundRelativePath = $_.FullName.Substring(
+                $destinationSoundDirectory.Length).TrimStart('\')
+            $newSoundPath = Join-Path $sourceSoundDirectory $soundRelativePath
+            if (-not (Test-Path -LiteralPath $newSoundPath -PathType Leaf)) {
+                $obsoleteSoundFiles.Add($_.FullName)
+            }
+        }
+    }
     Write-UpdateLog ("Preparation complete: " + $changedFiles.Count +
-        " changed; $unchanged unchanged. Waiting for the app to close.")
+        " changed; $unchanged unchanged; " + $obsoleteSoundFiles.Count +
+        " retired sounds. Waiting for the app to close.")
     Set-Content -LiteralPath $ReadyPath -Value "ready" -Encoding ASCII
+    Write-Host "Preparation complete. Closing Map in a Box before installing..."
     Wait-Process -Id $MapInABoxProcessId -ErrorAction SilentlyContinue
     $appWasClosed = $true
-    if ($destinationSoundDirectory) {
-        Remove-Item -LiteralPath $soundBackupDirectory -Recurse -Force -ErrorAction SilentlyContinue
-        if (Test-Path -LiteralPath $destinationSoundDirectory) {
-            Move-Item -LiteralPath $destinationSoundDirectory -Destination $soundBackupDirectory
-        }
-        Write-UpdateLog "Previous bundled sounds moved aside for complete replacement."
-    }
+    Write-Host "Installing the update. Please keep this window open..."
+    New-Item -ItemType Directory -Path $soundBackupDirectory -Force | Out-Null
     foreach ($file in $changedFiles) {
+        if ($file.IsSound -and (Test-Path -LiteralPath $file.Destination -PathType Leaf)) {
+            $backupRelativePath = $file.Destination.Substring(
+                $destinationSoundDirectory.Length).TrimStart('\')
+            $backupPath = Join-Path $soundBackupDirectory $backupRelativePath
+            New-Item -ItemType Directory -Path (Split-Path -Parent $backupPath) -Force | Out-Null
+            Copy-Item -LiteralPath $file.Destination -Destination $backupPath -Force
+        }
+    }
+    foreach ($oldSound in $obsoleteSoundFiles) {
+        $backupRelativePath = $oldSound.Substring(
+            $destinationSoundDirectory.Length).TrimStart('\')
+        $backupPath = Join-Path $soundBackupDirectory $backupRelativePath
+        New-Item -ItemType Directory -Path (Split-Path -Parent $backupPath) -Force | Out-Null
+        Copy-Item -LiteralPath $oldSound -Destination $backupPath -Force
+        Remove-Item -LiteralPath $oldSound -Force
+    }
+    $installIndex = 0
+    foreach ($file in $changedFiles) {
+        $installIndex++
+        Write-Progress -Activity "Installing portable update" `
+            -Status ("Installing file {0} of {1}" -f $installIndex, $changedFiles.Count) `
+            -PercentComplete ([int](100 * $installIndex / [Math]::Max(1, $changedFiles.Count)))
         $destinationDirectory = Split-Path -Parent $file.Destination
         New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
         $temporaryDestination = $file.Destination + ".update-new"
         Copy-Item -LiteralPath $file.Source -Destination $temporaryDestination -Force
         Move-Item -LiteralPath $temporaryDestination -Destination $file.Destination -Force
     }
+    Write-Progress -Activity "Installing portable update" -Completed
     Write-UpdateLog ("Files applied: " + $changedFiles.Count +
-        " changed; $unchanged unchanged.")
+        " changed; $unchanged unchanged; " + $obsoleteSoundFiles.Count +
+        " retired sounds removed. Sound comparisons used file size.")
     $internalMarker = Join-Path $AppDirectory "_internal\_portable"
     $legacyMarker = Join-Path $AppDirectory "portable.flag"
     if ((Test-Path -LiteralPath $internalMarker) -and
             (Test-Path -LiteralPath $legacyMarker)) {
         Remove-Item -LiteralPath $legacyMarker -Force
     }
-    if ($soundBackupDirectory) {
-        Remove-Item -LiteralPath $soundBackupDirectory -Recurse -Force -ErrorAction SilentlyContinue
-    }
     $success = $true
     Write-UpdateLog "Portable update completed successfully."
+    Write-Host "Update complete. Restarting Map in a Box..."
 } catch {
     Write-UpdateLog ("Portable update failed: " + $_.Exception.Message)
-    if ($soundBackupDirectory -and
-            (Test-Path -LiteralPath $soundBackupDirectory -PathType Container)) {
-        Remove-Item -LiteralPath $destinationSoundDirectory -Recurse -Force -ErrorAction SilentlyContinue
-        Move-Item -LiteralPath $soundBackupDirectory -Destination $destinationSoundDirectory -Force
+    Write-Host ("The portable update failed: " + $_.Exception.Message)
+    foreach ($newSound in $newSoundFiles) {
+        Remove-Item -LiteralPath $newSound -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $soundBackupDirectory -PathType Container) {
+        Get-ChildItem -LiteralPath $soundBackupDirectory -Recurse -Force -File |
+                ForEach-Object {
+            $backupRelativePath = $_.FullName.Substring(
+                $soundBackupDirectory.Length).TrimStart('\')
+            $restorePath = Join-Path $destinationSoundDirectory $backupRelativePath
+            New-Item -ItemType Directory -Path (Split-Path -Parent $restorePath) -Force | Out-Null
+            Copy-Item -LiteralPath $_.FullName -Destination $restorePath -Force
+        }
         Write-UpdateLog "Previous bundled sounds restored after update failure."
     }
     $env:MIAB_PORTABLE_UPDATE_FAILED = $updateLog
@@ -342,7 +390,6 @@ try {
         Set-Content -LiteralPath $ReadyPath -Value "error" -Encoding ASCII
     }
 } finally {
-    if ($soundPlayer) { $soundPlayer.Stop() }
     Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
     if ($success) {
         Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
@@ -360,12 +407,12 @@ try {
             script_file.write(script)
 
         executable_path = os.path.join(APP_DIR, "MapInABox.exe")
-        creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        creation_flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
         try:
             helper = subprocess.Popen(
                 [
                     "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                    "-WindowStyle", "Hidden", "-File", script_path,
+                    "-File", script_path,
                     "-MapInABoxProcessId", str(os.getpid()),
                     "-ZipPath", zip_path,
                     "-AppDirectory", APP_DIR,
