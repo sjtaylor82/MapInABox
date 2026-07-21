@@ -58,6 +58,7 @@ from typing import Iterable, Optional
 import wx
 
 from geo import dist_metres, nearest_point_on_segment, bearing_deg, compass_name
+from distance_units import format_distance
 from logging_utils import miab_log
 
 
@@ -446,7 +447,7 @@ class FreeExploreEngine:
         poi_text = self._describe_current_pois(include_seen=False)
         dist_m = int(best_d)
         msg = (f"Now on {self.state.street_name}"
-               + (f", {dist_m}m away" if dist_m > 10 else "")
+               + (f", {format_distance(dist_m)} away" if dist_m > 10 else "")
                + f". Heading {compass_name(self.state.heading_deg)}.")
         return f"{msg} {poi_text}" if poi_text else msg
 

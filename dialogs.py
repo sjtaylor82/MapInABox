@@ -21,6 +21,7 @@ import wx.adv
 from i18n import _
 from wx_utils import _log_key_event, _primary_down
 from logging_utils import miab_log
+from distance_units import format_distance
 
 
 class _ExplicitNameAccessible(getattr(wx, "Accessible", object)):
@@ -250,7 +251,7 @@ class SettingsDialog(wx.Dialog):
         general_vs.Add(wx.StaticText(self.general_page, label=_("Announce POIs within:")), 0, wx.LEFT, 8)
         self.combo_radius = wx.Choice(
             self.general_page,
-            choices=[_("50 metres"), _("80 metres"), _("120 metres")],
+            choices=[format_distance(value) for value in (50, 80, 120)],
         )
         general_vs.Add(self.combo_radius, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
@@ -287,6 +288,13 @@ class SettingsDialog(wx.Dialog):
             choices=[_("Automatic (country-based)"), _("Celsius"), _("Fahrenheit")],
         )
         general_vs.Add(self.combo_weather_units, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+
+        general_vs.Add(wx.StaticText(self.general_page, label=_("Distance units:")), 0, wx.LEFT, 8)
+        self.combo_distance_units = wx.Choice(
+            self.general_page,
+            choices=[_("Metric"), _("Imperial")],
+        )
+        general_vs.Add(self.combo_distance_units, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         general_vs.Add(wx.StaticText(self.general_page, label=_("POI database (for street/free mode):")), 0, wx.LEFT, 8)
@@ -444,6 +452,8 @@ class SettingsDialog(wx.Dialog):
         weather_units = settings.get("weather_temperature_unit", "auto")
         self.combo_weather_units.SetSelection(
             {"auto": 0, "celsius": 1, "fahrenheit": 2}.get(weather_units, 0))
+        self.combo_distance_units.SetSelection(
+            1 if settings.get("distance_unit", "metric") == "imperial" else 0)
         nav_provider = settings.get("nav_provider", "osm")
         nav_idx = {"osm": 0, "google": 1, "here": 2}.get(nav_provider, 0)
         self.combo_nav.SetSelection(nav_idx)
@@ -461,12 +471,20 @@ class SettingsDialog(wx.Dialog):
         self.txt_opensky_secret.SetValue(settings.get("opensky_client_secret", ""))
 
         ok_btn.Bind(wx.EVT_BUTTON, self._on_ok)
-        self.Bind(
-            wx.EVT_CHAR_HOOK,
-            lambda e: (_return_parent_focus(self), self.EndModal(wx.ID_CANCEL))
-                       if e.GetKeyCode() == wx.WXK_ESCAPE else e.Skip()
-        )
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_settings_char_hook)
         self.CentreOnParent()
+
+    def _on_settings_char_hook(self, event) -> None:
+        key = event.GetKeyCode()
+        if key == wx.WXK_ESCAPE:
+            self.EndModal(wx.ID_CANCEL)
+            return
+        if key in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
+            focused = wx.Window.FindFocus()
+            if not isinstance(focused, wx.Button):
+                self._on_ok(event)
+                return
+        event.Skip()
 
     def _on_set_home(self, event):
         self.set_home_requested = True
@@ -504,6 +522,7 @@ class SettingsDialog(wx.Dialog):
             "spatial_tones_mode":     spatial_mode,
             "challenge_direction_mode": challenge_direction,
             "weather_temperature_unit": weather_units,
+            "distance_unit":          "imperial" if self.combo_distance_units.GetSelection() == 1 else "metric",
             "nav_provider":           nav_provider,
             "departure_board_source": departure_board_source,
             "poi_source":             "here" if self.combo_poi_source.GetSelection() == 1 else "osm",
@@ -603,7 +622,7 @@ class POICategoryDialog(wx.Dialog):
         self._radius_values = [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000]
         self.combo_radius = wx.Choice(
             panel,
-            choices=["1 km", "2 km", "3 km", "4 km", "5 km", "6 km", "7 km", "8 km", "9 km", "10 km"],
+            choices=[format_distance(value) for value in self._radius_values],
         )
         try:
             radius_idx = self._radius_values.index(int(initial_radius))
@@ -2310,9 +2329,7 @@ class FindFoodDialog(wx.Dialog):
 
     @staticmethod
     def _fmt_distance(metres: float) -> str:
-        if metres < 950:
-            return f"{int(round(metres / 50) * 50)} m"
-        return f"{metres / 1000:.1f} km"
+        return format_distance(metres, short=True)
 
     @staticmethod
     def _fmt_summary(p: dict) -> str:

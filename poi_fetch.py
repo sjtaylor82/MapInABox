@@ -31,6 +31,7 @@ from geo import (
     dist_metres, bearing_deg, compass_name,
     dist_to_segment_metres, GENERIC_STREET_TYPES, LOW_PRIORITY_HIGHWAY,
 )
+from distance_units import format_distance
 
 # ---------------------------------------------------------------------------
 # Shared constants
@@ -179,7 +180,7 @@ def _inject_manual_shopping_centres(
         bearing = compass_name(bearing_deg(lat, lon, centre_lat, centre_lon))
         kind = centre.get("kind", "mall").lower()
         label = (
-            f"{name}, {kind}, {centre['address']}, {dist_m} metres {bearing}"
+            f"{name}, {kind}, {centre['address']}, {format_distance(dist_m)} {bearing}"
             "  Explorable."
         )
         pois.append({
@@ -832,7 +833,7 @@ def _parse_here_item(
         f"{title}"
         + (f", {kind}" if kind else "")
         + (f", {address}" if address else "")
-        + f", {dist_m} metres {bearing}"
+        + f", {format_distance(dist_m)} {bearing}"
         + ("  Explorable." if explorable else "")
     )
 
@@ -1044,7 +1045,7 @@ def _parse_element(el: dict, lat: float, lon: float,
     label = (
         f"{lead}, {kind}"
         + (f", {address}" if address else "")
-        + f", {dist_m} metres {bearing}"
+        + f", {format_distance(dist_m)} {bearing}"
         + ("  Explorable." if explorable else "")
     )
 
@@ -1138,7 +1139,7 @@ def _parse_background_element(el: dict, lat: float, lon: float,
     label = (
         f"{display_name}, {kind}"
         + (f", {address}" if address else "")
-        + f", {dist_m} metres {bearing}"
+        + f", {format_distance(dist_m)} {bearing}"
         + ("  Explorable." if explorable else "")
     )
 
@@ -1389,7 +1390,7 @@ class PoiFetcher:
                         f"{name}"
                         + (f", {kind}" if kind else "")
                         + (f", {addr}" if addr else "")
-                        + f", {dist_m} metres {bearing}"
+                        + f", {format_distance(dist_m)} {bearing}"
                         + ("  Explorable." if explorable else "")
                     )
                     results.append({
@@ -1982,7 +1983,7 @@ class PoiFetcher:
             dist_m  = int(dist_metres(centre_lat, centre_lon, elat, elon))
             bearing = compass_name(bearing_deg(centre_lat, centre_lon, elat, elon))
 
-            label = f"{name}" + (f", {kind}" if kind else "") + f", {dist_m} metres {bearing}"
+            label = f"{name}" + (f", {kind}" if kind else "") + f", {format_distance(dist_m)} {bearing}"
             dedup = f"{name.lower()}|{kind.lower()}"
             if dedup in seen:
                 continue

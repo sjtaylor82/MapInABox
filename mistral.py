@@ -540,7 +540,7 @@ class MistralClient:
             "{drives_on}\" (e.g. \"traffic drives on the left\").  This gives the "
             "walker essential context even when the exact road side is unknown.\n"
             "- Do not describe traffic flow when `country.drives_on` is null.\n"
-            "- Use the distances (in metres) from the digest verbatim.  Never convert them to a compass direction.\n"
+            "- Use each `distance_display` value from the digest verbatim.  Never convert a distance to a compass direction.\n"
             "- A leg's `cross_streets_passed` lists side streets meeting the road as the walker continues along it, in order, each with a `side` and a `crossed` flag. "
             "Mention them passively, as features of the road, never as turns the walker makes, and only call something a crossing when the walker truly crosses it:\n"
             "  * `crossed` true  → the side street opens onto the walker's own footpath; say e.g. \"the mouth of {Name} opens on your {side}\" or \"you cross {Name} on your {side}\".\n"

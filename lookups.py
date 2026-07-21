@@ -22,6 +22,7 @@ import wx
 
 from logging_utils import miab_log
 from wx_utils import IS_MAC
+from distance_units import format_distance, format_height
 
 try:
     import certifi
@@ -186,9 +187,9 @@ class LookupsMixin:
                         dist_text = ""
                         if isinstance(dist, (int, float)):
                             if dist < 1000:
-                                dist_text = f" {round(dist)} metres away."
+                                dist_text = f" {format_distance(dist)} away."
                             else:
-                                dist_text = f" {dist / 1000:.1f} km away."
+                                dist_text = f" {format_distance(dist)} away."
                         wx.CallAfter(
                             self._on_wiki_result,
                             cache_key,
@@ -570,7 +571,7 @@ class LookupsMixin:
                 if imperial:
                     sst = (float(sst) * 9 / 5) + 32
                 parts = [f"Sea surface temperature: {round(sst, 1)}{'°F' if imperial else '°C'}."]
-                if wh   is not None: parts.append(f"Wave height: {round(wh, 1)} metres.")
+                if wh   is not None: parts.append(f"Wave height: {format_height(wh)}.")
                 if wdir is not None: parts.append(f"Waves from the {compass_name(wdir)}.")
                 wx.CallAfter(self._announce_transient, "  ".join(parts))
             except Exception as exc:
@@ -704,9 +705,9 @@ class LookupsMixin:
                 direction = compass_name(bearing)
                 dist_km   = round(best_dist)
                 iata_str  = f"  IATA code {iata}." if iata else ""
-                elev_str  = f"  Elevation {round(float(elev) * 0.3048)} metres." if elev else ""
+                elev_str  = f"  Elevation {format_height(float(elev) * 0.3048)}." if elev else ""
                 wx.CallAfter(self._status_update,
-                             f"Nearest airport: {name}, {dist_km} kilometres {direction}."
+                             f"Nearest airport: {name}, {format_distance(dist_km * 1000)} {direction}."
                              f"{iata_str}{elev_str}",
                              True)
             except Exception as exc:
@@ -760,8 +761,8 @@ class LookupsMixin:
                 flights = flights[:5]
                 parts = []
                 for d, callsign, alt_m, velocity, heading, brg in flights:
-                    alt_str = f"{round(alt_m):,} metres" if alt_m else "unknown altitude"
-                    detail  = (f"{callsign}, {round(d)} km {compass_name(brg)}, "
+                    alt_str = format_height(alt_m) if alt_m else "unknown altitude"
+                    detail  = (f"{callsign}, {format_distance(d * 1000)} {compass_name(brg)}, "
                                f"altitude {alt_str}")
                     if heading is not None:
                         detail += f", heading {compass_name(heading)}"
@@ -827,7 +828,7 @@ class LookupsMixin:
                         continue
                     dist_km = round(i * step_km)
                     msg = (f"Next country to the {direction}: "
-                           f"{found_country}, {dist_km} kilometres.")
+                           f"{found_country}, {format_distance(dist_km * 1000)}.")
                     miab_log("navigation",
                              f"Next country {direction}: {found_country} "
                              f"at ({clat:.2f},{clon:.2f}) {dist_km}km",
@@ -835,7 +836,7 @@ class LookupsMixin:
                     wx.CallAfter(self._do_nearest_land_jump, clat, clon, msg, found_country)
                     return
                 wx.CallAfter(self._status_update,
-                             f"No other country found to the {direction} within {round(max_km)} kilometres.",
+                             f"No other country found to the {direction} within {format_distance(max_km * 1000)}.",
                              True)
             except Exception as exc:
                 wx.CallAfter(self._status_update, f"Search failed: {exc}", True)
@@ -1068,7 +1069,7 @@ class LookupsMixin:
                 if not city or city.lower() == "nan":
                     city = "City unknown"
                 km = dist * 111.0
-                dist_text = f"{round(km * 1000)} metres" if km < 1 else f"{round(km)} km"
+                dist_text = format_distance(km * 1000)
                 self._status_update(f"{city} {dist_text}", force=True)
             except Exception:
                 self._status_update("Nearest city unknown.", force=True)
@@ -1086,7 +1087,7 @@ class LookupsMixin:
                 if not city or city.lower() == "nan":
                     city = "City unknown"
                 km = dist * 111.0
-                dist_text = f"{round(km * 1000)} metres" if km < 1 else f"{round(km)} km"
+                dist_text = format_distance(km * 1000)
                 self._status_update(f"{city} {dist_text}", force=True)
             except Exception:
                 self._status_update("No named geographic features found nearby.", force=True)
@@ -1113,10 +1114,7 @@ class LookupsMixin:
         lines = ["GeoFeatures nearby:", ""]
         for name, code, dist_km, compass in features:
             label = labels.get(code, code)
-            if dist_km < 1.0:
-                dist_str = f"{round(dist_km * 1000)} m"
-            else:
-                dist_str = f"{round(dist_km)} km"
+            dist_str = format_distance(dist_km * 1000)
             lines.append(f"{label}: {name} — {dist_str} {compass}")
 
         text = "\n".join(lines).strip()

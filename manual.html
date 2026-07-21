@@ -24,7 +24,7 @@
 <body>
 
 <h1>Map in a Box — User Manual</h1>
-<p><strong>Version 1.0.0.32</strong> &nbsp;|&nbsp; Windows &amp; macOS</p>
+<p><strong>Version 1.0.0.33</strong> &nbsp;|&nbsp; Windows &amp; macOS</p>
 
 
 <nav aria-label="Table of contents">
@@ -310,12 +310,12 @@
 
 <h3 id="tool-find-food">14.9 Find Food</h3>
 
-<p>Find Food searches for food and drink venues within 300 metres of a route, in the order you'd pass them. Open the Tools menu with <code>F12</code> and pick <strong>Find Food</strong> — it's one of the most practical examples of how the app turns a route into something you can actually act upon.</p>
+<p>Find Food searches for food and drink venues within 300 metres (about 980 feet) of a route, in the order you'd pass them. Open the Tools menu with <code>F12</code> and pick <strong>Find Food</strong> — it's one of the most practical examples of how the app turns a route into something you can actually act upon.</p>
 
 <ol>
   <li>Choose a starting point — type an address, pick a saved mark, choose a favourite, or use your current position.</li>
   <li>Choose a destination the same way.</li>
-  <li>Map in a Box fetches the route and lists food and drink venues within 300 metres of it. Select one to hear its address; with a HERE API key you also get hours, phone number, and a website link.</li>
+  <li>Map in a Box fetches the route and lists food and drink venues within 300 metres (about 980 feet) of it. Select one to hear its address; with a HERE API key you also get hours, phone number, and a website link.</li>
 </ol>
 
 <p>Please note: If a GTFS transit route is already active you can press control+alt+f. This keystroke invokes a search which runs along that transit line instead of a road route, returning food places across the transit journey.</p>
@@ -351,13 +351,14 @@
   <tr><th>Setting</th><th>Description</th></tr>
   <tr><td>Announce nearby POIs while walking</td><td>Turn automatic POI announcements on or off in walking mode.</td></tr>
   <tr><td>POIs to announce while walking</td><td>Choose which category of POIs to announce (all, food, transport, etc.).</td></tr>
-  <tr><td>Announce POIs within</td><td>Detection radius for walking mode POI announcements: 50, 80, or 120 metres.</td></tr>
+  <tr><td>Announce POIs within</td><td>Detection radius for walking mode POI announcements, displayed in the selected distance units.</td></tr>
   <tr><td>Include category label</td><td>Whether the POI category is spoken as part of each announcement.</td></tr>
   <tr><td>Announce climate zones</td><td>Announce climate zone changes as you navigate.</td></tr>
   <tr><td>Announce suburb size</td><td>Announce the suburb's size category when street data loads.</td></tr>
   <tr><td>Spatial tones</td><td>World, Country, or Region — controls the scale of audio position feedback.</td></tr>
   <tr><td>Challenge direction</td><td>Map learning or Shortest globe — controls how the challenge game points you toward the target.</td></tr>
   <tr><td>Weather temperature units</td><td>Automatic (country-based), Celsius, or Fahrenheit.</td></tr>
+  <tr><td>Distance units</td><td>Metric (metres and kilometres) or Imperial (feet and miles) for displayed and spoken distances.</td></tr>
   <tr><td>POI database</td><td>OpenStreetMap or HERE for street and free mode POI data.</td></tr>
   <tr><td>Navigation provider</td><td>OpenStreetMap, Google Maps, or HERE for walking route calculation.</td></tr>
   <tr><td>Departure board source</td><td>GTFS data (default, no key required) or Google Places.</td></tr>
@@ -586,7 +587,7 @@
   <tr><td><code>Ctrl+F10</code></td><td>Scored, multi-player challenge session — same exit-street-mode prompt as <code>F10</code></td></tr>
   <tr><td><code>Shift+F10</code></td><td>Repeat challenge target (only does anything once a challenge is already running, so there's nothing to gate)</td></tr>
   <tr><td><code>Shift+F11</code></td><td>Pre-download streets for the current spot — restricted to map mode; if you try it in street mode, the app tells you to back out first</td></tr>
-  <tr><td><code>Ctrl+Arrows</code></td><td>Move in large steps (~333 km) for fast long-distance navigation</td></tr>
+  <tr><td><code>Ctrl+Arrows</code></td><td>Move in large steps (about 333 km or 207 miles) for fast long-distance navigation</td></tr>
   <tr><td><code>Ctrl+Alt+Arrows</code></td><td>Jump to the nearest foreign country in that direction</td></tr>
   <tr><td><code>R</code></td><td>Current region</td></tr>
   <tr><td><code>C</code></td><td>Current country</td></tr>

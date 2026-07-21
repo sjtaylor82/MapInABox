@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import math
+from distance_units import format_distance
 import os
 import time
 import uuid
@@ -87,9 +88,7 @@ def _distance_label(from_lat: float, from_lon: float, to_lat: float, to_lon: flo
     dlon = (to_lon - from_lon) * 111000 * math.cos(math.radians(from_lat))
     metres = math.sqrt(dlat * dlat + dlon * dlon)
     direction = compass_name(bearing_deg(from_lat, from_lon, to_lat, to_lon))
-    if metres < 1000:
-        return f"{int(round(metres))} metres {direction}"
-    return f"{metres / 1000:.1f} kilometres {direction}"
+    return f"{format_distance(metres)} {direction}"
 
 
 def favourite_label(entry: dict, current_lat: float, current_lon: float) -> str:

@@ -18,6 +18,7 @@ from logging_utils import miab_log
 from geo import (
     GENERIC_STREET_TYPES, bearing_deg, dist_metres, nearest_point_on_segment,
 )
+from distance_units import format_distance
 
 try:
     from route_tools import RouteTools
@@ -489,7 +490,10 @@ class ToolsMixin:
             from favourites import load_favourites, favourite_label
             entries = load_favourites()
             if not entries:
-                self._status_update("No favourites saved.", force=True)
+                tool_name = getattr(self, "_active_tool_display_name", "Tool")
+                self._tool_cancel_already_announced = True
+                self._announce_transient_then_return(
+                    f"No favourites saved. {tool_name} cancelled.")
                 return None
             entries = sorted(entries, key=lambda e: str(e.get("name", "")).lower())
             labels = [favourite_label(entry, self.lat, self.lon) for entry in entries]
@@ -610,7 +614,7 @@ class ToolsMixin:
         self._tools_sound_was_on = bool(getattr(self.sound, "_current", None))
         self.sound.stop()
         if self._dlgs is None:
-            self._end_tools_workflow()
+            self._restore_tools_sound()
             return
         selected_tool = ""
         try:
@@ -618,6 +622,11 @@ class ToolsMixin:
             dlg = ToolsMenuDialog(self)
             if dlg.ShowModal() == wx.ID_OK:
                 selected_tool = dlg.selected_tool
+                self._active_tool_display_name = next(
+                    (label for label, key in ToolsMenuDialog.TOOLS
+                     if key == selected_tool),
+                    "Tool",
+                )
                 dlg.Destroy()
                 if selected_tool == "detour_calculator":
                     self._tool_detour_calculator()
@@ -653,7 +662,13 @@ class ToolsMixin:
         finally:
             if not (getattr(self, "_thinking_active", False)
                     or getattr(self, "_find_food_populating", False)):
-                self._end_tools_workflow()
+                # Individual tools historically had to restore the ambient
+                # sound on every cancel/error/early-return branch.  Keep their
+                # cleanup, but provide one reliable dispatcher-level fallback.
+                if getattr(self, "_tools_sound_was_on", False):
+                    self._restore_tools_sound()
+                else:
+                    self._end_tools_workflow()
                 if not selected_tool:
                     # Cancelled with no tool chosen: re-announce the current
                     # location like F2. Clear the quiet-window _end_tools_workflow
@@ -666,6 +681,7 @@ class ToolsMixin:
                         wx.CallAfter(focus_map)
                     else:
                         wx.CallAfter(self.listbox.SetFocus)
+            self._active_tool_display_name = ""
 
     def _restore_tools_sound(self):
         """Restore the pre-F12 sound state after leaving the tools menu."""
@@ -1373,49 +1389,21 @@ class ToolsMixin:
             self._status_update("Toll compare cancelled.", force=True)
             return
 
-        # Get origin
-        dlg = self._dlgs[1](
-            self, "Starting point (address, suburb or city):")
-        if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
-            dlg.Destroy()
+        origin = self._pick_location(
+            "Starting point (address, suburb or city):",
+            "starting point", rt, country_code)
+        if origin is None:
             self._status_update("Toll compare cancelled.", force=True)
             return
-        origin_text = dlg.GetValue()
-        dlg.Destroy()
+        o_lat, o_lon, o_name = origin
 
-        self._status_update(f"Looking up {origin_text}...")
-        try:
-            resolved = self._resolve_geocode(rt, origin_text, country_code, "starting point")
-            if resolved is None:
-                self._status_update("Toll compare cancelled.", force=True)
-                return
-            o_lat, o_lon, o_name = resolved
-            self._status_update(f"Origin: {o_name}", force=True)
-        except Exception as e:
-            self._status_update(f"Could not find '{origin_text}': {e}", force=True)
-            return
-
-        # Get destination
-        dlg = self._dlgs[1](
-            self, "Destination (address, suburb or city):")
-        if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
-            dlg.Destroy()
+        destination = self._pick_location(
+            "Destination (address, suburb or city):",
+            "destination", rt, country_code)
+        if destination is None:
             self._status_update("Toll compare cancelled.", force=True)
             return
-        dest_text = dlg.GetValue()
-        dlg.Destroy()
-
-        self._status_update(f"Looking up {dest_text}...")
-        try:
-            resolved = self._resolve_geocode(rt, dest_text, country_code, "destination")
-            if resolved is None:
-                self._status_update("Toll compare cancelled.", force=True)
-                return
-            d_lat, d_lon, d_name = resolved
-            self._status_update("Destination found.", force=True)
-        except Exception as e:
-            self._status_update(f"Could not find '{dest_text}': {e}", force=True)
-            return
+        d_lat, d_lon, d_name = destination
 
         self._thinking()
         def _calc():
@@ -2303,7 +2291,7 @@ class ToolsMixin:
                 dist = None
                 if cum and a < len(cum) and b < len(cum):
                     dist = int(round(cum[b] - cum[a]))
-                dist_phrase = f" for about {dist} metres" if dist else ""
+                dist_phrase = f" for about {format_distance(dist)}" if dist else ""
 
                 # Name each block only by where it leads — the previous block
                 # already named the intersection it started from.
@@ -2319,7 +2307,7 @@ class ToolsMixin:
                     to = (to_entry[0] + _side_phrase(to_entry[1])
                           if to_entry else "the next intersection")
                     label = f"Along {street} to {to}"
-                    label += f", about {dist} metres." if dist else "."
+                    label += f", about {format_distance(dist)}." if dist else "."
 
                 blk = [p for p in pois if lo < p["node_index"] <= b]
 
@@ -2365,7 +2353,7 @@ class ToolsMixin:
                 streets.append(s["street"])
         overview = f"Route from {origin} to {dname}"
         if total:
-            overview += f", about {total} metres"
+            overview += f", about {format_distance(total)}"
         overview += "."
         if drives:
             overview += f" Traffic drives on the {drives}."
@@ -2888,7 +2876,7 @@ class ToolsMixin:
             stop_departures = feed_data.get("stop_departures", {})
             departures = len(stop_departures.get(stop_id, []))
             stations.append({
-                "label": f"{s['name']} — {s['distance']}m",
+                "label": f"{s['name']} — {format_distance(s['distance'])}",
                 "name": s["name"],
                 "lat": s["lat"],
                 "lon": s["lon"],
@@ -4056,7 +4044,7 @@ class ToolsMixin:
 
                 dist_km = parsed.get("distance_m", 0) / 1000.0
                 wx.CallAfter(self._status_update,
-                    f"Route is {dist_km:.1f} km — searching for food…",
+                    f"Route is {format_distance(dist_km * 1000)} — searching for food…",
                     True)
 
                 # -- bounding box ------------------------------------------

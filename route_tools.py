@@ -24,6 +24,7 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
+from distance_units import format_distance
 from typing import Callable, Optional
 from logging_utils import miab_log
 
@@ -48,12 +49,7 @@ def _fmt_duration(seconds: int) -> str:
 
 
 def _fmt_distance(metres: int) -> str:
-    km = metres / 1000.0
-    if km < 1.0:
-        return f"{metres} metres"
-    if km < 10.0:
-        return f"{km:.1f} km"
-    return f"{int(round(km))} km"
+    return format_distance(metres)
 
 
 def _gd(value) -> dict:
@@ -799,10 +795,7 @@ class RouteTools:
             if not text:
                 continue
 
-            if dist_m >= 1000:
-                dist_text = f"{dist_m / 1000:.1f} km"
-            else:
-                dist_text = f"{dist_m} m"
+            dist_text = format_distance(dist_m)
 
             leg_steps.append({
                 "lat": start_lat,
@@ -1466,14 +1459,20 @@ class RouteTools:
                 last_path_coord = None
                 for i, sub in enumerate(step.get("steps", [])):
                     instruction = _strip_html(sub.get("html_instructions", ""))
-                    dist = _gd(sub.get("distance")).get("text", "")
+                    dist_data = _gd(sub.get("distance"))
+                    dist_value = dist_data.get("value")
+                    try:
+                        dist = format_distance(float(dist_value))
+                    except (TypeError, ValueError):
+                        dist = dist_data.get("text", "")
                     if not instruction:
                         continue
-                    _wm = re.match(r'^walk for (\d+(?:\.\d+)?)\s*(km?)\b',
+                    _wm = re.match(r'^walk for (\d+(?:\.\d+)?)\s*(km?|metres?|meters?)\b',
                                    instruction, re.IGNORECASE)
                     if _wm:
-                        unit = "kilometres" if _wm.group(2).lower() == "km" else "metres"
-                        walk_steps.append(f"Walk for {_wm.group(1)} {unit}")
+                        value = float(_wm.group(1))
+                        metres = value * 1000 if _wm.group(2).lower() == "km" else value
+                        walk_steps.append(f"Walk for {format_distance(metres)}")
                     else:
                         walk_steps.append(f"{instruction} ({dist})" if dist else instruction)
                     loc = _gd(sub.get("start_location"))

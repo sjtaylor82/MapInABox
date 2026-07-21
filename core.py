@@ -68,10 +68,13 @@ from nav import NavigationEngine
 from here_poi import HereClient as HerePoi
 import mall_directory
 from app_paths import APP_DIR, CACHE_DIR, PORTABLE_MODE, RESOURCE_DIR, USER_DIR
+from distance_units import (
+    format_distance, format_distance_label, format_height, set_unit_system,
+)
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0.0.32'
+APP_VERSION   = '1.0.0.33'
 
 POI_LIVE_COOLDOWN_SECS = 3.0
 POI_BACKGROUND_WAIT_SECS = 2.0
@@ -479,10 +482,7 @@ class GeoFeatures:
         from geo import bearing_deg, compass_name
         dist_km = haversine_m(lat, lon, best_feat["lat"], best_feat["lon"]) / 1000.0
         compass = compass_name(bearing_deg(lat, lon, best_feat["lat"], best_feat["lon"]))
-        if dist_km < 1.0:
-            dist_str = f"{round(dist_km * 1000)} m"
-        else:
-            dist_str = f"{round(dist_km)} km"
+        dist_str = format_distance(dist_km * 1000)
         return f"{best} {dist_str} {compass}"
 
     def lookup_precise_label(self, lat: float, lon: float, country_code: str = None) -> str:
@@ -566,10 +566,7 @@ class GeoFeatures:
         from geo import bearing_deg, compass_name
         result = []
         for km, _code, name, flat, flon in candidates[:limit]:
-            if km < 1:
-                dist_text = f"{round(km * 1000)} metres"
-            else:
-                dist_text = f"{round(km)} km"
+            dist_text = format_distance(km * 1000)
             compass = compass_name(bearing_deg(lat, lon, flat, flon))
             result.append(f"{name} {dist_text} {compass}")
         return result
@@ -870,6 +867,7 @@ DEFAULT_SETTINGS = {
     "here_api_key":           "",
     "ors_api_key":            "",
     "weather_temperature_unit": "auto",  # "auto", "celsius", or "fahrenheit"
+    "distance_unit":          "metric",  # "metric" or "imperial"
     "poi_source":             "osm",   # "osm" or "here"
     "language":               "",      # empty means system/default language
     "gnaf_enabled":           True,    # Australian address point overlay
@@ -1484,8 +1482,53 @@ def _build_land_checker(polygons=None):
 _IS_LAND   = _build_land_checker(_GEO_LAND_POLYGONS)
 
 
+class _ModeStaticAccessible(wx.Accessible):
+    """Expose the focused mode through one lightweight MSAA object."""
+
+    def __init__(self, window):
+        super().__init__()
+        self._window = window
+
+    def GetChildCount(self):
+        return wx.ACC_OK, 0
+
+    def GetName(self, child_id):
+        if child_id == wx.ACC_SELF:
+            return wx.ACC_OK, self._window.GetLabel()
+        return wx.ACC_NOT_IMPLEMENTED, None
+
+    def GetValue(self, child_id):
+        if child_id == wx.ACC_SELF:
+            return wx.ACC_OK, ""
+        return wx.ACC_NOT_IMPLEMENTED, None
+
+    def GetRole(self, child_id):
+        if child_id == wx.ACC_SELF:
+            return wx.ACC_OK, wx.ROLE_SYSTEM_PANE
+        return wx.ACC_NOT_IMPLEMENTED, None
+
+    def GetState(self, child_id):
+        if child_id != wx.ACC_SELF:
+            return wx.ACC_NOT_IMPLEMENTED, 0
+        state = wx.ACC_STATE_SYSTEM_FOCUSABLE
+        if self._window.HasFocus():
+            state |= wx.ACC_STATE_SYSTEM_FOCUSED
+        return wx.ACC_OK, state
 
 
+class _ModeStaticText(wx.StaticText):
+    """Native static text used as the idle keyboard target."""
+
+    def AcceptsFocus(self):
+        return True
+
+    def AcceptsFocusFromKeyboard(self):
+        return True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._mode_accessible = _ModeStaticAccessible(self)
+        self.SetAccessible(self._mode_accessible)
 
 
 class WorldMapPanel(wx.Panel):
@@ -2264,7 +2307,7 @@ class _StreetSearchFrame(wx.Frame):
         self._nav._street_search_dlg = None
         self.Hide()
         self.Destroy()
-        wx.CallAfter(self._nav.listbox.SetFocus)
+        self._nav._focus_map_window_silently()
 
     def _on_char_hook(self, event) -> None:
         code    = event.GetKeyCode()
@@ -2398,6 +2441,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._geo_features_prefetched = set()
         self._geo_features_prefetching = set()
         self.settings = load_settings()
+        set_unit_system(self.settings.get("distance_unit", "metric"))
         # Source-test launcher support: allow diagnostics to be enabled before
         # Settings is usable.  This is intentionally opt-in and does not alter
         # the saved settings file.
@@ -2427,10 +2471,14 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self.map_panel.Bind(wx.EVT_LEFT_DCLICK, self._on_map_mouse_click)
 
         self.listbox = MSAAListBox(root, style=wx.LB_SINGLE)
-        self.listbox.Set(["Map mode"])
-        self.listbox.SetSelection(0)
         self.listbox.SetBackgroundColour(wx.Colour(10, 20, 40))
         self.listbox.SetForegroundColour(wx.Colour(220, 220, 220))
+
+        self._mode_label = _ModeStaticText(
+            root, label="Map mode",
+            style=wx.ALIGN_CENTER_HORIZONTAL | wx.WANTS_CHARS)
+        self._mode_label.SetBackgroundColour(wx.Colour(10, 20, 40))
+        self._mode_label.SetForegroundColour(wx.Colour(220, 220, 220))
 
         self._btn_ai_summary = wx.Button(root, label="AI Summary (Shift+I)")
         self._btn_ai_summary.SetToolTip("Generate a spoken narrative briefing of the current GPS route")
@@ -2438,9 +2486,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._btn_ai_summary.Hide()
 
         self._list_vsizer = wx.BoxSizer(wx.VERTICAL)
+        self._list_vsizer.Add(self._mode_label, 1, wx.EXPAND | wx.ALL, 4)
         self._list_vsizer.Add(self.listbox, 1, wx.EXPAND | wx.ALL, 4)
         self._list_vsizer.Add(self._btn_ai_summary, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
         self._list_sizer_item = self._h_sizer.Add(self._list_vsizer, 1, wx.EXPAND)
+        self.listbox.Hide()
 
         self.info_panel = self._build_info_panel(root)
         self._info_sizer_item = self._h_sizer.Add(self.info_panel, 1, wx.EXPAND | wx.ALL, 4)
@@ -2557,6 +2607,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self.listbox.Bind(wx.EVT_SET_FOCUS, self._on_listbox_focus)
         self.listbox.Bind(wx.EVT_CHAR_HOOK, self._on_keyboard)
         self.listbox.Bind(wx.EVT_CHAR, self._on_listbox_char)
+        self._mode_label.Bind(wx.EVT_CHAR_HOOK, self._on_keyboard)
         self.Bind(wx.EVT_CHAR_HOOK, self._on_keyboard)
         self.Bind(wx.EVT_ACTIVATE, self._on_activate)
         self.Bind(wx.EVT_CLOSE, self.on_close)
@@ -3162,6 +3213,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         event.Skip()
 
     def _quiet_focus_after_menu_close(self):
+        if time.time() < getattr(self, "_transient_message_active_until", 0.0):
+            return
         if getattr(self, "_poi_list", None):
             return
         self._focus_map_window_silently()
@@ -3829,7 +3882,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         # means the focus event picks up "Street mode" immediately, instead
         # of whatever was left over from before (which can read as blank
         # or "unknown").
-        self._listbox_set_single("Street mode")
+        self._show_mode_surface("Street mode", focus=True)
         self._road_segments  = []
         self._natural_features = []
         self._address_points = []
@@ -3912,7 +3965,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._last_focus_return_repeat_label = "Map mode"
         self._last_focus_return_repeat_at = time.time()
         # Content before focus — see matching comment in _enter_street_mode.
-        self._listbox_set_single("Map mode")
+        self._show_mode_surface("Map mode", focus=True)
         self.street_label = ""
         self._street_auto_land_done = False
         self._jump_street_label = None
@@ -3947,7 +4000,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         wx.CallAfter(self.map_panel.set_position, self.lat, self.lon, False, "")
         if prev_country and prev_country != "Open Water":
             self._play_location_sound_if_allowed(prev_country, prev_continent)
-        self._return_focus_to_map(repeat=repeat_location, delay_ms=0)
+        if repeat_location:
+            # Follow the mode announcement with the same current-location
+            # information spoken by a single F2 press.  Keep it within the
+            # requested half-second window without altering F2's tap count.
+            wx.CallLater(350, self._repeat_current_location, True)
 
     def _confirm_fetch_streets(self, suburb_name) -> bool:
         """Show the shared "Fetch <suburb>? / Download Streets" Yes/No dialog."""
@@ -4028,7 +4085,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
     def _try_download_new_area(self):
         """Background geocoding and fetch for new area download."""
         if not self._check_internet():
-            wx.CallAfter(self._status_update, "No internet connection.", True)
+            wx.CallAfter(self._announce_transient_then_return, "No internet connection.")
             return
         import math
         from street_data import geocode_location
@@ -4421,7 +4478,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                                 _wkm = (_smaxlon - _sminlon) * 111.0 * _m.cos(_m.radians(_clat))
                                 _hkm = (_smaxlat - _sminlat) * 111.0
                                 size_msg = (f"  {self._current_suburb or 'Suburb'} "
-                                            f"is {_wkm:.1f} km wide by {_hkm:.1f} km tall.")
+                                            f"is {format_distance(_wkm * 1000)} wide by {format_distance(_hkm * 1000)} tall.")
                             wx.CallAfter(self._status_update,
                                          f"Streets fully loaded.  "
                                          f"{len(merged)} streets in area.{size_msg}")
@@ -4447,7 +4504,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     _hkm = (_smaxlat - _sminlat) * 111.0
                     wx.CallAfter(self._status_update,
                                  f"{self._current_suburb or 'Suburb'} "
-                                 f"is {_wkm:.1f} km wide by {_hkm:.1f} km tall.")
+                                 f"is {format_distance(_wkm * 1000)} wide by {format_distance(_hkm * 1000)} tall.")
 
         except Exception as e:
             if _street_fetch_cancelled():
@@ -5377,6 +5434,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 prepared = _apply_renames(
                     [p for p in raw_pois if not _is_suppressed(p, _suppressed)],
                     _renamed)
+                for poi in prepared:
+                    if "distance_m" not in poi and poi.get("dist") is not None:
+                        poi["distance_m"] = poi["dist"]
                 if radius_m is not None:
                     current = []
                     for poi in prepared:
@@ -5389,6 +5449,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                             continue
                         item = dict(poi)
                         item["dist"] = d
+                        item["distance_m"] = d
                         current.append(item)
                     prepared = current
                 prepared.sort(key=lambda x: x.get("dist", float("inf")))
@@ -5896,8 +5957,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         attempted_radius,
                     )
                 else:
-                    wx.CallAfter(self.update_ui,
-                                 f"No {what} found within {attempted_radius} metres.", True)
+                    wx.CallAfter(
+                        self._announce_transient_then_return,
+                        f"No {what} found within {format_distance(attempted_radius)}.")
 
         except Exception as e:
             miab_log("errors", f"POI fetch error: {e}", self.settings)
@@ -5958,7 +6020,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 if postcode:
                     wx.CallAfter(self._status_update, f"Postcode: {postcode}.", True)
                 else:
-                    wx.CallAfter(self._status_update, "No postcode found for this location.", True)
+                    wx.CallAfter(
+                        self._announce_transient_then_return,
+                        "No postcode found for this location.")
             except Exception:
                 wx.CallAfter(self._status_update,
                              "Could not fetch postcode. Check internet connection.",
@@ -6858,7 +6922,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         if street_filter:
             parts.append(f"on {street_filter}")
         what = " ".join(parts) if parts else "that search"
-        self._announce_transient_then_return(f"No {what} found within {radius} metres.")
+        self._announce_transient_then_return(f"No {what} found within {format_distance(radius)}.")
         wx.CallLater(
             2000,
             lambda: self._show_poi_category_dialog(
@@ -6866,7 +6930,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 initial_name=name_filter,
                 initial_street=street_filter,
                 initial_source=source,
-                notice=f"No {what} found within {radius} metres. Edit the search and try again.",
+                notice=f"No {what} found within {format_distance(radius)}. Edit the search and try again.",
             ),
         )
 
@@ -6881,6 +6945,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
     def _show_poi_in_listbox(self, force_top: bool = False):
         """Populate listbox with all POIs and select the current one.
         Uses _poi_populating flag to suppress EVT_LISTBOX during fill."""
+        self._show_list_surface()
         self._poi_populating = True
         labels = []
         for poi in self._poi_list:
@@ -6900,12 +6965,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     ((self.lon - plon) * 111000 * math.cos(math.radians(self.lat))) ** 2
                 ))
                 live_bearing = compass_name(bearing_deg(self.lat, self.lon, plat, plon))
-                label = re.sub(
-                    r'\d+ metres [\w-]+',
-                    f"{live_m} metres {live_bearing}",
-                    label,
-                    count=1,
-                )
+                label = format_distance_label(label, live_m, live_bearing)
                 travel = self._poi_travel_time_label(live_m)
                 if not re.search(r'\bmin (?:walk|drive)\b', label):
                     label = f"{label}, {travel}"
@@ -7029,19 +7089,39 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _close_poi_list(self, repeat_after_return: bool = True):
         self._clear_poi_state()
-        # Always the static mode label here, never the real location — the
-        # MSAA object must read "Street mode"/"Map mode" at idle, with AO2
-        # (not the listbox) owning the spoken real-content announcement.
-        self._listbox_set_single(self._map_focus_fallback_label())
-        wx.CallAfter(self.listbox.SetFocus)
+        self._show_mode_surface(focus=True)
         if repeat_after_return:
             self._repeat_current_location_after_return(250)
+
+    def _show_mode_surface(self, label: str | None = None,
+                           focus: bool = False) -> None:
+        """Show the non-list map/street command surface."""
+        label = str(label or self._map_focus_fallback_label())
+        changed = self._mode_label.GetLabel() != label
+        self.listbox.Hide()
+        self._set_nav_button_visible(False)
+        if changed:
+            self._mode_label.SetLabel(label)
+        self._mode_label.Show()
+        self._mode_label.Refresh()
+        self._list_vsizer.Layout()
+        self._mode_label.GetParent().Layout()
+        self._mode_label.Update()
+        if focus and not self._mode_label.HasFocus():
+            self._mode_label.SetFocus()
+
+    def _show_list_surface(self) -> None:
+        """Show the native list when there are browsable rows."""
+        self._mode_label.Hide()
+        self.listbox.Show()
+        self._list_vsizer.Layout()
 
     def _listbox_set_single(self, text: str) -> None:
         """Replace the listbox with a single item using the
         Append+Select+Delete cycle so screen readers announce it once."""
         self._poi_populating = True
         try:
+            self._show_list_surface()
             text = str(text)
             if (self.listbox.GetCount() == 1
                     and self.listbox.GetSelection() == 0
@@ -7067,19 +7147,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             if self._poi_list:
                 self._show_poi_in_listbox()
             else:
-                fallback = self._map_focus_fallback_label()
-                already_showing = False
-                try:
-                    already_showing = (
-                        self.listbox.GetCount() == 1
-                        and self.listbox.GetSelection() == 0
-                        and self.listbox.GetString(0) == fallback
-                    )
-                except Exception:
-                    already_showing = False
-                if not already_showing:
-                    self._listbox_set_single(fallback)
-                    self._force_listbox_refocus()
+                self._show_mode_surface(focus=True)
         wx.CallLater(delay_ms, restore)
 
     def _selected_poi_for_favourite(self):
@@ -7321,9 +7389,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         entries = load_favourites()
         self._personal_pois = _load_personal_pois()
         if not entries and not self._personal_pois:
-            self._announce_transient_then_return(
-                "No favourites or personal POIs saved. Press Ctrl+Shift+F on Windows/Linux or Command+Shift+F on Mac to add a favourite, or Ctrl+Shift+P to add a personal POI.",
-            )
+            self._announce_transient_then_return("No favourites saved.")
             return
         dlg = FavouritesDialog(self, entries, personal_pois=self._personal_pois)
         self._favourites_dlg = dlg
@@ -7561,7 +7627,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 except Exception:
                     pass
                 if not tenants:
-                    wx.CallAfter(_speak, f"No official store directory found for {n}.")
+                    wx.CallAfter(
+                        self._announce_transient_then_return,
+                        f"No official store directory found for {n}.")
                     return
                 child_pois = [
                     {
@@ -7867,7 +7935,6 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self.street_label = label
             wx.CallAfter(self.map_panel.set_position, self.lat, self.lon, True, label)
             wx.CallAfter(self._update_street_display)
-            wx.CallAfter(self._listbox_set_single, self._map_focus_fallback_label())
             wx.CallAfter(self._force_listbox_refocus)
             
             # Force fetch to ensure data is current for this location
@@ -7962,7 +8029,6 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 self.street_label = test_label
                 wx.CallAfter(self.map_panel.set_position, lat, lon, True, test_label)
                 wx.CallAfter(self._update_street_display)
-                wx.CallAfter(self._listbox_set_single, self._map_focus_fallback_label())
                 wx.CallAfter(self._force_listbox_refocus)
                 threading.Thread(target=self._fetch_poi_intersection,
                                args=(lat, lon, poi_name, known_street), daemon=True).start()
@@ -7992,7 +8058,6 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         self.street_label = test_label
                         wx.CallAfter(self.map_panel.set_position, lat, lon, True, test_label)
                         wx.CallAfter(self._update_street_display)
-                        wx.CallAfter(self._listbox_set_single, self._map_focus_fallback_label())
                         wx.CallAfter(self._force_listbox_refocus)
                         threading.Thread(target=self._fetch_poi_intersection,
                                          args=(lat, lon, poi_name, known_street), daemon=True).start()
@@ -9357,9 +9422,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self._show_poi_in_listbox()
             wx.CallAfter(self.listbox.SetFocus)
         else:
-            self._listbox_set_single(self._map_focus_fallback_label())
+            self._show_mode_surface(focus=True)
             wx.CallAfter(_speak, "No more points of interest.")
-            wx.CallAfter(self.listbox.SetFocus)
 
         # ── Option 2: OSM note (only for OSM-sourced POIs with an ID) ─
         osm_id   = poi.get("osm_id", 0)
@@ -9894,12 +9958,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _format_mark_distance(self, origin, target):
         km = dist_km(origin[0], origin[1], target[0], target[1])
-        if km < 1.0:
-            dist_str = f"{int(km * 1000)} metres"
-        elif km < 10.0:
-            dist_str = f"{km:.2f} kilometres"
-        else:
-            dist_str = f"{km:.1f} kilometres"
+        dist_str = format_distance(km * 1000)
         direction = compass_name(
             bearing_deg(origin[0], origin[1], target[0], target[1])
         ).lower()
@@ -10000,6 +10059,17 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 and not getattr(self, '_address_lookup_in_progress', False)):
             self._verbose_trace(f"status suppressed: {msg!r}")
             return
+        terminal = msg_text.strip().lower()
+        if (terminal.rstrip(".! ").endswith("cancelled")
+                and getattr(self, "_tool_cancel_already_announced", False)):
+            self._tool_cancel_already_announced = False
+            return
+        if force and (
+                terminal.startswith(("no ", "not found", "nothing ",
+                                     "could not ", "can't ", "cannot "))
+                or terminal.rstrip(".! ").endswith("cancelled")):
+            self._announce_transient_then_return(msg_text)
+            return
         _speak(msg)
 
     def _map_sound_allowed(self) -> bool:
@@ -10031,21 +10101,62 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             return
         self.speech.transient(msg, braille_msg)
 
-    def _announce_transient_then_return(self, msg, delay_ms=2000, focus_target=None) -> None:
-        """Announce a warning, then return focus after a short pause."""
+    def _announce_transient_then_return(self, msg, delay_ms=3000, focus_target=None) -> None:
+        """Speak through AO2, then restore focus without changing MSAA text."""
         if getattr(self, "_update_dialog_active", False):
             self._verbose_trace(f"transient-return suppressed while update dialog is active: {msg!r}")
             return
-        self._announce_transient(msg)
-        target = focus_target
-        if target is None:
+        self._transient_return_generation = getattr(
+            self, "_transient_return_generation", 0) + 1
+        generation = self._transient_return_generation
+        speech_delay_ms = 300
+        self._transient_message_active_until = (
+            time.time()
+            + (speech_delay_ms + max(1, int(delay_ms))) / 1000.0)
+        return_to_poi_list = bool(getattr(self, "_poi_list", []))
+
+        def _speak_after_map_focus():
+            if generation == getattr(self, "_transient_return_generation", None):
+                self._announce_transient(str(msg))
+
+        wx.CallLater(speech_delay_ms, _speak_after_map_focus)
+
+        def _return_after_message():
+            if generation != getattr(self, "_transient_return_generation", None):
+                return
+            self._transient_message_active_until = 0.0
+            if getattr(self, "_update_dialog_active", False):
+                return
             try:
-                target = wx.Window.FindFocus()
+                focused = wx.Window.FindFocus()
+                if (focused is not None
+                        and focused.GetTopLevelParent() is not self):
+                    return
             except Exception:
-                target = None
-        if target is not None:
+                pass
+            target = focus_target
+            if target is not None:
+                try:
+                    if target.IsShown() and not target.HasFocus():
+                        target.SetFocus()
+                    return
+                except Exception:
+                    pass
+            if return_to_poi_list and getattr(self, "_poi_list", []):
+                self._show_poi_in_listbox()
+                self.listbox.SetFocus()
+            else:
+                self._show_mode_surface(
+                    self._map_focus_fallback_label(), focus=True)
+
+        try:
+            wx.CallLater(
+                speech_delay_ms + max(1, int(delay_ms)),
+                _return_after_message)
+        except Exception:
             try:
-                wx.CallLater(delay_ms, target.SetFocus)
+                self._show_mode_surface(
+                    self._map_focus_fallback_label(), focus=True)
             except Exception:
                 pass
 
@@ -10301,6 +10412,10 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         if getattr(self, "_update_dialog_active", False):
             self._verbose_trace("_force_listbox_refocus suppressed while update dialog is active.")
             return
+        if not (getattr(self, "_poi_list", [])
+                or getattr(self, "_poi_explore_stack", [])):
+            self._show_mode_surface(focus=True)
+            return
         try:
             self.SetFocus()
         except Exception:
@@ -10312,19 +10427,15 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         if getattr(self, "_update_dialog_active", False):
             self._verbose_trace("_focus_map_window_silently suppressed while update dialog is active.")
             return
-        target = self.listbox
-        try:
-            count = target.GetCount()
-            sel = target.GetSelection()
-            text = target.GetString(sel).strip() if sel != wx.NOT_FOUND else ""
-            if not count or sel == wx.NOT_FOUND or not text:
-                self._listbox_set_single(self._map_focus_fallback_label())
-        except Exception:
-            pass
-        try:
-            target.SetFocus()
-        except Exception:
-            pass
+        if time.time() < getattr(self, "_transient_message_active_until", 0.0):
+            self._verbose_trace("map focus suppressed while a transient message is active.")
+            return
+        if (getattr(self, "_poi_list", [])
+                or getattr(self, "_poi_explore_stack", [])):
+            self._show_list_surface()
+            self.listbox.SetFocus()
+            return
+        self._show_mode_surface(focus=True)
 
     def _map_focus_fallback_label(self) -> str:
         if (getattr(self, "street_mode", False)
@@ -10460,10 +10571,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         city_lat = float(row.get("lat", lat))
         city_lon = float(row.get("lng", lon))
         km = dist * 111.0
-        if km < 1:
-            dist_text = f"{round(km * 1000)} metres"
-        else:
-            dist_text = f"{round(km)} km"
+        dist_text = format_distance(km * 1000)
         direction = compass_name(bearing_deg(lat, lon, city_lat, city_lon)).lower().replace("-", " ")
         return f"{city} {dist_text} {direction}".strip()
 
@@ -10886,7 +10994,6 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self._status_update(f"Downloading {len(packs)} area(s) in the background.", force=True)
 
     def _open_settings(self):
-        prev_focus = self.FindFocus()
         try:
             dlg = SettingsDialog(self, self.settings, user_dir=USER_DIR)
         except Exception as exc:
@@ -10906,8 +11013,15 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             return
         saved = dlg.ShowModal() == wx.ID_OK
         gtfs_refresh = dlg.gtfs_refreshed
+        set_home_requested = dlg.set_home_requested
+        saved_settings = dlg.settings if saved else None
+        # Destroy the ended modal before doing save work or speaking.  Leaving
+        # it alive allows Windows/MSAA to restore map focus once at EndModal
+        # and again when the dialog is eventually destroyed.
+        dlg.Destroy()
         if saved:
-            self.settings = dlg.settings
+            self.settings = saved_settings
+            set_unit_system(self.settings.get("distance_unit", "metric"))
             self.settings["_log_path"] = os.path.join(USER_DIR, "miab.log")
             self._free_engine.log_settings = self.settings
             save_settings(self.settings)
@@ -10931,21 +11045,18 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 base_dir=USER_DIR,
                 client_id=self.settings.get("opensky_client_id", ""),
                 client_secret=self.settings.get("opensky_client_secret", ""))
+            if self._poi_list:
+                self._show_poi_in_listbox()
             # Offer to update home location if requested
-            if dlg.set_home_requested:
+            if set_home_requested:
                 self._home_setup_mode = True
                 self.update_ui("Type your location to set as home.")
                 self.show_jump_dialog()
                 return
-            _speak("Settings saved.")
-        dlg.Destroy()
         if saved and gtfs_refresh:
             self._status_update("Refreshing transit feed catalog...")
             threading.Thread(target=self._refresh_transit_catalog, daemon=True).start()
-        def _restore():
-            target = prev_focus if (prev_focus and prev_focus.IsShown()) else self.listbox
-            target.SetFocus()
-        wx.CallLater(1000 if saved else 0, _restore)
+        self._focus_map_window_silently()
 
     # ─────────────────────────────────────────────────────────────────
     #  TURN-BY-TURN NAVIGATION  (routing logic lives in nav.py)
@@ -11366,7 +11477,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             return False
         street = self._street_survey_current_street()
         if not street:
-            self._announce_transient("No current street.")
+            self._announce_transient_then_return("No current street.")
             return True
         address_mode = self._street_survey_address_announce_mode()
         addresses = self._street_survey_addresses(
@@ -11374,11 +11485,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             include_pois_near_street=False,
         )
         if not addresses:
-            self._announce_transient(f"No known house numbers loaded for {street}.")
+            self._announce_transient_then_return(f"No known house numbers loaded for {street}.")
             return True
         current_num = self._street_survey_current_number(street)
         if not current_num:
-            self._announce_transient(f"No current house number found on {street}.")
+            self._announce_transient_then_return(f"No current house number found on {street}.")
             return True
         current_key = self._street_survey_number_key(current_num)
         unique = {}
@@ -11395,12 +11506,12 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 if self._street_survey_number_parity(a["number"]) == number_filter
             ]
             if not addresses:
-                self._announce_transient(f"No {number_filter} house numbers loaded for {street}.")
+                self._announce_transient_then_return(f"No {number_filter} house numbers loaded for {street}.")
                 return True
         if address_mode == "poi_only":
             addresses = [a for a in addresses if a.get("name")]
             if not addresses:
-                self._announce_transient(f"No POI house numbers loaded for {street}.")
+                self._announce_transient_then_return(f"No POI house numbers loaded for {street}.")
                 return True
         if direction > 0:
             choices = [a for a in addresses if self._street_survey_number_key(a["number"]) > current_key]
@@ -11632,11 +11743,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             return False
         street = self._street_survey_current_street()
         if not street:
-            self._announce_transient("No current street.")
+            self._announce_transient_then_return("No current street.")
             return True
         intersections = self._street_survey_intersections(street)
         if not intersections:
-            self._announce_transient(f"No intersections loaded for {street}.")
+            self._announce_transient_then_return(f"No intersections loaded for {street}.")
             return True
         axis = self._street_survey_address_axis(street)
         if axis:
@@ -11681,7 +11792,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             return False
         street = self._street_survey_current_street()
         if not street:
-            self._announce_transient("No current street.")
+            self._announce_transient_then_return("No current street.")
             return True
 
         if turn_back:
@@ -11689,7 +11800,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             turn_lat = getattr(self, "_street_turn_lat", None)
             turn_lon = getattr(self, "_street_turn_lon", None)
             if not prev or turn_lat is None or turn_lon is None:
-                self._announce_transient("No previous street to turn back onto.")
+                self._announce_transient_then_return("No previous street to turn back onto.")
                 return True
             self.lat, self.lon = turn_lat, turn_lon
             self.street_label = prev
@@ -11707,7 +11818,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
         intersections = self._street_survey_intersections(street)
         if not intersections:
-            self._announce_transient(f"No intersections loaded for {street}.")
+            self._announce_transient_then_return(f"No intersections loaded for {street}.")
             return True
 
         best = None
@@ -11717,7 +11828,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 best = (d, nid, nlat, nlon)
 
         if best is None:
-            self._announce_transient("No intersection found here.")
+            self._announce_transient_then_return("No intersection found here.")
             return True
 
         dist_m, nid, nlat, nlon = best
@@ -11728,7 +11839,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         cross = self._walk_get_cross_streets(nid, street)
         cross = [s for s in cross if self._street_survey_bare(s) != self._street_survey_bare(street)]
         if not cross:
-            self._announce_transient(f"No other street to turn onto from {street}.")
+            self._announce_transient_then_return(f"No other street to turn onto from {street}.")
             return True
 
         target = sorted(cross, key=str.lower)[0]
@@ -11749,7 +11860,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
     def _street_survey_summary(self):
         street = self._street_survey_current_street()
         if not street:
-            self._announce_transient("No current street.")
+            self._announce_transient_then_return("No current street.")
             return
         addresses = self._street_survey_addresses(street)
         intersections = self._street_survey_intersections(street)
@@ -11850,12 +11961,12 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             text, pois = self._free_engine.describe_left_with_pois()
             self._free_last_side_pois = pois
             self._free_last_side      = "left"
-            self._announce_transient(text if text else "Nothing on the left."); return True
+            self._announce_transient_then_return(text if text else "Nothing on the left."); return True
         if key == wx.WXK_RIGHT:
             text, pois = self._free_engine.describe_right_with_pois()
             self._free_last_side_pois = pois
             self._free_last_side      = "right"
-            self._announce_transient(text if text else "Nothing on the right."); return True
+            self._announce_transient_then_return(text if text else "Nothing on the right."); return True
         if no_mod and (key == ord('A') or key == ord('a')):
             self._announce_address(); return True
         if no_mod and (key == ord('H') or key == ord('h')):
@@ -11943,7 +12054,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 country = getattr(self, 'last_country_found', 'country')
                 wx.CallAfter(self._status_update, f"Displaying {country}.", True)
             else:
-                wx.CallAfter(self._status_update, "No current country to display.", True)
+                wx.CallAfter(
+                    self._announce_transient_then_return,
+                    "No current country to display.")
             return True
         if no_mod and key == wx.WXK_F9:    self._toggle_map_fullscreen(); return True
         if shift and not primary and key == wx.WXK_F10:
@@ -12472,8 +12585,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         direction = direction.replace("-", " ")
         if km < 1.2:
             return f"{direction} side"
-        km_text = f"{km:.1f}" if km < 10 else str(round(km))
-        return f"{km_text} km {direction} of centre"
+        return f"{format_distance(km * 1000)} {direction} of centre"
 
     def _lookup(self):
         try:
@@ -12664,7 +12776,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     elif not self._geo_features_enabled():
                         label = self._nearest_city_distance_label()
                     elif city and city.lower() != "nan" and dist_km <= NEAREST_PLACE_FALLBACK_KM:
-                        label = f"{city} {round(dist_km)} km"
+                        label = f"{city} {format_distance(dist_km * 1000)}"
                     else:
                         parts = []
                         if state and state.lower() != "nan":
@@ -12946,13 +13058,14 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             return
         country = getattr(self, 'last_country_found', '')
         continent = getattr(self, 'current_continent', '')
+        restored_sound = False
         if country and country != "Open Water":
             self._play_location_sound_if_allowed(country, continent)
-        # Restore the current location announcement through AO2.
-        label = getattr(self, 'last_location_str', '')
-        if label:
-            self._verbose_trace(f"_resume_location_sound restoring label: {label!r}")
-            self._announce_location(label)
+            restored_sound = True
+        if restored_sound and getattr(self, "_tools_workflow_active", False):
+            # A tool-specific exit restored the saved sound successfully;
+            # prevent the dispatcher fallback from restoring it a second time.
+            self._tools_sound_was_on = False
 
     def _map_help_lines(self) -> list[str]:
         """Return the map-mode shortcut lines used by both help and docs."""
@@ -14030,7 +14143,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     lat - RADIUS_DEG, lon - RADIUS_DEG,
                     lat + RADIUS_DEG, lon + RADIUS_DEG)
                 if not states:
-                    wx.CallAfter(self._status_update, "No aircraft detected overhead.", True)
+                    wx.CallAfter(
+                        self._announce_transient_then_return,
+                        "No aircraft detected overhead.")
                     return
 
                 from geo import dist_km, compass_name, bearing_deg
@@ -14065,12 +14180,16 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         continue
 
                 if not flights:
-                    wx.CallAfter(self._status_update, "No airborne aircraft detected overhead.", True)
+                    wx.CallAfter(
+                        self._announce_transient_then_return,
+                        "No airborne aircraft detected overhead.")
                     return
 
                 flights.sort(key=lambda x: x["dist"])
                 if not flights:
-                    wx.CallAfter(self._status_update, "No identified airline flights overhead.", True)
+                    wx.CallAfter(
+                        self._announce_transient_then_return,
+                        "No identified airline flights overhead.")
                     return
                 wx.CallAfter(self._show_overhead_listbox, flights, len(flights))
 
@@ -14279,7 +14398,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                             best_dist, best = d, row
 
                 if not best:
-                    wx.CallAfter(self._status_update, "No airport found nearby.", True)
+                    wx.CallAfter(
+                        self._announce_transient_then_return,
+                        "No airport found nearby.")
                     return
 
                 icao     = best.get('ident', '')

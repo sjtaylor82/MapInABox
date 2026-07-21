@@ -27,6 +27,7 @@ import urllib.request
 from typing import Optional
 
 from geo import dist_metres, bearing_deg, bearing_between_nodes, compass_name, GENERIC_STREET_TYPES
+from distance_units import format_distance
 
 
 # ---------------------------------------------------------------------------
@@ -158,13 +159,13 @@ class NavigationEngine:
             return "Could not place start or destination on the street graph.", False
         if start_snap_m > 250:
             return (
-                f"Current position is {int(start_snap_m)} metres from the loaded street graph. "
+                f"Current position is {format_distance(start_snap_m)} from the loaded street graph. "
                 "Move into the loaded street area or reload streets.",
                 False,
             )
         if end_snap_m > 750:
             return (
-                f"{dest_name} is {int(end_snap_m)} metres from the loaded street graph. "
+                f"{dest_name} is {format_distance(end_snap_m)} from the loaded street graph. "
                 "OSM local routing cannot safely route there from the current loaded area.",
                 False,
             )
@@ -727,6 +728,7 @@ class NavigationEngine:
                 "compass":              compass_name(leg_start_bearing),
                 "bearing_deg":          round(leg_start_bearing, 1),
                 "distance_m":           int(round(leg_dist)),
+                "distance_display":     format_distance(leg_dist),
                 "cross_streets_passed": leg_cross[:],
                 "node_start":           leg_start_idx,
                 "node_end":             end_idx,
@@ -947,6 +949,7 @@ class NavigationEngine:
                 "drives_on": drives_on,
             },
             "total_distance_m": total_m,
+            "total_distance_display": format_distance(total_m),
             "total_minutes":    self.total_min,
             "legs":             legs,
         }
@@ -1054,8 +1057,7 @@ class NavMixin:
         text = NavigationEngine._clean_provider_instruction(text)
         dist = self._nav_instruction_distance(idx, entry)
         if text and "arriving" not in text.lower():
-            unit = "metre" if dist == 1 else "metres"
-            out = f"In {dist} {unit}, {text[0].lower() + text[1:]}"
+            out = f"In {format_distance(dist)}, {text[0].lower() + text[1:]}"
         else:
             out = text
         if include_step:
@@ -1865,8 +1867,8 @@ class NavMixin:
                             self.settings,
                         )
                         return (
-                            f"Between {back_name} {back_metres} metres "
-                            f"and {forward_name} {forward_metres} metres."
+                            f"Between {back_name} {format_distance(back_metres)} "
+                            f"and {forward_name} {format_distance(forward_metres)}."
                         )
                 candidates.sort(key=lambda item: item["distance"])
                 nearest = candidates[0]
@@ -1879,7 +1881,7 @@ class NavMixin:
                     f"side='{nearest['side']}' my_side='{my_side}'",
                     self.settings,
                 )
-                return f"{nearest['name']} is {metres} metres {rel_word}."
+                return f"{nearest['name']} is {format_distance(metres)} {rel_word}."
 
             announcement = (
                 _nearest_side_or_cross_street_text()

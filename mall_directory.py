@@ -15,6 +15,7 @@ import html
 import re
 import urllib.parse
 import urllib.request
+from distance_units import format_distance
 from logging_utils import miab_log
 
 _CACHE_VERSION = "v4"
@@ -124,9 +125,9 @@ def describe_tenant(rec: dict, centre_name: str) -> str:
     elif landmark:
         parts.append(f"{name}{cat_phrase}, {landmark}.")
     elif cat and dist is not None and bearing:
-        parts.append(f"{name}{cat_phrase}, about {dist} metres {bearing} of the centre point.")
+        parts.append(f"{name}{cat_phrase}, about {format_distance(dist)} {bearing} of the centre point.")
     elif dist is not None and bearing:
-        parts.append(f"{name} is about {dist} metres {bearing} of the centre point.")
+        parts.append(f"{name} is about {format_distance(dist)} {bearing} of the centre point.")
     elif cat:
         parts.append(f"{name}{cat_phrase}.")
     else:
