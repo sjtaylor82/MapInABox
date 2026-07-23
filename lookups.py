@@ -23,6 +23,7 @@ import wx
 from logging_utils import miab_log
 from wx_utils import IS_MAC
 from distance_units import format_distance, format_height
+from network_utils import describe_fetch_error
 
 try:
     import certifi
@@ -126,7 +127,7 @@ class LookupsMixin:
                                  f"{titles[0]}.  {summary}")
                 except Exception as exc:
                     wx.CallAfter(self._on_wiki_result, cache_key,
-                                 f"Lookup failed: {exc}")
+                                 describe_fetch_error(exc, "that article"))
             threading.Thread(target=_fetch_ocean, daemon=True).start()
             return
 
@@ -202,7 +203,8 @@ class LookupsMixin:
                     "No Wikipedia article found near this coordinate.",
                 )
             except Exception as exc:
-                wx.CallAfter(self._on_wiki_result, cache_key, f"Lookup failed: {exc}")
+                wx.CallAfter(self._on_wiki_result, cache_key,
+                             describe_fetch_error(exc, "nearby articles"))
 
         threading.Thread(target=_fetch_geo, daemon=True).start()
         return
@@ -501,7 +503,7 @@ class LookupsMixin:
                 }
                 wx.CallAfter(self._announce_transient, full, braille_msg=braille_summary)
             except Exception as exc:
-                wx.CallAfter(self._announce_transient, f"Could not fetch weather: {exc}")
+                wx.CallAfter(self._announce_transient, describe_fetch_error(exc, "weather"))
 
         threading.Thread(target=_fetch, daemon=True).start()
 
@@ -538,7 +540,7 @@ class LookupsMixin:
                 wx.CallAfter(self._announce_transient,
                              f"Sunrise: {_fmt(sunrises[0])}.  Sunset: {_fmt(sunsets[0])}.")
             except Exception as exc:
-                wx.CallAfter(self._announce_transient, f"Could not fetch sunrise/sunset: {exc}")
+                wx.CallAfter(self._announce_transient, describe_fetch_error(exc, "sunrise and sunset"))
 
         threading.Thread(target=_fetch, daemon=True).start()
 
@@ -575,7 +577,7 @@ class LookupsMixin:
                 if wdir is not None: parts.append(f"Waves from the {compass_name(wdir)}.")
                 wx.CallAfter(self._announce_transient, "  ".join(parts))
             except Exception as exc:
-                wx.CallAfter(self._announce_transient, f"Could not fetch sea temperature: {exc}")
+                wx.CallAfter(self._announce_transient, describe_fetch_error(exc, "sea temperature"))
 
         threading.Thread(target=_fetch, daemon=True).start()
 
@@ -619,7 +621,7 @@ class LookupsMixin:
                     return
                 wx.CallAfter(self._status_update, "  ".join(parts), True)
             except Exception as exc:
-                wx.CallAfter(self._status_update, f"Could not fetch air quality: {exc}", True)
+                wx.CallAfter(self._status_update, describe_fetch_error(exc, "air quality"), True)
 
         threading.Thread(target=_fetch, daemon=True).start()
 
@@ -711,7 +713,7 @@ class LookupsMixin:
                              f"{iata_str}{elev_str}",
                              True)
             except Exception as exc:
-                wx.CallAfter(self._status_update, f"Airport lookup failed: {exc}", True)
+                wx.CallAfter(self._status_update, describe_fetch_error(exc, "nearby airports"), True)
 
         threading.Thread(target=_fetch, daemon=True).start()
 
@@ -775,7 +777,7 @@ class LookupsMixin:
                              f"Nearest {len(flights)}: {'.  '.join(parts)}.",
                              True)
             except Exception as exc:
-                wx.CallAfter(self._status_update, f"Could not fetch flight data: {exc}", True)
+                wx.CallAfter(self._status_update, describe_fetch_error(exc, "flight data"), True)
 
         threading.Thread(target=_fetch, daemon=True).start()
 

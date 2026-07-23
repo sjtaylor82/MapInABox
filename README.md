@@ -49,7 +49,7 @@ Core features that do not require the user to provide an API key may contact:
 - GitHub for update checks and release downloads.
 - MobilityData and OurAirports public datasets for transit and airport data.
 - `samtaylor9.nfshost.com` for GNAF address lookup in Australia when GNAF address data is enabled.
-- Google Search, Bing, DuckDuckGo, Google Maps, venue websites, and provider websites when the user explicitly opens a search result, menu, review page, map page, donation page, or other external browser link.
+- Google Search, Bing, DuckDuckGo, Google Maps, Uber (`m.uber.com`), venue websites, and provider websites when the user explicitly opens a search result, menu, review page, map page, donation page, ride booking link, or other external browser link.
 - `miab-menu-search.miab.workers.dev` for best-effort menu and website discovery features.
 
 Optional features are only contacted when the user supplies the relevant key or chooses the relevant action:

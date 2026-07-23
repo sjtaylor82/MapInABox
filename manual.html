@@ -69,7 +69,7 @@
   <tr><td>Street mode</td><td>Drop to the neighbourhood level and explore streets, intersections, house numbers, and nearby points of interest in detail.</td></tr>
   <tr><td>Walking mode</td><td>Move along a real street network with turn choices at intersections, plus optional POI announcements as you go.</td></tr>
   <tr><td>Free mode</td><td>Explore nearby streets and points of interest relative to a heading, without being locked to a road.</td></tr>
-  <tr><td>Tools</td><td>Route planning, detour calculation, toll comparison, meeting-place finder, public transport journeys, departure boards, flight search, hotel search, and Find Food.</td></tr>
+  <tr><td>Tools</td><td>Route planning, detour calculation, toll comparison, meeting-place finder, public transport journeys, departure boards, flight search, hotel search, Find Food, and Order an Uber.</td></tr>
   <tr><td>Challenge game</td><td>A geography game where you locate a named country on the world map by ear.</td></tr>
 </table>
 
@@ -321,6 +321,21 @@
 <p>Please note: If a GTFS transit route is already active you can press control+alt+f. This keystroke invokes a search which runs along that transit line instead of a road route, returning food places across the transit journey.</p>
 
 
+<h3 id="tool-order-uber">14.10 Order an Uber</h3>
+
+<p>Order an Uber hands a ride request to Uber with the pick-up point and destination already filled in. Open the Tools menu with <code>F12</code> and pick <strong>Order an Uber</strong>.</p>
+
+<ol>
+  <li>Choose a pick-up point — type an address, pick a saved mark, choose a favourite, or use your current position.</li>
+  <li>Choose a destination the same way.</li>
+  <li>Your browser opens Uber with both points set. Sign in to your own Uber account if asked, then choose a car type and confirm the ride in Uber itself. Car types and prices come live from Uber, so they are always current.</li>
+</ol>
+
+<p>No Uber API key is needed and Map in a Box never sees your Uber account: the app only builds the link. Nothing is booked until you confirm inside Uber.</p>
+
+<p>Tip: Uber's website works best when you are already signed in — if the pick-up and destination fields come up empty, sign in first and run the tool again. In Australia, Uber also takes bookings by phone on 13-UBER (13 82 37), with pre-booking up to 90 days ahead.</p>
+
+
 <h2 id="challenge">15. Geography challenge game</h2>
 
 <p>The challenge game tests your world geography by ear. The program names a country, and you have to find it on the world map using audio cues alone, and speed is the name of the game!</p>
@@ -362,6 +377,7 @@
   <tr><td>POI database</td><td>OpenStreetMap or HERE for street and free mode POI data.</td></tr>
   <tr><td>Navigation provider</td><td>OpenStreetMap, Google Maps, or HERE for walking route calculation.</td></tr>
   <tr><td>Departure board source</td><td>GTFS data (default, no key required) or Google Places.</td></tr>
+  <tr><td>Postcode lookup</td><td>Use Included Data (default) answers <code>Shift+P</code> from a bundled offline dataset covering about 120 countries, with no internet connection needed. Search Online instead queries OpenStreetMap's Nominatim service for a live result. The included data is a nearest-match against postcode centre points rather than exact boundaries, and for Canada, the Netherlands, and the United Kingdom it only has the first part of the postcode (for example a UK outward code like "SW1A" rather than the full "SW1A 1AA").</td></tr>
   <tr><td>Refresh Transit Feed Catalog</td><td>Re-download the public transport feed index.</td></tr>
   <tr><td>Automatically check for updates at startup</td><td>Offer new releases when the app starts. Turn this off to check manually from Help instead.</td></tr>
 </table>

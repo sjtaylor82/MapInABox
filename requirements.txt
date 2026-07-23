@@ -1,0 +1,18 @@
+# Map in a Box — runtime dependencies
+# Install:  pip install -r requirements.txt
+# (Python 3.11 recommended — matches the release build.)
+
+wxPython
+numpy
+pandas
+Pillow
+pygame
+shapely
+tzfpy
+accessible-output2
+certifi
+
+# ── Build-only (needed to produce release binaries, not to run from source) ──
+pyinstaller
+
+# Localisation tooling lives in requirements-localisation.txt (Babel).

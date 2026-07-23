@@ -8,7 +8,6 @@
 # Output: dist\MapInABox\MapInABox.exe  (plus supporting files)
 # Feed that folder to Inno Setup to produce the installer.
 
-import glob as _glob
 import os
 import sys
 from PyInstaller.utils.hooks import collect_all, collect_submodules
@@ -19,23 +18,13 @@ if sys.platform == "darwin":
 # ── Collect packages whose internals PyInstaller can't fully auto-detect ─────
 
 shapely_d,   shapely_b,   shapely_h   = collect_all('shapely')
-
-# h3 Cython extensions — collect_all misses some native modules on Windows
-h3_d,        h3_b,        h3_h        = collect_all('h3')
-if sys.platform == "win32":
-    import h3 as _h3
-    _h3_site = os.path.dirname(os.path.abspath(_h3.__file__))
-    h3_b = h3_b + [(p, 'h3/_cy') for p in _glob.glob(os.path.join(_h3_site, "_cy", "*.pyd"))]
-genai_d,     genai_b,     genai_h     = collect_all('google.genai')
-apicore_d,   apicore_b,   apicore_h   = collect_all('google.api_core')
-proto_d,     proto_b,     proto_h     = collect_all('proto')
 ao2_d,       ao2_b,       ao2_h       = collect_all('accessible_output2')
 pygame_d,    pygame_b,    pygame_h    = collect_all('pygame')
 certifi_d,   certifi_b,   certifi_h   = collect_all('certifi')
 
-all_datas    = shapely_d  + genai_d   + apicore_d + proto_d + ao2_d + pygame_d + certifi_d + h3_d
-all_binaries = shapely_b  + genai_b   + apicore_b + proto_b + ao2_b + pygame_b + certifi_b + h3_b
-all_hidden   = shapely_h  + genai_h   + apicore_h + proto_h + ao2_h + pygame_h + certifi_h + h3_h
+all_datas    = shapely_d  + ao2_d + pygame_d + certifi_d
+all_binaries = shapely_b  + ao2_b + pygame_b + certifi_b
+all_hidden   = shapely_h  + ao2_h + pygame_h + certifi_h
 
 a = Analysis(
     ['core.py'],
@@ -56,6 +45,7 @@ a = Analysis(
         ('locale',               'locale'),
         ('sounds',               'sounds'),
         ('GeoFeatures',          'GeoFeatures'),
+        ('PostalCodes',          'PostalCodes'),
     ],
     hiddenimports=all_hidden + [
         # pandas internals that aren't always picked up
@@ -63,28 +53,11 @@ a = Analysis(
         'pandas._libs.tslibs.nattype',
         'pandas._libs.tslibs.timedeltas',
         'pandas._libs.tslibs.timestamps',
-        # h3 Cython extensions — collect_all misses these. Verified against
-        # the actual h3 4.5.0 wheel layout (pip download + inspect); the
-        # previous list had 'vertexes' (should be 'vertex', singular) and
-        # two modules ('inspection', 'regions') that don't exist at all,
-        # which made PyInstaller fail outright with "Hidden import ... not
-        # found" on both Windows and macOS builds.
-        'h3._cy',
-        'h3._cy.cells',
-        'h3._cy.edges',
-        'h3._cy.error_system',
-        'h3._cy.latlng',
-        'h3._cy.memory',
-        'h3._cy.to_multipoly',
-        'h3._cy.util',
-        'h3._cy.vertex',
         # wx
         'wx._xml',
         'wx.lib.agw',
         # tzfpy (Rust extension) — make sure the compiled module is found
         'tzfpy',
-        # pycountry uses data files bundled with the package
-        'pycountry',
     ],
     hookspath=[],
     hooksconfig={},
@@ -110,9 +83,6 @@ a = Analysis(
         'werkzeug', 'jinja2', 'itsdangerous', 'click',
         # ── gRPC / test deps (suppresses warnings about missing optional modules) ─
         'grpc', 'grpcio',
-        'google.api_core.operations_v1',
-        'google.api_core.operations_v1.lro_schedules',
-        'google.genai.tests',
         'pytest',
         # ── Network / proxy tools ─────────────────────────────────────────
         'mitmproxy', 'aioquic', 'h2', 'hpack', 'hyperframe',

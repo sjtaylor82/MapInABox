@@ -14,6 +14,7 @@ import urllib.request
 
 import wx
 import airport_directory
+from app_paths import EDUCATION_EDITION
 from logging_utils import miab_log
 from geo import (
     GENERIC_STREET_TYPES, bearing_deg, dist_metres, nearest_point_on_segment,
@@ -610,6 +611,8 @@ class ToolsMixin:
 
     def _open_tools_menu(self):
         """F12 — open the tools menu dialog."""
+        if EDUCATION_EDITION:
+            return
         self._begin_tools_workflow()
         self._tools_sound_was_on = bool(getattr(self.sound, "_current", None))
         self.sound.stop()
@@ -650,6 +653,8 @@ class ToolsMixin:
                     self._tool_hotel_search()
                 elif selected_tool == "find_food":
                     self._tool_find_food()
+                elif selected_tool == "order_uber":
+                    self._tool_order_uber()
                 else:
                     self._restore_tools_sound()
             else:
@@ -1469,6 +1474,95 @@ class ToolsMixin:
             wx.MessageBox(
                 f"Could not open Virgin Australia:\n\n{exc}\n\nBooking link:\n{url}",
                 "Virgin Australia Booking", wx.OK | wx.ICON_ERROR)
+
+    def _tool_order_uber(self):
+        """Order an Uber — collect pick-up and destination, then hand off to
+        Uber's universal deep link with both points pre-filled.
+
+        No Uber API key or developer account is involved: the link opens
+        m.uber.com (or the Uber app if installed), where the user signs in
+        to their own Uber account, sees the available car types and prices,
+        and confirms the ride. Car choice deliberately stays in Uber's UI —
+        the deep link cannot enumerate products, and duplicating live
+        pricing here would only go stale."""
+        rt = self._get_route_tools()
+        if not rt:
+            self._resume_location_sound()
+            return
+
+        country_code = self._ask_country_code()
+        if not country_code:
+            self._status_update("Order an Uber cancelled.", force=True)
+            return
+
+        # 1. Pick-up — marks, favourite, current position, or typed address.
+        pickup = self._pick_location(
+            "Pick-up point (address, suburb or city):",
+            "pick-up point", rt, country_code)
+        if pickup is None:
+            self._status_update("Order an Uber cancelled.", force=True)
+            return
+
+        # 2. Destination — same chooser.
+        destination = self._pick_location(
+            "Destination (address, suburb or city):",
+            "destination", rt, country_code)
+        if destination is None:
+            self._status_update("Order an Uber cancelled.", force=True)
+            return
+
+        pickup_lat, pickup_lon, pickup_name = pickup
+        dest_lat, dest_lon, dest_name = destination
+
+        # NOTE: URL format history, learned the hard way —
+        #   * "m.uber.com/ul/?action=setPickup&pickup[latitude]=..." is the
+        #     documented universal link, but it is phone-only: on a desktop
+        #     browser Uber redirects it to the generic sign-up homepage and
+        #     silently discards the pickup/dropoff parameters.
+        #   * "m.uber.com/?action=setPickup&..." reaches the web app's
+        #     "Get a ride" screen, but the current web app ignores the
+        #     legacy setPickup parameters and the fields arrive empty.
+        #   * "m.uber.com/go/product-selection?pickup=<json>&drop[0]=<json>"
+        #     is what Uber's own site and partner handoffs generate for the
+        #     web rider experience, with each location as a URL-encoded JSON
+        #     object. Undocumented but current as of mid-2026.
+        import json as _json
+
+        def _loc_json(lat, lon, name):
+            return _json.dumps({
+                "latitude":     round(lat, 6),
+                "longitude":    round(lon, 6),
+                "addressLine1": name[:120],
+                "addressLine2": "",
+            }, separators=(",", ":"))
+
+        params = urllib.parse.urlencode({
+            "pickup":  _loc_json(pickup_lat, pickup_lon, pickup_name),
+            "drop[0]": _loc_json(dest_lat, dest_lon, dest_name),
+        })
+        url = "https://m.uber.com/go/product-selection?" + params
+
+        miab_log(
+            "navigation",
+            f"Opening Uber booking: {pickup_name} to {dest_name}.",
+            self.settings,
+        )
+        try:
+            import webbrowser
+            opened = webbrowser.open(url)
+            if opened is False:
+                raise RuntimeError("The web browser did not accept the Uber link.")
+            self._status_update(
+                "Uber opened in your browser with pick-up and destination "
+                "filled in. Choose a car type and confirm the ride there. "
+                "Uber will ask you to sign in if you are not already. "
+                "If the fields come up empty, sign in at Uber first, then "
+                "run Order an Uber again.",
+                force=True)
+        except Exception as exc:
+            wx.MessageBox(
+                f"Could not open Uber:\n\n{exc}\n\nBooking link:\n{url}",
+                "Order an Uber", wx.OK | wx.ICON_ERROR)
 
     def _collect_airline_booking(self, airline_name):
         """Collect all airline fields in one explicitly-labelled tab order."""

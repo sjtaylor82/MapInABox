@@ -18,6 +18,7 @@ import re
 import wx
 import wx.adv
 
+from app_paths import EDUCATION_EDITION
 from i18n import _
 from wx_utils import _log_key_event, _primary_down
 from logging_utils import miab_log
@@ -320,6 +321,14 @@ class SettingsDialog(wx.Dialog):
         )
         general_vs.Add(self.combo_departure_board, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
+        general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        general_vs.Add(wx.StaticText(self.general_page, label=_("Postcode lookup (Shift+P):")), 0, wx.LEFT, 8)
+        self.combo_postcode_lookup = wx.Choice(
+            self.general_page,
+            choices=[_("Use Included Data"), _("Search Online")],
+        )
+        general_vs.Add(self.combo_postcode_lookup, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+
         self.btn_gtfs = wx.Button(self.general_page, label=_("Refresh Transit Feed Catalog"))
         general_vs.Add(self.btn_gtfs, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         self.gtfs_refreshed = False
@@ -329,6 +338,12 @@ class SettingsDialog(wx.Dialog):
         self.cb_auto_updates = wx.CheckBox(
             self.general_page, label=_("Automatically check for updates at startup"))
         general_vs.Add(self.cb_auto_updates, 0, wx.LEFT | wx.BOTTOM, 8)
+
+        general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        self.cb_clear_favourites_on_exit = wx.CheckBox(
+            self.general_page,
+            label=_("Clear favourites and personal POIs when the app closes"))
+        general_vs.Add(self.cb_clear_favourites_on_exit, 0, wx.LEFT | wx.BOTTOM, 8)
 
         self.general_page.SetSizer(general_vs)
 
@@ -443,6 +458,8 @@ class SettingsDialog(wx.Dialog):
         self.cb_climate_zones.SetValue(settings.get("announce_climate_zones", True))
         self.cb_suburb_size.SetValue(settings.get("announce_suburb_size", False))
         self.cb_auto_updates.SetValue(settings.get("check_updates_at_startup", True))
+        self.cb_clear_favourites_on_exit.SetValue(
+            settings.get("clear_favourites_on_exit", EDUCATION_EDITION))
         spatial_mode = settings.get("spatial_tones_mode", "world")
         self.combo_spatial_tones.SetSelection(
             {"world": 0, "country": 1, "region": 2, "city": 2}.get(spatial_mode, 0))
@@ -461,6 +478,8 @@ class SettingsDialog(wx.Dialog):
         self.combo_departure_board.SetSelection(1 if departure_source == "google" else 0)
         poi_source = settings.get("poi_source", "osm")
         self.combo_poi_source.SetSelection(1 if poi_source == "here" else 0)
+        postcode_lookup = settings.get("postcode_lookup", "included")
+        self.combo_postcode_lookup.SetSelection(1 if postcode_lookup == "online" else 0)
         self.txt_google_key.SetValue(settings.get("google_api_key", ""))
         self.txt_mistral_key.SetValue(settings.get("mistral_api_key", ""))
         self.txt_here_key.SetValue(settings.get("here_api_key", ""))
@@ -519,6 +538,7 @@ class SettingsDialog(wx.Dialog):
             "announce_climate_zones": self.cb_climate_zones.GetValue(),
             "announce_suburb_size":   self.cb_suburb_size.GetValue(),
             "check_updates_at_startup": self.cb_auto_updates.GetValue(),
+            "clear_favourites_on_exit": self.cb_clear_favourites_on_exit.GetValue(),
             "spatial_tones_mode":     spatial_mode,
             "challenge_direction_mode": challenge_direction,
             "weather_temperature_unit": weather_units,
@@ -526,6 +546,7 @@ class SettingsDialog(wx.Dialog):
             "nav_provider":           nav_provider,
             "departure_board_source": departure_board_source,
             "poi_source":             "here" if self.combo_poi_source.GetSelection() == 1 else "osm",
+            "postcode_lookup":        "online" if self.combo_postcode_lookup.GetSelection() == 1 else "included",
             "google_api_key":         self.txt_google_key.GetValue().strip(),
             "mistral_api_key":         self.txt_mistral_key.GetValue().strip(),
             "here_api_key":             self.txt_here_key.GetValue().strip(),
@@ -875,6 +896,7 @@ class ToolsMenuDialog(wx.Dialog):
         ("Virgin Australia Booking", "virgin_booking"),
         ("Hotel Search",       "hotel_search"),
         ("Find Food",          "find_food"),
+        ("Order an Uber",      "order_uber"),
     ]
 
     def __init__(self, parent) -> None:

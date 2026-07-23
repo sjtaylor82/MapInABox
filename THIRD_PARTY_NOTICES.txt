@@ -38,6 +38,11 @@ Bundled and downloaded data
   https://download.geonames.org/export/dump/
 - Other GeoNames geographical features: licensed under Creative Commons
   Attribution 4.0 International. https://www.geonames.org/
+- The bundled offline postcode dataset is derived from the GeoNames postal
+  code export, licensed under Creative Commons Attribution 4.0
+  International. For Canada, the Netherlands, and the United Kingdom this
+  data is limited to the first part of the postcode only.
+  https://download.geonames.org/export/zip/
 - Natural Earth country boundaries: public-domain Natural Earth data.
   https://www.naturalearthdata.com/
 - OurAirports airport data: released to the public domain.

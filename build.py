@@ -2,15 +2,19 @@
 build.py — Map in a Box release build script
 
 Usage:
-    python build.py          — compress resources + PyInstaller only
-    python build.py install  — also run Inno Setup to produce the installer
-    python build.py mac      — build a macOS .app bundle (run on macOS)
+    python build.py                    — compress resources + PyInstaller only
+    python build.py install            — also run Inno Setup to produce the installer
+    python build.py mac                — build a macOS .app bundle (run on macOS)
+    python build.py install education  — build the Education edition installer
+                                          (Tools menu withheld; favourites/personal
+                                          POIs cleared on exit by default)
 
 Workflow:
     1. python build.py
     2. Test dist\MapInABox\MapInABox.exe
-    3. python build.py install
+    3. python build.py install [education]
     4. Ship installer\MapInABox-<version>-setup.exe
+       or installer\MapInABox-Education-<version>-setup.exe
 """
 
 import gzip
@@ -25,6 +29,7 @@ HERE      = os.path.dirname(os.path.abspath(__file__))
 ARGS = {arg.lower() for arg in sys.argv[1:]}
 DO_INSTALL = "install" in ARGS
 DO_MAC_APP = sys.platform == "darwin" or "mac" in ARGS or "app" in ARGS
+EDITION = "education" if "education" in ARGS else "pro"
 
 
 def step(n, msg):
@@ -44,13 +49,20 @@ if not m:
 VERSION = m.group(1)
 print(f"Version: {VERSION}")
 
-# ── Sync version into MapInABox.iss ──────────────────────────────────────────
+# ── Sync version + edition into MapInABox.iss ────────────────────────────────
 iss_path = os.path.join(HERE, "MapInABox.iss")
 if not DO_MAC_APP:
     iss = open(iss_path, encoding="utf-8").read()
+    if EDITION == "education":
+        app_name = "Map in a Box Education"
+        output_base = f"MapInABox-Education-{VERSION}-setup"
+    else:
+        app_name = "Map in a Box"
+        output_base = f"MapInABox-{VERSION}-setup"
+    iss = re.sub(r'(#define AppName\s+")[^"]+(")', rf'\g<1>{app_name}\2', iss)
     iss = re.sub(r'(#define AppVersion\s+")[^"]+(")', rf'\g<1>{VERSION}\2', iss)
     iss = re.sub(r'(AppVersion=).*',                       rf'\g<1>{VERSION}', iss)
-    iss = re.sub(r'(OutputBaseFilename=MapInABox-)[\d.]+', rf'\g<1>{VERSION}', iss)
+    iss = re.sub(r'(OutputBaseFilename=).*',               rf'\g<1>{output_base}', iss)
     iss = iss.replace('Create a &desktop shortcut', 'Create a desktop shortcut')
     iss = iss.replace('Open the &Manual', 'Open the Manual')
     manual_run = (
@@ -160,8 +172,26 @@ if not DO_MAC_APP:
         fail(f"PyInstaller omitted {len(missing_sounds)} sound files: {preview}")
     print(f"Verified bundled sound library: {len(bundled_sounds)} files")
 
+    # Drop the Education marker (same convention as the portable marker) so
+    # app_paths.EDUCATION_EDITION is True for this build. Its absence means Pro.
+    if EDITION == "education":
+        marker = os.path.join(dist_root, "_internal", "_education")
+        open(marker, "w").close()
+        print(f"WROTE {marker}  (Education edition)")
+
 if DO_MAC_APP:
     app_path = os.path.join(HERE, "dist", "MapInABox.app")
+    if EDITION == "education":
+        # PyInstaller's onedir layout places the bundled runtime under
+        # Contents/MacOS/_internal inside the .app. Verify this path after a
+        # PyInstaller version bump if the marker doesn't seem to take effect.
+        marker = os.path.join(app_path, "Contents", "MacOS", "_internal", "_education")
+        if os.path.isdir(os.path.dirname(marker)):
+            open(marker, "w").close()
+            print(f"WROTE {marker}  (Education edition)")
+        else:
+            print(f"WARN  expected {os.path.dirname(marker)} not found — "
+                  "Education marker NOT written, verify the bundle layout")
     print(f"\nMac app ready — test it before packaging:")
     print(f"  {app_path}")
 else:

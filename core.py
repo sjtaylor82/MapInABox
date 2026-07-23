@@ -67,14 +67,19 @@ from free import FreeExploreEngine
 from nav import NavigationEngine
 from here_poi import HereClient as HerePoi
 import mall_directory
-from app_paths import APP_DIR, CACHE_DIR, PORTABLE_MODE, RESOURCE_DIR, USER_DIR
+from postal_codes import PostalCodeLookup
+from network_utils import NETWORK_UNAVAILABLE_MESSAGE
+from app_paths import (
+    APP_DIR, CACHE_DIR, EDUCATION_EDITION, PORTABLE_MODE, RESOURCE_DIR,
+    USER_DIR,
+)
 from distance_units import (
     format_distance, format_distance_label, format_height, set_unit_system,
 )
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0.0.33'
+APP_VERSION   = '1.0.0.34'
 
 POI_LIVE_COOLDOWN_SECS = 3.0
 POI_BACKGROUND_WAIT_SECS = 2.0
@@ -92,6 +97,7 @@ SOUNDS_DIR             = os.path.join(BASE_DIR,  "sounds")
 COUNTRY_DIR            = os.path.join(SOUNDS_DIR, "countries")
 REGION_DIR             = os.path.join(SOUNDS_DIR, "regions")
 GEO_FEATURES_DIR       = os.path.join(BASE_DIR,  "GeoFeatures")
+POSTAL_CODES_DIR       = os.path.join(BASE_DIR,  "PostalCodes")
 
 # ── User data (AppData, or Data in portable mode) ────────────────────────────
 SETTINGS_PATH          = os.path.join(USER_DIR,  "settings.json")
@@ -872,6 +878,8 @@ DEFAULT_SETTINGS = {
     "language":               "",      # empty means system/default language
     "gnaf_enabled":           True,    # Australian address point overlay
     "jump_history":           [],      # last 5 J-key destinations [{label,lat,lon}]
+    # On in Education builds, off in Pro builds, unless the user overrides it.
+    "clear_favourites_on_exit": EDUCATION_EDITION,
     "logging": {
         "errors":        False,
         "street":        False,
@@ -1025,6 +1033,7 @@ from favourites import (
     add_or_replace_favourite,
     load_favourites,
     make_favourite,
+    save_favourites,
 )
 from street_data import StreetFetcher
 from mistral import MistralClient
@@ -2437,6 +2446,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self.sound  = SoundEngine()
         self._geo_features = GeoFeatures(GEO_FEATURES_DIR)
         self._geo_features_loading = False
+        self._postal_codes = PostalCodeLookup(POSTAL_CODES_DIR)
         self._geo_features_prefetch_lock = threading.Lock()
         self._geo_features_prefetched = set()
         self._geo_features_prefetching = set()
@@ -6003,14 +6013,35 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     pass
 
     def _announce_postcode(self):
-        """Fetch and announce postcode for current position via Nominatim."""
+        """Announce the postcode for the current position.
+
+        Uses the bundled offline dataset (GeoNames) by default, or a live
+        Nominatim reverse-geocode if the user has set "Postcode lookup" to
+        "Search Online" in Settings. See postal_codes.py for the offline
+        lookup's accuracy notes (nearest-point match, not a boundary
+        lookup, and outward-code-only for CA/GB/NL)."""
+        source = self.settings.get("postcode_lookup", "included")
+        lat, lon = self.lat, self.lon
+
+        if source != "online":
+            result = self._postal_codes.lookup(lat, lon)
+            if result:
+                postcode, place, admin1 = result
+                where = ", ".join(p for p in (place, admin1) if p)
+                msg = f"Postcode: {postcode}" + (f" ({where})" if where else "") + "."
+                self._status_update(msg, force=True)
+            else:
+                self._announce_transient_then_return(
+                    "No postcode found in the included data for this location.")
+            return
+
         self._status_update("Looking up postcode...")
         def _fetch():
             try:
                 postcode = None
                 for zoom in (18, 14, 10):
                     url = (f"https://nominatim.openstreetmap.org/reverse"
-                           f"?lat={self.lat}&lon={self.lon}&format=json&zoom={zoom}&addressdetails=1")
+                           f"?lat={lat}&lon={lon}&format=json&zoom={zoom}&addressdetails=1")
                     req = urllib.request.Request(url, headers={"User-Agent": "MapInABox/1.0"})
                     with urllib.request.urlopen(req, timeout=15) as resp:
                         data = json.loads(resp.read().decode())
@@ -6025,7 +6056,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         "No postcode found for this location.")
             except Exception:
                 wx.CallAfter(self._status_update,
-                             "Could not fetch postcode. Check internet connection.",
+                             f"Could not fetch postcode. {NETWORK_UNAVAILABLE_MESSAGE}",
                              True)
         threading.Thread(target=_fetch, daemon=True).start()
 
@@ -10041,11 +10072,25 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 pass
 
     def _finish_shutdown(self):
+        if self.settings.get("clear_favourites_on_exit", EDUCATION_EDITION):
+            self._clear_favourites_and_personal_pois()
         if hasattr(self, "_geo_features"):
             self._geo_features.cleanup_temp()
         pygame.quit()
         self.Destroy()
         os._exit(0)
+
+    def _clear_favourites_and_personal_pois(self):
+        """Wipe favourites.json and personal_pois.json (settings-gated)."""
+        try:
+            save_favourites([])
+        except Exception:
+            pass
+        try:
+            _save_personal_pois([])
+        except Exception:
+            pass
+        self._personal_pois = []
 
     def _status_update(self, msg, force=False):
         """Transient background status (loading, connecting) — AO2 only."""

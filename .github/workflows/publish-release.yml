@@ -30,21 +30,21 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: .github/workflows/publish-release.yml
+          cache-dependency-path: requirements.txt
 
       - name: Install build tools
         shell: powershell
         run: |
           python -m pip install --upgrade pip "setuptools<70" wheel
-          python -m pip install pyinstaller wxPython numpy pandas Pillow pygame shapely h3 tzfpy pycountry accessible-output2 google-genai google-api-core proto-plus certifi
+          python -m pip install -r requirements.txt
           choco install innosetup -y --no-progress
 
-      - name: Build Windows installer
+      - name: Build Windows installer (Pro)
         shell: powershell
         run: |
           python build.py install
 
-      - name: Build Windows portable zip
+      - name: Build Windows portable zip (Pro)
         shell: powershell
         run: |
           New-Item -Path dist\MapInABox\_internal\_portable -ItemType File -Force
@@ -54,6 +54,26 @@ jobs:
           }
           Compress-Archive -Path dist\MapInABox -DestinationPath MapInABox-Windows-portable.zip -Force
 
+      - name: Build Windows installer (Education)
+        shell: powershell
+        run: |
+          python build.py install education
+
+      - name: Build Windows portable zip (Education)
+        shell: powershell
+        run: |
+          # build.py already dropped _education into this fresh dist (PyInstaller
+          # --clean rebuilds it above) — add the portable marker on top of it.
+          New-Item -Path dist\MapInABox\_internal\_portable -ItemType File -Force
+          if (-not (Test-Path -LiteralPath dist\MapInABox\_internal\_education)) {
+            throw "Education marker missing from dist — build.py did not run in education mode."
+          }
+          $soundFiles = @(Get-ChildItem -LiteralPath dist\MapInABox\_internal\sounds -Recurse -File)
+          if ($soundFiles.Count -lt 2 -or -not (Test-Path -LiteralPath dist\MapInABox\_internal\sounds\credits.txt)) {
+            throw "Portable sound library is empty or incomplete."
+          }
+          Compress-Archive -Path dist\MapInABox -DestinationPath MapInABox-Windows-Education-portable.zip -Force
+
       - name: Upload Windows installer artifact
         uses: actions/upload-artifact@v4
         with:
@@ -61,6 +81,7 @@ jobs:
           path: |
             installer/*.exe
             MapInABox-Windows-portable.zip
+            MapInABox-Windows-Education-portable.zip
           if-no-files-found: error
 
   build-macos:
@@ -76,27 +97,12 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: .github/workflows/publish-release.yml
+          cache-dependency-path: requirements.txt
 
       - name: Install build tools
         run: |
           python -m pip install --upgrade pip "setuptools<70" wheel
-          python -m pip install \
-            pyinstaller \
-            wxPython \
-            numpy \
-            pandas \
-            Pillow \
-            pygame \
-            shapely \
-            h3 \
-            tzfpy \
-            pycountry \
-            accessible-output2 \
-            google-genai \
-            google-api-core \
-            proto-plus \
-            certifi
+          python -m pip install -r requirements.txt
 
       - name: Build macOS app bundle
         run: |
