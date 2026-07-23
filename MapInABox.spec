@@ -42,6 +42,8 @@ a = Analysis(
         ('manual.html',          '.'),
         ('LICENSE',              '.'),
         ('THIRD_PARTY_NOTICES.txt', '.'),
+        ('TRADEMARKS.md',        '.'),
+        ('portable_updater.ps1',    '.'),
         ('locale',               'locale'),
         ('sounds',               'sounds'),
         ('GeoFeatures',          'GeoFeatures'),

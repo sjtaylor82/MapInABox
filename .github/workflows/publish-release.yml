@@ -43,6 +43,8 @@ jobs:
         shell: powershell
         run: |
           python build.py install
+          Copy-Item -LiteralPath dist\MapInABox\_internal\update-manifest.json `
+            -Destination MapInABox-Windows-update.json
 
       - name: Build Windows portable zip (Pro)
         shell: powershell
@@ -58,6 +60,8 @@ jobs:
         shell: powershell
         run: |
           python build.py install education
+          Copy-Item -LiteralPath dist\MapInABox\_internal\update-manifest.json `
+            -Destination MapInABox-Windows-Education-update.json
 
       - name: Build Windows portable zip (Education)
         shell: powershell
@@ -82,6 +86,8 @@ jobs:
             installer/*.exe
             MapInABox-Windows-portable.zip
             MapInABox-Windows-Education-portable.zip
+            MapInABox-Windows-update.json
+            MapInABox-Windows-Education-update.json
           if-no-files-found: error
 
   build-macos:
@@ -151,7 +157,7 @@ jobs:
         shell: bash
         run: |
           cd artifacts
-          find windows macos -type f \( -name '*.exe' -o -name '*.zip' \) -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+          find windows macos -type f \( -name '*.exe' -o -name '*.zip' -o -name '*.json' \) -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -159,6 +165,7 @@ jobs:
           files: |
             artifacts/windows/**/*.exe
             artifacts/windows/**/*.zip
+            artifacts/windows/**/*.json
             artifacts/macos/**/*.zip
             artifacts/SHA256SUMS.txt
           generate_release_notes: true

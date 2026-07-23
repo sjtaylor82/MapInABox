@@ -1,9 +1,10 @@
 Map in a Box — Third-Party Notices
 ==================================
 
-Map in a Box source code is licensed under the MIT License. Third-party
-software and data retain their own licences. Inclusion here does not imply
-endorsement by their authors or providers.
+Map in a Box versions 2026.7.0 and later are licensed under GNU GPL version 3
+or later. Versions through 1.0.0.34 remain under the MIT License distributed
+with those releases. Third-party software and data retain their own licences.
+Inclusion here does not imply endorsement by their authors or providers.
 
 Bundled software
 ----------------
@@ -64,7 +65,7 @@ Online services
 Google, HERE, Mistral, OpenRouteService, OpenSky, AviationStack, Wikipedia,
 Mapillary, Priceline, Tripadvisor, Serper, RapidAPI, Virgin Australia, and
 other linked services are governed by their own terms. They are not relicensed
-under the Map in a Box MIT License.
+under the Map in a Box project licence.
 
 The authoritative licence is the licence distributed by each component or
 data provider. Project links above are provided to make those terms easier to

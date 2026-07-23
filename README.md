@@ -16,7 +16,24 @@ The program combines global geography with street-level navigation. You can expl
 
 ## License
 
-Map in a Box source code is released under the MIT License. See [LICENSE](LICENSE). Bundled third-party software and data retain their own licences; see [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
+Map in a Box versions 2026.7.0 and later are free software released under
+the GNU General Public License version 3 or later. See [LICENSE](LICENSE).
+Anyone distributing the application or a modified version must comply with
+the GPL, including its corresponding-source requirements. Versions through
+1.0.0.34 remain available under the MIT License included with those releases.
+Bundled third-party software and data retain their own licences; see
+[THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
+
+The Map in a Box name and branding identify Sam Taylor's official builds.
+The GPL does not grant permission to imply that a modified build is an
+official or endorsed Map in a Box release. See [TRADEMARKS.md](TRADEMARKS.md).
+
+## Versioning
+
+Map in a Box uses calendar versions in the form `YEAR.MONTH.PATCH`. For
+example, `2026.7.0` is the initial July 2026 release and `2026.7.1` is a
+corrective release from the same month. Historical `1.0.0.x` tags predate
+this scheme and remain unchanged.
 
 ## Downloads, install, and uninstall
 

@@ -79,7 +79,7 @@ from distance_units import (
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '1.0.0.34'
+APP_VERSION   = '2026.7.0'
 
 POI_LIVE_COOLDOWN_SECS = 3.0
 POI_BACKGROUND_WAIT_SECS = 2.0
@@ -13306,7 +13306,14 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         style=wx.DEFAULT_DIALOG_STYLE | wx.STAY_ON_TOP)
         vs = wx.BoxSizer(wx.VERTICAL)
 
-        header = wx.StaticText(dlg, label=f"{APP_NAME}\nVersion {APP_VERSION}\nCopyright © 2026 Sam Taylor. Licensed under the MIT License.")
+        header = wx.StaticText(
+            dlg,
+            label=(
+                f"{APP_NAME}\nVersion {APP_VERSION}\n"
+                "Copyright © 2026 Sam Taylor. "
+                "Licensed under GNU GPL version 3 or later."
+            ),
+        )
         vs.Add(header, 0, wx.ALL, 14)
 
         message = (

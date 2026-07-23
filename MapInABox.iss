@@ -7,13 +7,13 @@
 ;      iscc MapInABox.iss
 
 #define AppName    "Map in a Box"
-#define AppVersion "1.0.0.33"
+#define AppVersion "2026.7.0"
 #define AppExe     "MapInABox.exe"
 #define AppDir     "dist\MapInABox"
 
 [Setup]
 AppName={#AppName}
-AppVersion=1.0.0.33
+AppVersion=2026.7.0
 AppVerName={#AppName} {#AppVersion}
 AppPublisher=Sam Taylor
 AppPublisherURL=https://github.com/sjtaylor82/MapInABox
@@ -30,7 +30,7 @@ DefaultGroupName={#AppName}
 
 ; Installer output
 OutputDir=installer
-OutputBaseFilename=MapInABox-{#AppVersion}-setup
+OutputBaseFilename=MapInABox-2026.7.0-setup
 
 ; Compression — lzma2 ultra gives the smallest exe at the cost of slower build
 Compression=lzma2/ultra64

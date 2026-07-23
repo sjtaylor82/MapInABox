@@ -25,6 +25,8 @@ import subprocess
 import sys
 import tempfile
 
+from package_manifest import write_manifest
+
 HERE      = os.path.dirname(os.path.abspath(__file__))
 ARGS = {arg.lower() for arg in sys.argv[1:]}
 DO_INSTALL = "install" in ARGS
@@ -146,7 +148,7 @@ if result.returncode != 0:
 # Keep legal notices visible at the top level of distributable packages.
 if not DO_MAC_APP:
     dist_root = os.path.join(HERE, "dist", "MapInABox")
-    for notice_name in ("LICENSE", "THIRD_PARTY_NOTICES.txt"):
+    for notice_name in ("LICENSE", "THIRD_PARTY_NOTICES.txt", "TRADEMARKS.md"):
         shutil.copy2(os.path.join(HERE, notice_name),
                      os.path.join(dist_root, notice_name))
 
@@ -178,6 +180,9 @@ if not DO_MAC_APP:
         marker = os.path.join(dist_root, "_internal", "_education")
         open(marker, "w").close()
         print(f"WROTE {marker}  (Education edition)")
+
+    manifest_path = write_manifest(dist_root, VERSION, EDITION)
+    print(f"WROTE {manifest_path}  (portable update manifest)")
 
 if DO_MAC_APP:
     app_path = os.path.join(HERE, "dist", "MapInABox.app")
