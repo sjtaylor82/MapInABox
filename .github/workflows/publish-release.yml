@@ -63,10 +63,10 @@ jobs:
         shell: powershell
         run: |
           # build.py already dropped _education into this fresh dist (PyInstaller
-          # --clean rebuilds it above) — add the portable marker on top of it.
+          # --clean rebuilds it above) - add the portable marker on top of it.
           New-Item -Path dist\MapInABox\_internal\_portable -ItemType File -Force
           if (-not (Test-Path -LiteralPath dist\MapInABox\_internal\_education)) {
-            throw "Education marker missing from dist — build.py did not run in education mode."
+            throw "Education marker missing from dist - build.py did not run in education mode."
           }
           $soundFiles = @(Get-ChildItem -LiteralPath dist\MapInABox\_internal\sounds -Recurse -File)
           if ($soundFiles.Count -lt 2 -or -not (Test-Path -LiteralPath dist\MapInABox\_internal\sounds\credits.txt)) {
