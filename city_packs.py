@@ -415,15 +415,23 @@ class CityPackWizardDialog(wx.Dialog):
 
     PAGE_INTRO, PAGE_COUNTRY, PAGE_AREA, PAGE_SUBURBS, PAGE_CONFIRM = range(5)
 
-    def __init__(self, parent, street_fetcher, df, initial_country_name=None):
+    def __init__(
+        self,
+        parent,
+        street_fetcher,
+        df,
+        initial_country_name=None,
+        transport_download_cb=None,
+    ):
         super().__init__(
-            parent, title="Download City Data",
+            parent, title="Download Area Data",
             size=(600, 480),
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
         )
         self._street_fetcher = street_fetcher
         self._df = df
         self._initial_country_name = initial_country_name or ""
+        self._transport_download_cb = transport_download_cb
         self._country_name = None
         self._area_label = None
         self._all_suburbs = []        # full discovered suburb_dict list for the current area
@@ -537,6 +545,11 @@ class CityPackWizardDialog(wx.Dialog):
         _bind_typeahead(self.state_list)
         vs.Add(self.state_list, 1, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
 
+        transport_btn = wx.Button(
+            page, label="Download &Transport Data for This Area")
+        transport_btn.Enable(self._transport_download_cb is not None)
+        vs.Add(transport_btn, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
         find_state_btn = wx.Button(page, label="&Find Suburbs In This State")
         vs.Add(find_state_btn, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
@@ -566,6 +579,7 @@ class CityPackWizardDialog(wx.Dialog):
 
         back_btn.Bind(
             wx.EVT_BUTTON, lambda e: self._goto(self.PAGE_COUNTRY, self.country_list))
+        transport_btn.Bind(wx.EVT_BUTTON, self._on_download_transport)
         find_state_btn.Bind(wx.EVT_BUTTON, self._on_find_state)
         self.state_list.Bind(wx.EVT_LISTBOX_DCLICK, self._on_find_state)
         find_range_btn.Bind(wx.EVT_BUTTON, self._on_find_postcode_range)
@@ -587,6 +601,51 @@ class CityPackWizardDialog(wx.Dialog):
             return
         state = self.state_list.GetString(sel)
         self._start_area_discovery(state, area_name=state, country=self._country_name)
+
+    def _on_download_transport(self, event):
+        """Start GTFS prefetch for the selected region's largest listed city."""
+        sel = self.state_list.GetSelection()
+        if sel == wx.NOT_FOUND or not self._transport_download_cb:
+            return
+        state = self.state_list.GetString(sel)
+        rows = self._df[
+            (self._df["country"] == self._country_name)
+            & (self._df["admin_name"] == state)
+        ].copy()
+        if rows.empty:
+            wx.MessageBox(
+                f"No representative location was found for {state}.",
+                "Transport Download", wx.OK | wx.ICON_INFORMATION, self,
+            )
+            return
+        try:
+            import pandas as pd
+            rows["_population_sort"] = pd.to_numeric(
+                rows.get("population", 0), errors="coerce").fillna(0)
+            row = rows.sort_values(
+                "_population_sort", ascending=False).iloc[0]
+            lat, lon = float(row["lat"]), float(row["lng"])
+        except Exception as exc:
+            miab_log(
+                "errors",
+                f"[CityPacks] Could not choose transport point for {state}: {exc}",
+                None,
+            )
+            wx.MessageBox(
+                f"Could not determine where to download transport data for {state}.",
+                "Transport Download", wx.OK | wx.ICON_WARNING, self,
+            )
+            return
+
+        started = self._transport_download_cb(
+            state, self._country_name, lat, lon)
+        if started:
+            msg = (
+                f"Transport data for {state} is downloading in the background. "
+                "You can continue using this wizard."
+            )
+            self.area_status.SetLabel(msg)
+            _speak(msg)
 
     def _on_find_postcode_range(self, event):
         country_code = "au" if self._country_name == "Australia" else ""

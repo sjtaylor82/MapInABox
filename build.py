@@ -5,6 +5,7 @@ Usage:
     python build.py                    — compress resources + PyInstaller only
     python build.py install            — also run Inno Setup to produce the installer
     python build.py mac                — build a macOS .app bundle (run on macOS)
+    python build.py mac education      — build the macOS Education app
     python build.py install education  — build the Education edition installer
                                           (Tools menu withheld; favourites/personal
                                           POIs cleared on exit by default)
@@ -136,11 +137,16 @@ step(2, "Running PyInstaller")
 
 PYI_WORK = os.path.join(tempfile.gettempdir(), "MapInABox-pyinstaller")
 
+build_env = os.environ.copy()
+build_env["MIAB_EDITION"] = EDITION
+build_env["MIAB_VERSION"] = VERSION
+
 result = subprocess.run(
     [sys.executable, "-m", "PyInstaller",
      os.path.join(HERE, "MapInABox.spec"), "--noconfirm", "--clean",
      "--workpath", PYI_WORK],
     cwd=HERE,
+    env=build_env,
 )
 if result.returncode != 0:
     fail("PyInstaller exited with errors (see above)")
@@ -174,29 +180,27 @@ if not DO_MAC_APP:
         fail(f"PyInstaller omitted {len(missing_sounds)} sound files: {preview}")
     print(f"Verified bundled sound library: {len(bundled_sounds)} files")
 
-    # Drop the Education marker (same convention as the portable marker) so
-    # app_paths.EDUCATION_EDITION is True for this build. Its absence means Pro.
-    if EDITION == "education":
-        marker = os.path.join(dist_root, "_internal", "_education")
-        open(marker, "w").close()
-        print(f"WROTE {marker}  (Education edition)")
+    marker = os.path.join(dist_root, "_internal", "_education")
+    if (EDITION == "education") != os.path.isfile(marker):
+        fail(f"{EDITION.title()} build has an incorrect Education marker")
+    print(f"Verified {EDITION.title()} edition marker state")
 
     manifest_path = write_manifest(dist_root, VERSION, EDITION)
     print(f"WROTE {manifest_path}  (portable update manifest)")
 
 if DO_MAC_APP:
-    app_path = os.path.join(HERE, "dist", "MapInABox.app")
-    if EDITION == "education":
-        # PyInstaller's onedir layout places the bundled runtime under
-        # Contents/MacOS/_internal inside the .app. Verify this path after a
-        # PyInstaller version bump if the marker doesn't seem to take effect.
-        marker = os.path.join(app_path, "Contents", "MacOS", "_internal", "_education")
-        if os.path.isdir(os.path.dirname(marker)):
-            open(marker, "w").close()
-            print(f"WROTE {marker}  (Education edition)")
-        else:
-            print(f"WARN  expected {os.path.dirname(marker)} not found — "
-                  "Education marker NOT written, verify the bundle layout")
+    app_name = ("MapInABox-Education.app"
+                if EDITION == "education" else "MapInABox.app")
+    app_path = os.path.join(HERE, "dist", app_name)
+    markers = [
+        os.path.join(root, name)
+        for root, _dirs, names in os.walk(app_path)
+        for name in names
+        if name == "_education"
+    ]
+    if (EDITION == "education") != bool(markers):
+        fail(f"{EDITION.title()} macOS bundle has an incorrect Education marker")
+    print(f"Verified {EDITION.title()} edition marker state")
     print(f"\nMac app ready — test it before packaging:")
     print(f"  {app_path}")
 else:

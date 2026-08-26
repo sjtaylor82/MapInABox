@@ -47,7 +47,6 @@ class LookupsMixin:
                 self._status_update(message, force=True)
 
         if not self.last_country_found or self.last_country_found == "Open Water":
-            self._set_country_facts_panel({}, "Open Water")
             say("No facts for open water.")
             return
         canonical = self._country_aliases().get(
@@ -58,7 +57,6 @@ class LookupsMixin:
             None
         )
         if found:
-            self._set_country_facts_panel(found, self.last_country_found)
             say(
                 f"{found.get('name')}.  "
                 f"Capital: {found.get('capital')}.  "
@@ -67,7 +65,6 @@ class LookupsMixin:
                 f"Fact: {found.get('fact')}"
             )
         else:
-            self._set_country_facts_panel({}, self.last_country_found)
             say(f"No facts found for {self.last_country_found}.")
 
     def announce_wikipedia_summary(self):
@@ -850,7 +847,7 @@ class LookupsMixin:
     def _country_at_point(self, lat, lon):
         """Return the country polygon containing lat/lon, or empty string."""
         try:
-            from shapely.geometry import Point, Polygon, shape
+            from shapely.geometry import Point, shape
             if not hasattr(self, "_country_polygon_cache"):
                 from core import GEOJSON_PATH
                 countries = []
@@ -863,19 +860,25 @@ class LookupsMixin:
                                 props.get("ADMIN") or "").strip()
                         if name:
                             countries.append((name, shape(feature["geometry"])))
-                countries.append(("Antarctica", Polygon([
-                    (-180, -90), (-180, -60), (-150, -65), (-120, -67),
-                    (-90, -65), (-60, -70), (-30, -72), (0, -70),
-                    (30, -68), (60, -70), (90, -65), (120, -67),
-                    (150, -65), (180, -60), (180, -90), (-180, -90),
-                ])))
                 self._country_polygon_cache = countries
 
             point = Point(lon, lat)
+            antarctica_geom = None
             for name, geom in self._country_polygon_cache:
+                if name == "Antarctica":
+                    antarctica_geom = geom
                 minx, miny, maxx, maxy = geom.bounds
                 if minx <= lon <= maxx and miny <= lat <= maxy and geom.covers(point):
                     return name
+            # The source coastline is simplified enough that points beside
+            # McMurdo/Hut Point can fall a fraction of a degree outside the
+            # polygon. Antarctica has no city records, so the ordinary coastal
+            # fallback otherwise borrows nearby New Zealand place data.  Keep a
+            # small polar coastline tolerance without classifying the entire
+            # region south of 60 degrees as land.
+            if (lat < -60.0 and antarctica_geom is not None
+                    and antarctica_geom.distance(point) <= 0.1):
+                return "Antarctica"
         except Exception:
             return ""
         return ""

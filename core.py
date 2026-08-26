@@ -79,7 +79,7 @@ from distance_units import (
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '2026.7.0'
+APP_VERSION   = '2026.8.0'
 
 POI_LIVE_COOLDOWN_SECS = 3.0
 POI_BACKGROUND_WAIT_SECS = 2.0
@@ -1571,22 +1571,38 @@ class WorldMapPanel(wx.Panel):
         self._flash_rings = []
         self._flash_cx    = 0.0
         self._flash_cy    = 0.0
+        self._country_visual_generation = 0
         self._bg_bitmap   = None
         self._bg_bitmap_mode = None
+        self._bg_bitmap_view_key = None
+        self._view_bounds_cache_key = None
+        self._view_bounds_cache_value = None
+        self._country_bounds_cache = {}
         self._label_cache_size = (-1, -1)
         self._classroom_trail = []
+        self._visual_assist_caption = ""
+        self._visual_assist_caption_generation = 0
+        self._visual_assist_pulse_timer = wx.Timer(self)
+        self._visual_assist_pulse_until = 0.0
         self.Bind(wx.EVT_PAINT, self._on_paint)
         self.Bind(wx.EVT_SIZE,  self._on_size)
+        self.Bind(wx.EVT_TIMER, self._on_visual_assist_pulse,
+                  self._visual_assist_pulse_timer)
 
     def _on_size(self, event):
         self._label_cache_size = (-1, -1)
         self._bg_bitmap = None   # invalidate background cache
         self._bg_bitmap_mode = None
+        self._bg_bitmap_view_key = None
         self.Refresh()
         event.Skip()
 
     def set_position(self, lat, lon, street_mode=False, street_label=""):
-        if self._classroom_mode_active():
+        position_changed = (
+            float(lat) != float(self.lat) or float(lon) != float(self.lon)
+            or bool(street_mode) != bool(self.street_mode)
+        )
+        if self._classroom_mode_active() and position_changed:
             point = (float(lat), float(lon), bool(street_mode))
             if not self._classroom_trail or point[:2] != self._classroom_trail[-1][:2]:
                 self._classroom_trail.append(point)
@@ -1595,13 +1611,56 @@ class WorldMapPanel(wx.Panel):
         self.lon          = lon
         self.street_mode  = street_mode
         self.street_label = street_label
+        if self._classroom_mode_active():
+            self._visual_assist_pulse_until = time.monotonic() + 0.9
+            if not self._visual_assist_pulse_timer.IsRunning():
+                self._visual_assist_pulse_timer.Start(140)
+        if not street_mode and self._visual_zoom_factor() > 1:
+            self._bg_bitmap = None
+            self._bg_bitmap_view_key = None
         self.Refresh()
 
     def set_classroom_mode(self, enabled):
         """Start or stop a visual map session without adding focusable UI."""
         if enabled:
             self._classroom_trail = [(float(self.lat), float(self.lon), bool(self.street_mode))]
+            self._visual_assist_pulse_until = time.monotonic() + 0.9
+            self._visual_assist_pulse_timer.Start(140)
+        else:
+            self._visual_assist_pulse_timer.Stop()
+            self._visual_assist_caption_generation += 1
+            self._visual_assist_caption = ""
         self.Refresh()
+
+    def show_visual_assist_caption(self, message, duration_ms=7000):
+        """Show requested/spoken information temporarily in Visual Assist."""
+        if not self._classroom_mode_active():
+            return
+        text = " ".join(str(message or "").split())
+        if not text:
+            return
+        self._visual_assist_caption_generation += 1
+        generation = self._visual_assist_caption_generation
+        self._visual_assist_caption = text
+        self.Refresh(False)
+
+        def clear_caption():
+            if generation != self._visual_assist_caption_generation:
+                return
+            self._visual_assist_caption = ""
+            self.Refresh(False)
+
+        wx.CallLater(max(1, int(duration_ms)), clear_caption)
+
+    def _on_visual_assist_pulse(self, event):
+        if (self._classroom_mode_active()
+                and time.monotonic() < self._visual_assist_pulse_until
+                and self.IsShownOnScreen()):
+            self.Refresh(False)
+        else:
+            self._visual_assist_pulse_timer.Stop()
+            if self._classroom_mode_active():
+                self.Refresh(False)
 
     def _classroom_mode_active(self):
         return bool(self._owner and getattr(self._owner, "_map_fullscreen", False))
@@ -1617,7 +1676,7 @@ class WorldMapPanel(wx.Panel):
         expected_street = bool(geo_kwargs)
         points = []
         last_lon = None
-        gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(wx.Colour(0, 235, 255, 230)).Width(4)))
+        gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(wx.Colour(70, 190, 205, 135)).Width(2)))
         for lat, lon, street in self._classroom_trail:
             if street != expected_street:
                 points = []
@@ -1659,31 +1718,21 @@ class WorldMapPanel(wx.Panel):
         if not self._classroom_mode_active() or w < 240 or h < 160:
             return
         owner = self._owner
-        title = (getattr(owner, "last_location_str", "") or self.street_label or
-                 getattr(owner, "last_country_found", "") or "Current position")
-        title = str(title).strip()
-        if len(title) > 72:
-            title = title[:69].rstrip() + "..."
-        context = []
-        for value in (getattr(owner, "last_state_found", ""),
-                      getattr(owner, "last_country_found", ""),
-                      getattr(owner, "current_continent", "")):
-            value = str(value or "").strip()
-            if value and value not in context and value.lower() != title.lower():
-                context.append(value)
         if getattr(owner, "_walking_mode", False):
             mode = "Walking map"
         elif self.street_mode:
             mode = "Street map"
+        elif self._map_display_mode() == "country":
+            mode = "Country map"
         else:
             mode = "World map"
+        mode += f"  \N{BULLET}  {self._visual_zoom_factor()}x"
         coords = (self._coordinate_text(self.lat, "N", "S") + "   " +
                   self._coordinate_text(self.lon, "E", "W"))
-        detail = "  \N{BULLET}  ".join(context)
         font_size = max(13, min(24, int(h / 32)))
         small_size = max(10, min(17, int(font_size * .7)))
         pad = max(10, int(font_size * .65))
-        band_h = int(font_size * 3.5)
+        band_h = int(font_size * 2.7)
         gc.SetBrush(gc.CreateBrush(wx.Brush(wx.Colour(5, 16, 30, 225))))
         gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(wx.Colour(0, 235, 255)).Width(2)))
         gc.DrawRoundedRectangle(pad, pad, max(1, w - pad * 2), band_h, 8)
@@ -1691,16 +1740,12 @@ class WorldMapPanel(wx.Panel):
             wx.Font(font_size, wx.FONTFAMILY_SWISS,
                     wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD),
             wx.Colour(255, 255, 255)))
-        gc.DrawText(title, pad * 2, pad * 1.45)
+        gc.DrawText(mode, pad * 2, pad * 1.35)
         gc.SetFont(gc.CreateFont(
             wx.Font(small_size, wx.FONTFAMILY_SWISS,
                     wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL),
             wx.Colour(190, 245, 255)))
-        second_line = detail or mode
-        if detail:
-            second_line += "  \N{BULLET}  " + mode
-        gc.DrawText(second_line, pad * 2, pad * 1.55 + font_size * 1.25)
-        gc.DrawText(coords, pad * 2, pad * 1.55 + font_size * 2.05)
+        gc.DrawText(coords, pad * 2, pad * 1.45 + font_size * 1.2)
         # Shape plus label means north is not communicated by colour alone.
         nx, ny = w - pad * 3, pad + band_h + pad * 2
         gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(wx.Colour(255, 255, 255)).Width(3)))
@@ -1713,21 +1758,137 @@ class WorldMapPanel(wx.Panel):
             wx.Colour(255, 255, 255)))
         gc.DrawText("N", nx - small_size / 2, ny - small_size * 1.4)
 
+    def _draw_visual_assist_caption(self, gc, w, h):
+        """Draw the temporary visual equivalent of requested speech."""
+        text = self._visual_assist_caption
+        if not self._classroom_mode_active() or not text or w < 240 or h < 160:
+            return
+        font_size = max(14, min(24, int(h / 27)))
+        pad = max(12, int(font_size * .7))
+        max_width = max(100, w - pad * 4)
+        gc.SetFont(gc.CreateFont(
+            wx.Font(font_size, wx.FONTFAMILY_SWISS,
+                    wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD),
+            wx.Colour(255, 255, 255)))
+        lines = []
+        current = ""
+        for word in text.split():
+            candidate = f"{current} {word}".strip()
+            if current and gc.GetTextExtent(candidate)[0] > max_width:
+                lines.append(current)
+                current = word
+            else:
+                current = candidate
+        if current:
+            lines.append(current)
+        max_lines = max(2, min(6, int((h * .38) / (font_size * 1.35))))
+        if len(lines) > max_lines:
+            lines = lines[:max_lines]
+            lines[-1] = lines[-1].rstrip(" .") + "…"
+        line_h = int(font_size * 1.35)
+        box_h = pad * 2 + line_h * len(lines)
+        box_x = pad
+        box_y = h - box_h - pad
+        box_w = w - pad * 2
+        gc.SetBrush(gc.CreateBrush(wx.Brush(wx.Colour(3, 10, 22, 238))))
+        gc.SetPen(gc.CreatePen(
+            wx.GraphicsPenInfo(wx.Colour(255, 215, 50)).Width(3)))
+        gc.DrawRoundedRectangle(box_x, box_y, box_w, box_h, 10)
+        for index, line in enumerate(lines):
+            gc.DrawText(line, box_x + pad,
+                        box_y + pad + index * line_h)
+
     def set_flash(self, name, rings_idx, centroid_lon, centroid_lat):
+        self._country_visual_generation += 1
+        self._country_visual_shown_at = time.time()
         self._flash_name  = name
         self._flash_rings = rings_idx
         self._flash_cx    = centroid_lon
         self._flash_cy    = centroid_lat
         self.Refresh()
-        wx.CallLater(2500, self._clear_flash)
+        # F8 may also trigger an external visual-description utility.  Refresh
+        # merely queues a paint, allowing that utility to capture the old map.
+        # Update synchronously so the country silhouette exists before the key
+        # handler returns and a screenshot can be taken.
+        self.Update()
+        return self._country_visual_generation
 
     def _clear_flash(self):
+        self._country_visual_generation += 1
         self._flash_name  = ""
         self._flash_rings = []
         self.Refresh()
 
+    def dismiss_country_visual(self):
+        if self._flash_name:
+            self._clear_flash()
+
+    def _visual_zoom_factor(self):
+        owner = self._owner_ref()
+        return int(getattr(owner, "map_zoom_factor", 1)) if owner else 1
+
+    def _view_bounds(self, w, h):
+        zoom = max(1.0, float(self._visual_zoom_factor()))
+        owner = self._owner_ref()
+        country = getattr(owner, "last_country_found", "") if owner else ""
+        cache_key = (w, h, self._map_display_mode(), zoom,
+                     round(self.lat, 5) if zoom > 1 else None,
+                     round(self.lon, 5) if zoom > 1 else None, country)
+        if cache_key == self._view_bounds_cache_key:
+            return self._view_bounds_cache_value
+        lon_min, lon_max, lat_min, lat_max = -180.0, 180.0, -90.0, 90.0
+        if self._map_display_mode() == "country":
+            cached_country_bounds = self._country_bounds_cache.get(country)
+            if cached_country_bounds:
+                lon_min, lon_max, lat_min, lat_max = cached_country_bounds
+            else:
+                entry = self._country_entry_for(country)
+                points = []
+                centre = float(entry.get("centroid_lon", 0.0)) if entry else 0.0
+                for ring_idx in (entry.get("rings_idx", []) if entry else []):
+                    if not (0 <= ring_idx < len(_GEO_RINGS)):
+                        continue
+                    for lon, lat in _GEO_RINGS[ring_idx]:
+                        while lon - centre > 180: lon -= 360
+                        while lon - centre < -180: lon += 360
+                        points.append((lon, lat))
+                if points:
+                    lon_min, lon_max = min(p[0] for p in points), max(p[0] for p in points)
+                    lat_min, lat_max = min(p[1] for p in points), max(p[1] for p in points)
+                    lon_pad = max(.3, (lon_max - lon_min) * .10)
+                    lat_pad = max(.3, (lat_max - lat_min) * .10)
+                    lon_min -= lon_pad; lon_max += lon_pad
+                    lat_min -= lat_pad; lat_max += lat_pad
+                    self._country_bounds_cache[country] = (
+                        lon_min, lon_max, lat_min, lat_max)
+        lon_span = max(.1, lon_max - lon_min)
+        lat_span = max(.1, lat_max - lat_min)
+        panel_ratio = max(.2, (w - 12) / max(1.0, h - 12))
+        if lon_span / lat_span < panel_ratio:
+            lon_span = lat_span * panel_ratio
+        else:
+            lat_span = lon_span / panel_ratio
+        if zoom > 1:
+            centre_lon, centre_lat = float(self.lon), float(self.lat)
+        else:
+            centre_lon = (lon_min + lon_max) / 2
+            centre_lat = (lat_min + lat_max) / 2
+        lon_span = min(360.0, lon_span / zoom)
+        lat_span = min(180.0, lat_span / zoom)
+        centre_lat = max(-90 + lat_span / 2, min(90 - lat_span / 2, centre_lat))
+        result = (centre_lon - lon_span / 2, centre_lon + lon_span / 2,
+                  centre_lat - lat_span / 2, centre_lat + lat_span / 2)
+        self._view_bounds_cache_key = cache_key
+        self._view_bounds_cache_value = result
+        return result
+
     def _geo_to_px(self, lon, lat, w, h, margin=6,
-                   lon_min=-180, lon_max=180, lat_min=-90, lat_max=90):
+                   lon_min=None, lon_max=None, lat_min=None, lat_max=None):
+        if None in (lon_min, lon_max, lat_min, lat_max):
+            lon_min, lon_max, lat_min, lat_max = self._view_bounds(w, h)
+        centre_lon = (lon_min + lon_max) / 2
+        while lon - centre_lon > 180: lon -= 360
+        while lon - centre_lon < -180: lon += 360
         x = margin + (lon - lon_min) / (lon_max - lon_min) * (w - 2 * margin)
         y = margin + (lat_max - lat) / (lat_max - lat_min) * (h - 2 * margin)
         return int(x), int(y)
@@ -1742,8 +1903,7 @@ class WorldMapPanel(wx.Panel):
             lon_min = self.lon - span;  lon_max = self.lon + span
             lat_min = self.lat - span;  lat_max = self.lat + span
         else:
-            lon_min = -180; lon_max = 180
-            lat_min = -90;  lat_max = 90
+            lon_min, lon_max, lat_min, lat_max = self._view_bounds(w, h)
         lon = lon_min + ((x - margin) / (w - 2 * margin)) * (lon_max - lon_min)
         lat = lat_max - ((y - margin) / (h - 2 * margin)) * (lat_max - lat_min)
         lat = max(-90.0, min(90.0, lat))
@@ -1760,11 +1920,16 @@ class WorldMapPanel(wx.Panel):
             return
 
         mode = self._map_display_mode()
+        zoom = self._visual_zoom_factor()
+        view_key = (mode, zoom,
+                    round(self.lat, 4) if zoom > 1 else None,
+                    round(self.lon, 4) if zoom > 1 else None)
 
         # Build background bitmap once for the current map mode.
         if (not getattr(self, '_bg_bitmap', None) or
                 getattr(self, '_bg_bitmap_size', None) != (w, h) or
-                getattr(self, '_bg_bitmap_mode', None) != mode):
+                getattr(self, '_bg_bitmap_mode', None) != mode or
+                getattr(self, '_bg_bitmap_view_key', None) != view_key):
             bmp = wx.Bitmap(w, h)
             mdc = wx.MemoryDC(bmp)
             gc2 = wx.GraphicsContext.Create(mdc)
@@ -1774,6 +1939,7 @@ class WorldMapPanel(wx.Panel):
             self._bg_bitmap      = bmp
             self._bg_bitmap_size = (w, h)
             self._bg_bitmap_mode = mode
+            self._bg_bitmap_view_key = view_key
 
         # Blit cached background
         dc.DrawBitmap(self._bg_bitmap, 0, 0)
@@ -1784,7 +1950,22 @@ class WorldMapPanel(wx.Panel):
             self._draw_classroom_trail(gc, w, h)
             self._draw_classroom_destination(gc, w, h)
             px, py = self._geo_to_px(self.lon, self.lat, w, h)
-            marker_size = 14 if self._classroom_mode_active() else 8
+            marker_size = (18 if (self._classroom_mode_active()
+                                  and self._visual_zoom_factor() >= 8)
+                           else 16 if self._classroom_mode_active()
+                           else 12 if mode == "country" else 8)
+            if self._classroom_mode_active():
+                pulsing = time.monotonic() < self._visual_assist_pulse_until
+                pulse = ((math.sin(time.monotonic() * 7.0) + 1.0) / 2.0
+                         if pulsing else 0.0)
+                halo_size = marker_size + 8 + pulse * 7
+                halo_alpha = 58 if pulsing else 30
+                gc.SetBrush(gc.CreateBrush(wx.Brush(
+                    wx.Colour(255, 125, 35, halo_alpha))))
+                gc.SetPen(gc.CreatePen(
+                    wx.GraphicsPenInfo(wx.Colour(255, 205, 70, 180)).Width(3)))
+                gc.DrawEllipse(px - halo_size, py - halo_size,
+                               halo_size * 2, halo_size * 2)
             gc.SetBrush(gc.CreateBrush(wx.Brush(COL_RING)))
             gc.SetPen(wx.NullPen)
             gc.DrawEllipse(px - marker_size, py - marker_size,
@@ -1792,7 +1973,9 @@ class WorldMapPanel(wx.Panel):
             gc.SetBrush(gc.CreateBrush(wx.Brush(COL_DOT)))
             dot_size = max(5, marker_size - 5)
             gc.DrawEllipse(px - dot_size, py - dot_size, dot_size * 2, dot_size * 2)
+            self._draw_current_location_callout(gc, w, h, px, py)
             self._draw_classroom_hud(gc, w, h)
+            self._draw_visual_assist_caption(gc, w, h)
 
     def _draw_label(self, gc, text, cx, cy, size):
         font = wx.Font(size, wx.FONTFAMILY_SWISS,
@@ -1811,6 +1994,8 @@ class WorldMapPanel(wx.Panel):
         py += dy
         est_w = max(12, len(text) * size * 0.6)
         est_h = size + 4
+        if px < -est_w or px > w + est_w or py < -est_h or py > h + est_h:
+            return
         fx = max(4, min(int(px - est_w / 2), max(4, w - int(est_w) - 4)))
         fy = max(4, min(int(py - est_h / 2), max(4, h - int(est_h) - 4)))
         self._draw_label(gc, text, fx, fy, size)
@@ -1865,7 +2050,7 @@ class WorldMapPanel(wx.Panel):
             if not ring:
                 continue
             gc.SetBrush(gc.CreateBrush(wx.Brush(fill)))
-            pts = [self._geo_to_px(lon, lat, w, h) for lon, lat in ring]
+            pts = self._clipped_ring_pixels(ring, w, h)
             if len(pts) < 3:
                 continue
             path = gc.CreatePath()
@@ -1874,6 +2059,49 @@ class WorldMapPanel(wx.Panel):
                 path.AddLineToPoint(*pt)
             path.CloseSubpath()
             gc.DrawPath(path)
+
+    def _clipped_ring_pixels(self, ring, w, h):
+        """Clip a geographic polygon before scaling it into a zoomed viewport."""
+        lon_min, lon_max, lat_min, lat_max = self._view_bounds(w, h)
+        centre = (lon_min + lon_max) / 2
+        polygon = []
+        for lon, lat in ring:
+            while lon - centre > 180: lon -= 360
+            while lon - centre < -180: lon += 360
+            polygon.append((lon, lat))
+
+        def clip(points, inside, intersect):
+            if not points:
+                return []
+            output = []
+            previous = points[-1]
+            previous_inside = inside(previous)
+            for current in points:
+                current_inside = inside(current)
+                if current_inside != previous_inside:
+                    output.append(intersect(previous, current))
+                if current_inside:
+                    output.append(current)
+                previous, previous_inside = current, current_inside
+            return output
+
+        def vertical(boundary):
+            return lambda a, b: (
+                boundary,
+                a[1] + (b[1] - a[1]) * (boundary - a[0]) /
+                ((b[0] - a[0]) or 1e-12))
+
+        def horizontal(boundary):
+            return lambda a, b: (
+                a[0] + (b[0] - a[0]) * (boundary - a[1]) /
+                ((b[1] - a[1]) or 1e-12),
+                boundary)
+
+        polygon = clip(polygon, lambda p: p[0] >= lon_min, vertical(lon_min))
+        polygon = clip(polygon, lambda p: p[0] <= lon_max, vertical(lon_max))
+        polygon = clip(polygon, lambda p: p[1] >= lat_min, horizontal(lat_min))
+        polygon = clip(polygon, lambda p: p[1] <= lat_max, horizontal(lat_max))
+        return [self._geo_to_px(lon, lat, w, h) for lon, lat in polygon]
 
     def _draw_country_overlay(self, gc, entry, w, h, fill, outline=None):
         if not entry:
@@ -1907,6 +2135,11 @@ class WorldMapPanel(wx.Panel):
         self._draw_flash_overlay(gc, w, h)
 
     def _draw_flash_overlay(self, gc, w, h):
+        if self._flash_name:
+            # Subdue the ordinary map so the queried country is unambiguous.
+            gc.SetBrush(gc.CreateBrush(wx.Brush(wx.Colour(2, 8, 18, 175))))
+            gc.SetPen(wx.NullPen)
+            gc.DrawRectangle(0, 0, w, h)
         if self._flash_rings:
             self._draw_ring_polygons(gc, self._flash_rings, w, h,
                                       self._COL_FLASH_FILL,
@@ -1915,6 +2148,67 @@ class WorldMapPanel(wx.Panel):
             self._draw_label_at_geo(
                 gc, self._flash_name, self._flash_cx, self._flash_cy, w, h,
                 self._FLASH_SIZE)
+        self._draw_country_shape_card(gc, w, h)
+
+    def _draw_country_shape_card(self, gc, w, h):
+        """Draw a large, data-derived silhouette of the F8 country."""
+        if not self._flash_name or not self._flash_rings or w < 360 or h < 240:
+            return
+        rings = []
+        for ring_idx in self._flash_rings:
+            if 0 <= ring_idx < len(_GEO_RINGS):
+                adjusted = []
+                for lon, lat in _GEO_RINGS[ring_idx]:
+                    while lon - self._flash_cx > 180:
+                        lon -= 360
+                    while lon - self._flash_cx < -180:
+                        lon += 360
+                    adjusted.append((lon, lat))
+                if adjusted:
+                    rings.append(adjusted)
+        if not rings:
+            return
+        all_points = [point for ring in rings for point in ring]
+        lon_min = min(point[0] for point in all_points)
+        lon_max = max(point[0] for point in all_points)
+        lat_min = min(point[1] for point in all_points)
+        lat_max = max(point[1] for point in all_points)
+        geo_w = max(.01, lon_max - lon_min)
+        geo_h = max(.01, lat_max - lat_min)
+        pad = 14
+        card_w = max(260, min(500, int(w * .42)))
+        card_h = max(220, min(430, int(h * .58)))
+        x = w - card_w - pad
+        y = pad
+        gc.SetBrush(gc.CreateBrush(wx.Brush(wx.Colour(5, 16, 30, 242))))
+        gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(wx.Colour(0, 235, 255)).Width(2)))
+        gc.DrawRoundedRectangle(x, y, card_w, card_h, 9)
+        title_h = 42
+        draw_w, draw_h = card_w - 34, card_h - title_h - 26
+        scale = min(draw_w / geo_w, draw_h / geo_h)
+        shape_w, shape_h = geo_w * scale, geo_h * scale
+        left = x + (card_w - shape_w) / 2
+        top = y + title_h + (draw_h - shape_h) / 2
+        gc.SetBrush(gc.CreateBrush(wx.Brush(wx.Colour(78, 190, 112))))
+        gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(wx.Colour(255, 220, 90)).Width(2)))
+        for ring in rings:
+            points = [
+                (left + (lon - lon_min) * scale,
+                 top + (lat_max - lat) * scale)
+                for lon, lat in ring
+            ]
+            if len(points) < 3:
+                continue
+            path = gc.CreatePath()
+            path.MoveToPoint(*points[0])
+            for point in points[1:]:
+                path.AddLineToPoint(*point)
+            path.CloseSubpath()
+            gc.DrawPath(path)
+        title_font = wx.Font(15, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL,
+                             wx.FONTWEIGHT_BOLD)
+        gc.SetFont(gc.CreateFont(title_font, wx.Colour(255, 255, 255)))
+        gc.DrawText(self._flash_name[:48], x + 14, y + 12)
 
     def _draw_country_mode(self, gc, w, h):
         owner = self._owner_ref()
@@ -1947,7 +2241,7 @@ class WorldMapPanel(wx.Panel):
         country_key = self._country_city_index_key(country_name)
         country_indices = list(getattr(owner, "_city_country_index", {}).get(country_key, [])) if country_key else []
 
-        if state_name and country_indices:
+        if state_name and country_indices and self._visual_zoom_factor() == 1:
             state_indices = [idx for idx in country_indices
                              if str(owner._city_admins[idx]).strip() == state_name]
             if state_indices:
@@ -1956,7 +2250,7 @@ class WorldMapPanel(wx.Panel):
                     gc, state_name, owner._city_lons[state_anchor],
                     owner._city_lats[state_anchor], w, h, 18, dy=-18)
 
-        if country_indices:
+        if country_indices and self._visual_zoom_factor() == 1:
             # One label per admin region keeps the country view readable.
             groups = {}
             for idx in country_indices:
@@ -1987,6 +2281,99 @@ class WorldMapPanel(wx.Panel):
                     size = max(size, 15)
                 self._draw_label_at_geo(gc, text, owner._city_lons[idx],
                                         owner._city_lats[idx], w, h, size)
+        elif country_indices:
+            zoom = self._visual_zoom_factor()
+            thresholds = {
+                2: 500_000, 4: 100_000, 8: 20_000,
+                16: 5_000, 32: 1_000, 64: 0, 128: 0,
+            }
+            minimum_pop = thresholds.get(zoom, 0)
+            lon_min, lon_max, lat_min, lat_max = self._view_bounds(w, h)
+
+            def visible(idx):
+                lat = owner._city_lats[idx]
+                lon = owner._city_lons[idx]
+                centre = (lon_min + lon_max) / 2
+                while lon - centre > 180: lon -= 360
+                while lon - centre < -180: lon += 360
+                return lat_min <= lat <= lat_max and lon_min <= lon <= lon_max
+
+            if zoom >= 8:
+                # At close zoom, query only the 0.1-degree cells intersecting
+                # the viewport instead of rescanning every locality in a large
+                # country such as Australia.
+                nearby_indices = []
+                gy_min = int(math.floor(lat_min * 10))
+                gy_max = int(math.floor(lat_max * 10))
+                gx_min = int(math.floor(lon_min * 10))
+                gx_max = int(math.floor(lon_max * 10))
+                for gy in range(gy_min, gy_max + 1):
+                    for raw_gx in range(gx_min, gx_max + 1):
+                        gx = ((raw_gx + 1800) % 3600) - 1800
+                        nearby_indices.extend(owner._city_grid.get((gy, gx), ()))
+                country_lower = country_key.lower()
+                candidate_source = [
+                    idx for idx in nearby_indices
+                    if str(owner._city_regions[idx][1]).strip().lower() == country_lower
+                ]
+            else:
+                candidate_source = country_indices
+            candidates = [idx for idx in candidate_source
+                          if owner._city_pops[idx] >= minimum_pop and visible(idx)]
+            candidates = sorted(set(candidates),
+                                key=lambda idx: -owner._city_pops[idx])[:20]
+            occupied = []
+            for idx in candidates:
+                city = str(owner._city_names[idx]).strip()
+                if not city:
+                    continue
+                px, py = self._geo_to_px(owner._city_lons[idx],
+                                         owner._city_lats[idx], w, h)
+                label_w = max(50, len(city) * 8)
+                if any(abs(px - ox) < (label_w + ow) / 2 and abs(py - oy) < 24
+                       for ox, oy, ow in occupied):
+                    continue
+                occupied.append((px, py, label_w))
+                self._draw_label_at_geo(gc, city, owner._city_lons[idx],
+                                        owner._city_lats[idx], w, h, 14)
+
+    def _draw_current_location_callout(self, gc, w, h, px, py):
+        """Make the actual cursor unmistakable in Country/Visual Assist views."""
+        if (self._map_display_mode() != "country"
+                and not self._classroom_mode_active()):
+            return
+        owner = self._owner_ref()
+        if not owner:
+            return
+        city = str(getattr(owner, "last_city_found", "") or "").strip()
+        state = str(getattr(owner, "last_state_found", "") or "").strip()
+        country = str(getattr(owner, "last_country_found", "") or "").strip()
+        place = city or str(getattr(owner, "last_location_str", "") or "").strip()
+        parts = []
+        for value in (place, state, country):
+            if value and value.lower() not in {item.lower() for item in parts}:
+                parts.append(value)
+        text = ", ".join(parts) or "Unknown"
+        if len(text) > 80:
+            text = text[:77].rstrip() + "..."
+        font_size = max(12, min(17, int(h / 34)))
+        font = wx.Font(font_size, wx.FONTFAMILY_SWISS,
+                       wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
+        gc.SetFont(gc.CreateFont(font, wx.Colour(255, 255, 255)))
+        text_w, text_h = gc.GetTextExtent(text)
+        pad = 7
+        box_w = min(w - 8, int(text_w + pad * 2))
+        box_h = int(text_h + pad * 2)
+        box_x = px + 22 if px + 22 + box_w <= w - 4 else px - 22 - box_w
+        box_x = max(4, min(box_x, w - box_w - 4))
+        box_y = max(4, min(py - box_h - 18, h - box_h - 4))
+        line_x = box_x if box_x > px else box_x + box_w
+        line_y = box_y + box_h
+        gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(wx.Colour(0, 235, 255)).Width(3)))
+        gc.StrokeLine(px, py, line_x, line_y)
+        gc.SetBrush(gc.CreateBrush(wx.Brush(wx.Colour(5, 16, 30, 240))))
+        gc.DrawRoundedRectangle(box_x, box_y, box_w, box_h, 6)
+        gc.DrawText(text, box_x + pad, box_y + pad)
 
     def _paint_world_bg(self, gc, w, h, include_labels=True):
         # Ocean
@@ -2007,7 +2394,9 @@ class WorldMapPanel(wx.Panel):
         gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(COL_BORDER).Width(1)))
         for ring in _GEO_RINGS:
             gc.SetBrush(gc.CreateBrush(wx.Brush(COL_LAND)))
-            pts = [self._geo_to_px(lon, lat, w, h) for lon, lat in ring]
+            pts = self._clipped_ring_pixels(ring, w, h)
+            if len(pts) < 3:
+                continue
             path = gc.CreatePath()
             path.MoveToPoint(*pts[0])
             for pt in pts[1:]:
@@ -2070,6 +2459,7 @@ class WorldMapPanel(wx.Panel):
                 wx.Colour(220, 220, 220)))
             gc.DrawText("STREET  " + self.street_label, 8, 8)
         self._draw_classroom_hud(gc, w, h)
+        self._draw_visual_assist_caption(gc, w, h)
 
 
 # ---------------------------------------------------------------------------
@@ -2474,11 +2864,14 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._h_sizer = wx.BoxSizer(wx.HORIZONTAL)
 
         self.map_display_mode = "world"
+        self.map_zoom_factor = 1
         self.map_panel = WorldMapPanel(root, owner=self)
         self._map_sizer_item = self._h_sizer.Add(self.map_panel, 3, wx.EXPAND | wx.ALL, 4)
         self.map_panel.Bind(wx.EVT_MOTION, self._on_map_mouse_motion)
         self.map_panel.Bind(wx.EVT_LEFT_DOWN, self._on_map_mouse_click)
         self.map_panel.Bind(wx.EVT_LEFT_DCLICK, self._on_map_mouse_click)
+        self.Bind(wx.EVT_CHILD_FOCUS, self._on_country_visual_focus_change)
+        self.Bind(wx.EVT_MENU, self._on_country_visual_menu)
 
         self.listbox = MSAAListBox(root, style=wx.LB_SINGLE)
         self.listbox.SetBackgroundColour(wx.Colour(10, 20, 40))
@@ -2551,6 +2944,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._street_survey_current_poi = None
         self.sounds_enabled     = True
         self._transit           = TransitLookup(script_dir=CACHE_DIR, resource_dir=BASE_DIR)
+        self._transit.stale_confirm_cb = self._confirm_stale_gtfs_update
         self._game              = ChallengeGame(
             announce_cb = lambda msg: wx.CallAfter(self._status_update, msg, True),
             direction_mode_cb = lambda: self.settings.get("challenge_direction_mode", "map"),
@@ -2578,6 +2972,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._prev_lon              = None   # for Date Line crossing detection
         self._distance_since_fetch  = 0.0
         self._fetch_in_progress     = False
+        self._lookup_pending       = False
         self._current_subregion     = ""     # for challenge milestone scoring
         self._current_country_code  = ""
         self._prefetch_in_progress  = False  # Shift+F11 background download
@@ -2898,14 +3293,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._info_continent = value("Continent")
 
         sizer.Add(wx.StaticLine(panel), 0, wx.EXPAND | wx.ALL, 8)
-        heading("Facts F6")
-        self._info_fact_capital = value("Capital")
-        self._info_fact_currency = value("Currency")
-        self._info_fact_text = value("Fact")
-
-        sizer.Add(wx.StaticLine(panel), 0, wx.EXPAND | wx.ALL, 8)
         self._info_street = value("Street")
-        self._info_status = value("Status")
 
         sizer.AddStretchSpacer(1)
         panel.SetSizer(sizer)
@@ -2948,17 +3336,6 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._set_info_label(self._info_continent, getattr(self, "current_continent", ""))
         self._set_info_label(self._info_street, street)
 
-    def _set_country_facts_panel(self, info=None, country_name=""):
-        """Update the visible facts section; speech remains owned by F6."""
-        if not hasattr(self, "_info_fact_capital"):
-            return
-        info = info or {}
-        self._set_info_label(self._info_fact_capital, info.get("capital", ""))
-        self._set_info_label(self._info_fact_currency, info.get("currency", ""))
-        self._set_info_label(self._info_fact_text, info.get("fact", ""))
-        self.info_panel.Layout()
-        self.info_panel.Refresh()
-
     def _setup_home_location(self):
         """First-run dialog — ask where the user is and save as home."""
         wx.MessageBox(
@@ -2994,7 +3371,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             "airport": new_id(), "overhead": new_id(), "facts": new_id(),
             "wiki": new_id(), "weather": new_id(), "time": new_id(),
             "sun": new_id(), "languages": new_id(), "currency": new_id(),
-            "fullscreen": new_id(),
+            "fullscreen": new_id(), "zoom_in": new_id(),
+            "zoom_out": new_id(), "zoom_reset": new_id(),
             "poi_address": new_id(), "poi_hours": new_id(),
             "poi_phone": new_id(), "poi_website": new_id(),
             "poi_mistral": new_id(), "poi_menu": new_id(),
@@ -3039,7 +3417,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                  lambda e: self._menu_toggle_street_mode())
         add_item(go_menu, "prefetch", "Pre-download &Streets\tShift+F11",
                  lambda e: self._prefetch_streets())
-        add_item(go_menu, "city_packs", "Download City &Data...\tCtrl+Shift+F11",
+        add_item(go_menu, "city_packs", "Download Area &Data...\tCtrl+Shift+F11",
                  lambda e: self._open_city_pack_wizard())
         add_item(go_menu, "favourites", "&Favourites\tCtrl+F",
                  lambda e: self._show_favourites())
@@ -3098,6 +3476,13 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         map_menu.AppendSeparator()
         add_item(map_menu, "fullscreen", "Visual Assist &Mode\tF9",
                  lambda e: self._toggle_map_fullscreen())
+        map_menu.AppendSeparator()
+        add_item(map_menu, "zoom_in", "Zoom &In\tCtrl++",
+                 lambda e: self._change_visual_zoom(1))
+        add_item(map_menu, "zoom_out", "Zoom &Out\tCtrl+-",
+                 lambda e: self._change_visual_zoom(-1))
+        add_item(map_menu, "zoom_reset", "&Reset Zoom\tCtrl+0",
+                 lambda e: self._set_visual_zoom(1))
         menubar.Append(map_menu, "&Map")
 
         street_menu = wx.Menu()
@@ -3130,13 +3515,20 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         add_item(poi_menu, "poi_website", "Selected POI &Website\tCtrl+Alt+4",
                  lambda e: self._run_after_menu(lambda: self._poi_detail(4)))
         poi_menu.AppendSeparator()
-        add_item(poi_menu, "poi_mistral", "Open Google &Reviews for Selected POI\tCtrl+Alt+5",
+        reviews_label = (
+            "Google &Rating for Selected POI\tCtrl+Alt+5"
+            if EDUCATION_EDITION
+            else "Open Google &Reviews for Selected POI\tCtrl+Alt+5"
+        )
+        add_item(poi_menu, "poi_mistral", reviews_label,
                  lambda e: self._run_after_menu(lambda: self._poi_detail(5)))
-        add_item(poi_menu, "poi_menu", "Find &Food Menu\tCtrl+Alt+6",
-                 lambda e: self._run_after_menu(lambda: self._poi_detail(6)))
-        poi_menu.AppendSeparator()
-        add_item(poi_menu, "poi_launch_website", "Open POI &Website\tCtrl+W",
-                 lambda e: self._run_after_menu(self._open_poi_website))
+        if not EDUCATION_EDITION:
+            add_item(poi_menu, "poi_menu", "Find &Food Menu\tCtrl+Alt+6",
+                     lambda e: self._run_after_menu(lambda: self._poi_detail(6)))
+        if not EDUCATION_EDITION:
+            poi_menu.AppendSeparator()
+            add_item(poi_menu, "poi_launch_website", "Open POI &Website\tCtrl+W",
+                     lambda e: self._run_after_menu(self._open_poi_website))
         poi_menu.AppendSeparator()
         add_item(poi_menu, "personal_poi", "Add &Personal POI Here\tCtrl+Shift+P",
                  lambda e: self._run_after_menu(self._add_personal_poi_here))
@@ -3345,6 +3737,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             event.Skip()
             return
         self._last_map_mouse_pos = (x, y)
+        self.map_panel.dismiss_country_visual()
         now = time.time()
         if now < getattr(self, "_map_mouse_speak_after", 0):
             event.Skip()
@@ -3360,6 +3753,19 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         # the selectable listbox.
         self._refresh_info_panel()
         self._announce_location(self._describe_map_mouse_position(lat, lon))
+        event.Skip()
+
+    def _on_country_visual_focus_change(self, event):
+        # wx can deliver the focus event caused by the command that opened the
+        # card after F8 itself has returned.  Do not let that queued event erase
+        # the result before the first paint.
+        shown_at = getattr(self.map_panel, "_country_visual_shown_at", 0.0)
+        if time.time() - shown_at >= 0.35:
+            self.map_panel.dismiss_country_visual()
+        event.Skip()
+
+    def _on_country_visual_menu(self, event):
+        self.map_panel.dismiss_country_visual()
         event.Skip()
 
     def _on_map_mouse_click(self, event):
@@ -4605,6 +5011,43 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         else:
             wx.CallAfter(self._status_update,
                 f"Transit catalog updated: {len(df)} active feeds worldwide.")
+
+    def _confirm_stale_gtfs_update(
+        self,
+        feed_id: str,
+        age_days: float,
+    ) -> bool:
+        """Ask safely on the UI thread whether stale timetable data may update."""
+        answer = {"update": False}
+
+        def ask():
+            days = max(8, math.ceil(age_days))
+            dlg = wx.MessageDialog(
+                self,
+                f"Timetable data is {days} days old.\n\n"
+                "Would you like to update it now?\n\n"
+                "Choose No to use the existing timetable.",
+                "Update Timetable Data?",
+                wx.YES_NO | wx.NO_DEFAULT | wx.ICON_QUESTION,
+            )
+            answer["update"] = dlg.ShowModal() == wx.ID_YES
+            dlg.Destroy()
+
+        if wx.IsMainThread():
+            ask()
+            return answer["update"]
+
+        finished = threading.Event()
+
+        def ask_and_signal():
+            try:
+                ask()
+            finally:
+                finished.set()
+
+        wx.CallAfter(ask_and_signal)
+        finished.wait()
+        return answer["update"]
 
     # ── GNAF bbox disk cache ──────────────────────────────────────────────────
 
@@ -6061,6 +6504,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         threading.Thread(target=_fetch, daemon=True).start()
 
     def _poi_detail(self, key_num: int):
+        if EDUCATION_EDITION and key_num == 6:
+            return
         poi = None
         focused = wx.Window.FindFocus()
         list_active = (
@@ -6200,8 +6645,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _open_place_reviews(self, name: str, suburb: str = "") -> None:
         """Look up the venue's Google rating via the proxy (keyless), announce it,
-        then offer to open the full reviews. Falls back to a keyless reviews
-        search if the rating/place can't be resolved."""
+        then, in Pro, offer to open the full reviews. Education announces only
+        the rating and review count and never hands off to a browser."""
         self._poi_detail_announce(f"Looking up reviews for {name}...")
 
         def _worker():
@@ -6217,6 +6662,14 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         cid = (info.get("cid") or "").strip()
 
         summary = self._google_review_summary(name, info, include_name=True)
+
+        if EDUCATION_EDITION:
+            self._poi_detail_announce(
+                summary or f"No Google review information found for {name}."
+            )
+            if getattr(self, "listbox", None) is not None:
+                self.listbox.SetFocus()
+            return
 
         # With a CID we can open the exact place's reviews in Maps — ask first,
         # putting the rating in the prompt so the screen reader reads it.
@@ -6351,7 +6804,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     for query in self._menu_search_queries(name, suburb):
                         raw.extend(self._serper.search(query, num=10))
                     raw = self._merge_menu_results(raw)
-                    results = self._rank_menu_results(raw, distinctive, compact)
+                    results = self._rank_menu_results(
+                        raw, distinctive, compact, suburb)
 
                     # Recall: if the search surfaced no menu page on the venue's
                     # own site, probe that site's common menu paths directly.
@@ -6365,7 +6819,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                             if hits:
                                 results = self._rank_menu_results(
                                     self._merge_menu_results(results + hits),
-                                    distinctive, compact)
+                                    distinctive, compact, suburb)
                                 break
                 except Exception as exc:
                     miab_log("errors", f"[Menu] search failed: {exc}", None)
@@ -6383,6 +6837,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _menu_lookup_suburb(self, poi: dict) -> str:
         """Pick the most specific suburb/city hint we already know for a POI."""
+        import re as _re
+
         tags = poi.get("tags") or {}
         for key in ("addr:suburb", "addr:city", "addr:town", "addr:village"):
             value = (tags.get(key) or "").strip()
@@ -6394,13 +6850,28 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             if value:
                 return value
 
+        # Some POI providers supply only a display address. Recover an
+        # Australian suburb from "... Cleveland QLD 4163, Australia" rather
+        # than falling back to the suburb currently under the map cursor.
+        address = (
+            poi.get("address") or poi.get("addr") or tags.get("addr:full") or ""
+        ).strip()
+        for part in reversed(address.split(",")):
+            match = _re.match(
+                r"^\s*(.+?)\s+(?:ACT|NSW|NT|QLD|SA|TAS|VIC|WA)\s+\d{4}\s*$",
+                part,
+                flags=_re.I,
+            )
+            if match:
+                return match.group(1).strip()
+
         return (getattr(self, "_current_suburb", "") or "").strip()
 
     def _menu_search_queries(self, name: str, suburb: str = "") -> list[str]:
-        """Build a single, location-anchored query: "Name" suburb menu country.
+        """Build a single, locality-anchored query: "Name" suburb menu country.
 
-        Suburb and country are soft (unquoted) terms — they bias results to the
-        right place without hard-excluding the venue's own pages."""
+        Suburb and country are soft (unquoted) terms — they bias results to
+        the right branch without hard-excluding the venue's own pages."""
         name = (name or "").strip()
         suburb = (suburb or "").strip()
         if not name:
@@ -6512,7 +6983,13 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             return True
         return any(t in label for t in distinctive)
 
-    def _classify_menu_result(self, item, distinctive: list, compact: str) -> "int | None":
+    def _classify_menu_result(
+        self,
+        item,
+        distinctive: list,
+        compact: str,
+        locality: str = "",
+    ) -> "int | None":
         """0 = delivery page, 1 = the venue's own menu page, None = drop.
 
         Allow-list, not deny-list: a non-delivery result is kept only when it
@@ -6527,7 +7004,27 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         parsed = urllib.parse.urlsplit(url.lower())
         host = self._result_host(url)
         if any(host == h or host.endswith("." + h) for h in self._DELIVERY_HOSTS):
-            return None if self._delivery_wrong_country(host, parsed.path) else 0
+            if self._delivery_wrong_country(host, parsed.path):
+                return None
+            # Delivery domains host thousands of unrelated venues and branches.
+            # Keep a result only when its own title/URL/snippet identifies both
+            # this venue and the selected locality.
+            delivery_text = " ".join((
+                item.get("title") or "",
+                url,
+                item.get("snippet") or "",
+            )).lower()
+            delivery_compact = re.sub(r"[^a-z0-9]+", "", delivery_text)
+            venue_matches = (
+                (bool(compact) and compact in delivery_compact)
+                or any(token in delivery_compact for token in distinctive)
+            )
+            locality_compact = re.sub(
+                r"[^a-z0-9]+", "", (locality or "").lower())
+            locality_matches = (
+                not locality_compact or locality_compact in delivery_compact
+            )
+            return 0 if venue_matches and locality_matches else None
         if self._label_matches_venue(self._main_label(host), distinctive, compact):
             hay = parsed.path + " " + (item.get("title") or "").lower()
             if any(sig in hay for sig in self._MENU_SIGNALS):
@@ -6537,12 +7034,19 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
     def _is_own_menu(self, item, distinctive: list, compact: str) -> bool:
         return self._classify_menu_result(item, distinctive, compact) == 1
 
-    def _rank_menu_results(self, results: list, distinctive: list, compact: str) -> list:
+    def _rank_menu_results(
+        self,
+        results: list,
+        distinctive: list,
+        compact: str,
+        locality: str = "",
+    ) -> list:
         """Keep only delivery pages and the venue's own menu pages; delivery
         first, original order within each group. Everything else is dropped."""
         scored = []
         for idx, item in enumerate(results):
-            pr = self._classify_menu_result(item, distinctive, compact)
+            pr = self._classify_menu_result(
+                item, distinctive, compact, locality)
             if pr is None:
                 continue
             scored.append((pr, idx, item))
@@ -8548,6 +9052,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _open_poi_website(self):
         """Ctrl+W — open the website of the currently selected POI in the browser."""
+        if EDUCATION_EDITION:
+            return
         focused = wx.Window.FindFocus()
         list_active = (
             getattr(self, '_poi_list', [])
@@ -10012,15 +10518,46 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         new_mode = modes[(idx + 1) % len(modes)]
         self.map_display_mode = new_mode
         if hasattr(self, "map_panel"):
+            self.map_panel._bg_bitmap = None
+            self.map_panel._bg_bitmap_view_key = None
             self.map_panel.Refresh()
         self._announce_transient(self._map_display_mode_name(new_mode))
         return new_mode
 
+    _VISUAL_ZOOM_LEVELS = (1, 2, 4, 8, 16, 32, 64, 128)
+
+    def _set_visual_zoom(self, factor):
+        factor = min(self._VISUAL_ZOOM_LEVELS,
+                     key=lambda value: abs(value - int(factor)))
+        self.map_zoom_factor = factor
+        if hasattr(self, "map_panel"):
+            self.map_panel._bg_bitmap = None
+            self.map_panel._bg_bitmap_view_key = None
+            self.map_panel.Refresh()
+            self.map_panel.Update()
+        self._announce_transient(f"Zoom {factor} X.")
+
+    def _change_visual_zoom(self, direction):
+        current = int(getattr(self, "map_zoom_factor", 1))
+        try:
+            index = self._VISUAL_ZOOM_LEVELS.index(current)
+        except ValueError:
+            index = 0
+        index = max(0, min(len(self._VISUAL_ZOOM_LEVELS) - 1,
+                           index + (1 if direction > 0 else -1)))
+        self._set_visual_zoom(self._VISUAL_ZOOM_LEVELS[index])
+
     def _flash_current_country(self):
-        """F8 — flash the current country name and highlight its polygon on the map."""
+        """F8 — highlight the country and display its enlarged silhouette."""
         country = getattr(self, 'last_country_found', '')
         if not country or country == 'Open Water':
             return False
+        # F8 is also used by the external visual-description workflow.  Once
+        # magnified, preserve the current viewport for that capture instead of
+        # replacing it with the standard 1x country silhouette.
+        if getattr(self, "map_zoom_factor", 1) > 1:
+            self.map_panel.dismiss_country_visual()
+            return "zoom"
         # Find matching entry in _GEO_COUNTRIES
         c_lower = country.lower()
         match = None
@@ -10109,6 +10646,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 and getattr(self, "_tool_cancel_already_announced", False)):
             self._tool_cancel_already_announced = False
             return
+        if hasattr(self, "map_panel"):
+            self.map_panel.show_visual_assist_caption(msg_text)
         if force and (
                 terminal.startswith(("no ", "not found", "nothing ",
                                      "could not ", "can't ", "cannot "))
@@ -10139,11 +10678,14 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         """Speak + braille through the shared dispatcher."""
         self.speech.emit(text, braille_text, interrupt, second_braille)
 
-    def _announce_transient(self, msg, braille_msg=None) -> None:
+    def _announce_transient(self, msg, braille_msg=None,
+                            visual_caption=True) -> None:
         """Speak and braille a transient announcement without touching the listbox."""
         if getattr(self, "_update_dialog_active", False):
             self._verbose_trace(f"transient suppressed while update dialog is active: {msg!r}")
             return
+        if visual_caption and hasattr(self, "map_panel"):
+            self.map_panel.show_visual_assist_caption(msg)
         self.speech.transient(msg, braille_msg)
 
     def _announce_transient_then_return(self, msg, delay_ms=3000, focus_target=None) -> None:
@@ -10281,6 +10823,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
         _braille(msg_text)
         self._refresh_info_panel()
+        if hasattr(self, "map_panel"):
+            self.map_panel.show_visual_assist_caption(msg_text)
         if hasattr(self, "_info_status"):
             self._set_info_label(self._info_status, msg_text)
             self.info_panel.Layout()
@@ -10308,7 +10852,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         if getattr(self, "_suppress_location_restore", False):
             self._verbose_trace(f"_announce_location suppressed while location restore is active: {msg!r}")
             return
-        self._announce_transient(msg_text)
+        self._announce_transient(msg_text, visual_caption=False)
 
     def _set_current_location_title(self, msg) -> str:
         """Track the current landed location for status/braille use.
@@ -10554,8 +11098,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _announce_current_region(self):
         """R in map mode — speak the current state/admin region."""
-        if self.lat < -60.0:
-            self._status_update("Antarctica", force=True)
+        current_country = getattr(self, "last_country_found", "")
+        if current_country in ("Antarctica", "Open Water"):
+            self._status_update(current_country, force=True)
             return
         _dist, idx = _nearest_city(self._city_lats, self._city_lons, self.lat, self.lon)
         region, country = self._city_regions[idx]
@@ -10567,9 +11112,6 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _announce_current_country(self):
         """C in map mode — speak the current country."""
-        if self.lat < -60.0:
-            self._status_update("Antarctica", force=True)
-            return
         country = getattr(self, "last_country_found", "")
         if not country:
             _dist, idx = _nearest_city(self._city_lats, self._city_lons, self.lat, self.lon)
@@ -10578,9 +11120,6 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _announce_nearest_city_only(self):
         """N in map mode — speak the nearest city/locality only."""
-        if self.lat < -60.0:
-            self._status_update("Antarctica", force=True)
-            return
         try:
             self._status_update(self._nearest_city_distance_label(), force=True)
         except Exception:
@@ -11015,7 +11554,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             return
         dlg = CityPackWizardDialog(
             self, street_fetcher=self._street_fetcher, df=self.df,
-            initial_country_name=getattr(self, "last_country_found", ""))
+            initial_country_name=getattr(self, "last_country_found", ""),
+            transport_download_cb=self._download_transport_data_for_area)
         result = dlg.ShowModal()
         packs = dlg.result_packs
         country_code = dlg.result_country_code
@@ -11037,6 +11577,61 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 use_gnaf=self.settings.get("gnaf_enabled", True),
                 status_cb=lambda msg: wx.CallAfter(self._status_update, msg, True))
             self._status_update(f"Downloading {len(packs)} area(s) in the background.", force=True)
+
+    def _download_transport_data_for_area(
+        self,
+        area_name: str,
+        country_name: str,
+        lat: float,
+        lon: float,
+    ) -> bool:
+        """Start an explicit regional GTFS download from the area wizard."""
+        if getattr(self, "_transport_prefetch_active", False):
+            self._announce_transient_then_return(
+                "A transport data download is already in progress.")
+            return False
+
+        self._transport_prefetch_active = True
+        self._status_update(
+            f"Preparing transport data for {area_name}…", force=True)
+
+        def status(msg):
+            wx.CallAfter(
+                self._status_update, f"{area_name}: {msg}", True)
+
+        def worker():
+            try:
+                feed_ids = self._transit.prefetch_for_region(
+                    lat, lon, area_name, status_cb=status)
+                if feed_ids:
+                    message = (
+                        f"Transport data download for {area_name} finished: "
+                        f"{len(feed_ids)} feed"
+                        f"{'s' if len(feed_ids) != 1 else ''} ready."
+                    )
+                else:
+                    message = (
+                        f"No public transport timetable data was found for "
+                        f"{area_name}."
+                    )
+                wx.CallAfter(self._status_update, message, True)
+            except Exception as exc:
+                miab_log(
+                    "errors",
+                    f"[Transit] Area prefetch failed for "
+                    f"{area_name}, {country_name}: {exc}",
+                    self.settings,
+                )
+                wx.CallAfter(
+                    self._status_update,
+                    f"Could not download transport data for {area_name}.",
+                    True,
+                )
+            finally:
+                self._transport_prefetch_active = False
+
+        threading.Thread(target=worker, daemon=True).start()
+        return True
 
     def _open_settings(self):
         try:
@@ -11545,7 +12140,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 unique[key] = addr
         addresses = sorted(unique.values(), key=lambda item: self._street_survey_number_key(item["number"]))
         number_filter = self._street_survey_number_filter()
-        if number_filter != "all" and address_mode != "poi_only":
+        if number_filter != "all":
             addresses = [
                 a for a in addresses
                 if self._street_survey_number_parity(a["number"]) == number_filter
@@ -11947,6 +12542,19 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
 
     def _handle_preface_shortcuts(self, event, key, shift, primary, alt, no_mod):
+        if primary and not alt:
+            plus_keys = {ord('+'), ord('='), getattr(wx, 'WXK_NUMPAD_ADD', -1)}
+            minus_keys = {ord('-'), getattr(wx, 'WXK_NUMPAD_SUBTRACT', -1)}
+            if key in plus_keys:
+                self._change_visual_zoom(1)
+                return True
+            if key in minus_keys:
+                self._change_visual_zoom(-1)
+                return True
+            if key in (ord('0'), getattr(wx, 'WXK_NUMPAD0', -1)):
+                self._set_visual_zoom(1)
+                return True
+
         # Favourites — works in any mode when a coordinate/POI is available.
         if primary and not alt and key in (ord('F'), ord('f')):
             if shift:
@@ -12096,8 +12704,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         if no_mod and key == wx.WXK_F8:
             flashed = self._flash_current_country()
             if flashed:
-                country = getattr(self, 'last_country_found', 'country')
-                wx.CallAfter(self._status_update, f"Displaying {country}.", True)
+                if flashed == "zoom":
+                    wx.CallAfter(self._status_update, "Displaying zoomed map.", True)
+                else:
+                    country = getattr(self, 'last_country_found', 'country')
+                    wx.CallAfter(self._status_update, f"Displaying {country}.", True)
             else:
                 wx.CallAfter(
                     self._announce_transient_then_return,
@@ -12186,6 +12797,18 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         return False
 
     def _handle_global_map_shortcuts(self, key, shift, primary, alt, no_mod):
+        if primary and not shift and not alt and key in (wx.WXK_HOME, wx.WXK_END):
+            if (not self.street_mode
+                    and not getattr(self, "_walking_mode", False)
+                    and not getattr(self, "_free_mode", False)
+                    and not getattr(self, "_poi_list", [])):
+                if self._game.active:
+                    self._announce_transient_then_return(
+                        "Pole jumps are disabled during the challenge. Use your ears!")
+                    return True
+                self._jump_to_map_pole(north=(key == wx.WXK_HOME))
+                return True
+            return False
         if no_mod and (key == ord('L') or key == ord('l')):
             miab_log("feature_usage", "Key: L (latitude/longitude)", self.settings)
             self._announce_lat_lon(); return True
@@ -12239,13 +12862,42 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 getattr(wx, "WXK_NUMPAD6", None): 6,
             })
             if key in alt_map:
-                self._poi_detail(alt_map[key]); return True
+                key_num = alt_map[key]
+                if not (EDUCATION_EDITION and key_num == 6):
+                    self._poi_detail(key_num)
+                return True
             if key == ord('P') or key == ord('p'):
                 self._refresh_background_pois(); return True
         if not self.street_mode:
             if shift and not primary and not alt and (key == ord('P') or key == ord('p')):
                 self._announce_postcode();  return True
         return False
+
+    def _jump_to_map_pole(self, north: bool) -> None:
+        """Move directly to a geographic pole while preserving longitude."""
+        self.lat = 90.0 if north else -90.0
+        label = "North Pole" if north else "South Pole"
+        self.street_label = ""
+        self._jump_street_label = None
+        self._jump_street_pin_lat = None
+        self._jump_street_pin_lon = None
+        self._jump_address_number = None
+        self._jump_address_street = None
+        self._record_jump(label, self.lat, self.lon)
+        miab_log(
+            "navigation",
+            f"Key: Ctrl+{'Home' if north else 'End'} ({label}) at longitude {self.lon:.5f}",
+            self.settings,
+        )
+        self.map_panel.set_position(self.lat, self.lon, False, "")
+        self._refresh_info_panel()
+        self._status_update(f"Moving to {label}.", force=True)
+        if getattr(self, "_fetch_in_progress", False):
+            self._lookup_pending = True
+        else:
+            self._fetch_in_progress = True
+            self._distance_since_fetch = 0.0
+            threading.Thread(target=self._lookup, daemon=True).start()
 
     def _handle_map_shortcuts(self, event, key, shift, primary, alt, no_mod):
         if (not self.street_mode and not getattr(self, "_walking_mode", False)
@@ -12302,7 +12954,6 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         if no_mod and key in (page_up, page_down) and not self.street_mode and not getattr(self, "_walking_mode", False):
             self._cycle_spatial_tones_mode(1 if key == page_down else -1)
             return True
-
         if no_mod and (key == ord('X') or key == ord('x')):
             if self.street_mode or getattr(self, '_walking_mode', False):
                 miab_log("feature_usage", "Key: X (nearest intersection)", self.settings)
@@ -12360,7 +13011,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         if not self.street_mode:
             return False
         if primary and (key == ord('W') or key == ord('w')):
-            self._open_poi_website(); return True
+            if not EDUCATION_EDITION:
+                self._open_poi_website()
+            return True
         if no_mod and (key == ord('W') or key == ord('w')):
             self._walk_toggle();  return True
         if no_mod and (key == ord('P') or key == ord('p')):
@@ -12431,6 +13084,16 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         shift = event.ShiftDown()
         primary = _primary_down(event)
         alt = event.AltDown()
+        # F8 is a temporary visual query.  Dismiss it for a subsequent command,
+        # but not for standalone modifier/helper events emitted while an
+        # external visual-description shortcut is being formed.  Those are not
+        # MIAB functions and previously erased the silhouette before capture.
+        non_command_keys = {
+            0, wx.WXK_SHIFT, wx.WXK_CONTROL, wx.WXK_ALT,
+            getattr(wx, "WXK_RAW_CONTROL", -1),
+        }
+        if hasattr(self, "map_panel") and key not in non_command_keys:
+            self.map_panel.dismiss_country_visual()
         if getattr(self, "_suppress_location_restore", False):
             _log_key_event(self, event, "frame", "suppressed while restoring location")
             return
@@ -12451,12 +13114,17 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 step = 0.00018     # ~20m — fine positioning
             else:
                 step = 0.00072     # ~80m — normal walking pace
-        elif primary:
-            step = 3.0
-        elif shift:
-            step = 0.009      # ~1km — fine map movement
         else:
-            step = 0.02       # ~2km — suburb-scale map movement
+            # World-map movement is specified in kilometres.  The horizontal
+            # degree step is calculated at the current latitude below so an
+            # east/west press covers a useful distance outside the tropics too.
+            if primary:
+                map_step_km = 100.0
+            elif shift:
+                map_step_km = 1.0
+            else:
+                map_step_km = 5.0
+            step = map_step_km / 111.195
 
         if self._handle_global_function_keys(key, shift, primary, alt, no_mod):
             return
@@ -12470,6 +13138,13 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         moved = False
         new_lat = self.lat
         new_lon = self.lon
+        lon_step = step
+        if not self.street_mode:
+            # Longitude lines converge toward the poles.  Cap the angular
+            # change at half the globe, where east/west distance is inherently
+            # ambiguous, rather than allowing one press to circle repeatedly.
+            latitude_scale = abs(math.cos(math.radians(self.lat)))
+            lon_step = min(180.0, step / max(latitude_scale, 1e-9))
         # Block map movement when hub list is open
         if (not self.street_mode and bool(self._poi_list)
                 and key in (wx.WXK_UP, wx.WXK_DOWN,
@@ -12488,9 +13163,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         elif key == wx.WXK_DOWN:
             new_lat = max(-90, self.lat - step)
         elif key == wx.WXK_LEFT:
-            new_lon = ((self.lon - step + 180) % 360) - 180
+            new_lon = ((self.lon - lon_step + 180) % 360) - 180
         elif key == wx.WXK_RIGHT:
-            new_lon = ((self.lon + step + 180) % 360) - 180
+            new_lon = ((self.lon + lon_step + 180) % 360) - 180
 
         if new_lat != self.lat or new_lon != self.lon:
             test_label = "No street data nearby"
@@ -12557,7 +13232,20 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 self._update_street_display()
             
             # Background: Refresh cache only when threshold crossed
-            if self._should_fetch(self.lat, self.lon, force=False):
+            # Every world-map arrow movement needs spoken feedback.  A
+            # distance threshold makes horizontal movement increasingly silent
+            # near the poles, where a longitude step can represent less than a
+            # metre.  Busy lookups are coalesced below, so forcing the lookup
+            # here does not create overlapping worker threads.
+            world_map_move = not self.street_mode
+            if (not self.street_mode
+                    and getattr(self, "_fetch_in_progress", False)):
+                # Coalesce rapid map movements while the previous lookup is
+                # running.  Its completion will look up and announce the most
+                # recent position, rather than silently dropping this move.
+                self._lookup_pending = True
+            elif self._should_fetch(
+                    self.lat, self.lon, force=world_map_move):
                 self._fetch_in_progress = True
                 self._distance_since_fetch = 0.0
 
@@ -12669,45 +13357,6 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             dist, idx = _nearest_city(self._city_lats, self._city_lons, self.lat, self.lon)
             country = "Open Water"
 
-            # Antarctica has no cities — detect purely by latitude
-            if self.lat < -60.0:
-                country = "Antarctica"
-                if _lookup_is_stale():
-                    return
-                if country != self.last_country_found:
-                    self.last_city_found    = ""
-                    self.last_state_found   = ""
-                    self.last_country_found = country
-                    self.current_continent  = "Antarctica"
-                    self.last_location_str  = "Antarctica"
-                    wx.CallAfter(self._refresh_info_panel)
-                    wx.CallAfter(self._update_location_focus, "Antarctica")
-                    if getattr(self, 'sounds_enabled', True) and not self._game.active:
-                        self._play_location_sound_if_allowed("Antarctica", "Antarctica")
-                wx.CallAfter(self.map_panel.set_position, self.lat, self.lon,
-                             self.street_mode, self.street_label)
-                if self._game.active:
-                    if country == self._game.target_country:
-                        elapsed = time.time() - self._game._start_time
-                        if self._session and self._session.active:
-                            self._game.active = False
-                            self._game._generation += 1
-                            miab_log("challenges",
-                                     f"Session win: country={country} time={elapsed:.1f}s",
-                                     self.settings)
-                            wx.CallAfter(self._session.on_win, elapsed, self.df, self.lat, self.lon)
-                            wx.CallAfter(lambda c=country: wx.CallLater(2000, lambda: self._play_location_sound_if_allowed(c)))
-                        else:
-                            miab_log("challenges",
-                                     f"Solo win: country={country} time={elapsed:.1f}s "
-                                     f"score={max(0, 180 - int(elapsed))}",
-                                     self.settings)
-                            wx.CallAfter(self._game.on_win)
-                            wx.CallAfter(lambda c=country: wx.CallLater(2000, lambda: self._play_location_sound_if_allowed(c)))
-                    else:
-                        self._game.on_move(self.lat, self.lon)
-                return
-
             DENSE_COUNTRIES = {"Luxembourg", "Monaco", "Singapore", "Bahrain",
                                "Malta", "Maldives", "San Marino", "Liechtenstein"}
 
@@ -12753,6 +13402,13 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             close_place = False
             _only_region = False
 
+            # Do not let an older background lookup overwrite city/state
+            # context after the cursor has already moved elsewhere.  The later
+            # stale check protects the final label; this one protects the
+            # mutable context fields used by Country view and its callout.
+            if _lookup_is_stale():
+                return
+
             if on_land:
                 row = self.df.iloc[idx]
                 city, state, city_country = (
@@ -12775,10 +13431,13 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         return feature_label
                     if city and city.lower() != 'nan':
                         if feature_label.endswith((" Homestead", " Farm", " Farms")):
-                            if dist_km <= 1.0:
-                                return f"{feature_label}, {city}"
-                            if dist_km <= 3.0:
-                                return f"{feature_label}, near {city}"
+                            # A property-level feature is useful local detail,
+                            # but it must not displace a recognised populated
+                            # centre such as St George or Lightning Ridge.  The
+                            # feature remains eligible once no town is within
+                            # the normal named-place fallback radius.
+                            if dist_km <= NEAREST_PLACE_FALLBACK_KM:
+                                return self._nearest_city_distance_label()
                     return feature_label
                 close_place = city_matches_country and dist_km <= PLACE_NAME_CLOSE_KM
                 prev_state   = getattr(self, 'last_state_found', '')
@@ -12840,14 +13499,25 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         label = _with_nearby_town(feature)
                     elif context:
                         label = ". ".join(context)
-                    elif not self._geo_features_enabled():
+                    elif not self._geo_features_enabled() and not polygon_country:
                         label = self._nearest_city_distance_label()
                     else:
                         label = country if country and country.lower() != "nan" else "Location unknown"
                         _only_region = True
             else:
-                # Named bays, islands and coastal features are often part of the
-                # user's local country context, so keep the nearby country sound.
+                # Choose country context independently of the optional
+                # GeoFeatures label.  Otherwise toggling GeoFeatures can change
+                # the country, sound, languages, and facts at one coordinate.
+                # Antarctic ocean positions must not borrow New Zealand from
+                # the nearest-city dataset, which has no Antarctic cities.
+                if self.lat < -60.0:
+                    country = "Open Water"
+                elif (dist_km <= 75.0 and nearest_country
+                      and nearest_country.lower() != "nan"):
+                    country = nearest_country
+                else:
+                    country = "Open Water"
+
                 country_code = getattr(self, "_current_country_code", None)
                 context = self._geo_context_items(
                     self.lat, self.lon, limit=1, country_code=country_code)
@@ -12859,14 +13529,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         self.lat, self.lon, country_code=country_code)
                 )
                 if coastal_feature:
-                    label   = coastal_feature
-                    country = nearest_country if nearest_country and nearest_country.lower() != "nan" else "Open Water"
+                    label = coastal_feature
                 else:
-                    label   = self._ocean_name(self.lat, self.lon)
-                    if dist_km <= 75.0 and nearest_country and nearest_country.lower() != "nan":
-                        country = nearest_country
-                    else:
-                        country = "Open Water"
+                    label = self._ocean_name(self.lat, self.lon)
 
             pinned_label = getattr(self, "_pinned_jump_label", "")
             if pinned_label and time.time() < getattr(self, "_pinned_jump_label_until", 0):
@@ -12902,6 +13567,35 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             else:
                 wx.CallAfter(self._update_location_focus, display)
 
+            # Keep shared geographic context current during a challenge.  The
+            # challenge still suppresses normal ambient country sounds, but
+            # explicit lookups and continent milestone scoring must use the
+            # country beneath the cursor rather than the pre-challenge country.
+            canonical = COUNTRY_ALIASES.get(country, country)
+            if country != self.last_country_found:
+                self.last_country_found = country
+                if country == "Antarctica":
+                    continent = "Antarctica"
+                else:
+                    # Check continent override first (for territories in different region to parent)
+                    continent = CONTINENT_OVERRIDES.get(country, "")
+                    if not continent:
+                        for info in self.facts.values():
+                            if info.get('name', '').lower() in (canonical.lower(), country.lower()):
+                                continent = info.get('continent', '')
+                                break
+                self.current_continent = continent
+                wx.CallAfter(self._refresh_info_panel)
+                self._prefetch_geo_features_for_point(self.lat, self.lon)
+                if getattr(self, 'sounds_enabled', True) and not self._game.active:
+                    self._play_location_sound_if_allowed(
+                        country if country != "Open Water" else "ocean", continent)
+                miab_log("navigation",
+                         f"Entered country: {country}"
+                         + (f" (continent: {continent})" if continent else ""),
+                         self.settings)
+                self._current_subregion = ""
+
             if self._game.active:
                 if country == self._game.target_country:
                     elapsed = time.time() - self._game._start_time
@@ -12922,37 +13616,16 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         wx.CallAfter(lambda c=country: wx.CallLater(2000, lambda: self._play_location_sound_if_allowed(c)))
                 else:
                     self._game.on_move(self.lat, self.lon)
-            else:
-                canonical = COUNTRY_ALIASES.get(country, country)
-                if country != self.last_country_found:
-                    self.last_country_found = country
-                    if country == "Antarctica":
-                        continent = "Antarctica"
-                    else:
-                        # Check continent override first (for territories in different region to parent)
-                        continent = CONTINENT_OVERRIDES.get(country, "")
-                        if not continent:
-                            for info in self.facts.values():
-                                if info.get('name', '').lower() in (canonical.lower(), country.lower()):
-                                    continent = info.get('continent', '')
-                                    break
-                    self.current_continent = continent
-                    wx.CallAfter(self._refresh_info_panel)
-                    self._prefetch_geo_features_for_point(self.lat, self.lon)
-                    if getattr(self, 'sounds_enabled', True):
-                        self._play_location_sound_if_allowed(
-                            country if country != "Open Water" else "ocean", continent)
-                    miab_log("navigation",
-                             f"Entered country: {country}"
-                             + (f" (continent: {continent})" if continent else ""),
-                             self.settings)
-                    self._current_subregion = ""
-
             wx.CallAfter(self.map_panel.set_position, self.lat, self.lon,
                          self.street_mode, self.street_label)
         finally:
             # Always clear fetch flag, even on error or early return
             self._fetch_in_progress = False
+            if getattr(self, "_lookup_pending", False) and not self.street_mode:
+                self._lookup_pending = False
+                self._fetch_in_progress = True
+                self._distance_since_fetch = 0.0
+                threading.Thread(target=self._lookup, daemon=True).start()
 
     def _ocean_name(self, lat, lon):
         """Return the name of the ocean corresponding to a lat/lon point."""
@@ -13115,9 +13788,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
     def _map_help_lines(self) -> list[str]:
         """Return the map-mode shortcut lines used by both help and docs."""
         return [
-            "Arrow keys: move around the map.",
-            "Shift+arrows: fine movement.",
-            "Ctrl+arrows: move in large steps (~333km) for fast long-distance navigation.",
+            "Arrow keys: move about 5 kilometres.",
+            "Ctrl+Home: jump to the North Pole.",
+            "Ctrl+End: jump to the South Pole.",
+            "Shift+arrows: fine movement of about 1 kilometre.",
+            "Ctrl+arrows: move in large steps of about 100 kilometres.",
             "Ctrl+Alt+arrows: jump to the nearest foreign country in that direction.",
             "F2: repeat last landed object. Double-tap: spell it out. Triple-tap: copy to clipboard.",
             "Shift+F2: climate zone.",
@@ -13131,13 +13806,15 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             "F7: toggle sounds.",
             "F8: flash country on map.",
             "Shift+F8: cycle world view and country view.",
+            "Ctrl+Plus and Ctrl+Minus: change geographic visual zoom.",
+            "Ctrl+0: reset visual zoom to 1 X.",
             "F9: toggle Visual Assist mode.",
             "F10: country discovery challenge.",
             "Ctrl+F10: scored challenge session.",
             "Shift+F10: repeat challenge target.",
             "F11: street mode.",
             "Shift+F11: pre-download streets.",
-            "Ctrl+Shift+F11: download city data (commonly explored cities/regions).",
+            "Ctrl+Shift+F11: area downloader for streets, addresses, and transport data.",
             "Page Up/Page Down: cycle spatial tones between world, country, and region.",
             "F12: tools menu.",
             "Ctrl+Shift+F12: report GNAF address state; press again within five seconds to toggle.",
@@ -13254,9 +13931,17 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 "Ctrl+Alt+2: selected POI hours.",
                 "Ctrl+Alt+3: selected POI phone.",
                 "Ctrl+Alt+4: selected POI website.",
-                "Ctrl+Alt+5: open Google reviews for selected POI in your browser.",
-                "Ctrl+Alt+6: search for food venue menu links.",
-                "Ctrl+W: open selected POI website.",
+                (
+                    "Ctrl+Alt+5: announce the selected POI's Google rating and review count."
+                    if EDUCATION_EDITION
+                    else "Ctrl+Alt+5: open Google reviews for selected POI in your browser."
+                ),
+                *([] if EDUCATION_EDITION else [
+                    "Ctrl+Alt+6: search for food venue menu links.",
+                ]),
+                *([] if EDUCATION_EDITION else [
+                    "Ctrl+W: open selected POI website.",
+                ]),
                 "Escape: close POI list.",
                 "Backspace: go back in POI exploration.",
                 "F11: return to map mode.",

@@ -125,11 +125,28 @@ jobs:
           chmod +x staging/install-macos.sh
           cd staging && ditto -c -k --sequesterRsrc . ../MapInABox-macOS.zip
 
+      - name: Build macOS app bundle (Education)
+        run: |
+          python build.py mac education
+
+      - name: Stage and package macOS Education release
+        run: |
+          mkdir -p staging-education
+          cp -r dist/MapInABox-Education.app staging-education/MapInABox-Education.app
+          cp install-macos.sh staging-education/install-macos.sh
+          cp README-macOS.txt staging-education/README.txt
+          cp LICENSE staging-education/LICENSE
+          cp THIRD_PARTY_NOTICES.txt staging-education/THIRD_PARTY_NOTICES.txt
+          chmod +x staging-education/install-macos.sh
+          cd staging-education && ditto -c -k --sequesterRsrc . ../MapInABox-macOS-Education.zip
+
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: MapInABox-macOS
-          path: MapInABox-macOS.zip
+          path: |
+            MapInABox-macOS.zip
+            MapInABox-macOS-Education.zip
           if-no-files-found: error
 
   publish-release:

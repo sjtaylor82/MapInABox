@@ -22,7 +22,8 @@ PORTABLE_MODE = (
 
 # Education builds ship with an "_education" marker file alongside the
 # resources (same convention as the portable marker above). Its presence
-# withholds the in-app Tools menu (F12) and defaults the "clear favourites
+# withholds the in-app Tools menu (F12), food-menu search (Ctrl+Alt+6), and
+# external POI website launching (Ctrl+W), and defaults the "clear favourites
 # and personal POIs on exit" setting to on. Pro builds carry no marker.
 _EDUCATION_MARKER = os.path.join(RESOURCE_DIR, "_education")
 EDUCATION_EDITION = os.path.isfile(_EDUCATION_MARKER)

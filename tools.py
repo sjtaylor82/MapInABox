@@ -2165,8 +2165,10 @@ class ToolsMixin:
             self._status_update(f"Journey planner: could not display results ({e}).", force=True)
         finally:
             self._finish_thinking()
-            self.listbox.SetFocus()
-        self.listbox.SetFocus()
+            # The main listbox is hidden when no browsable map list is open.
+            # Focusing it here leaves NVDA querying a stale MSAA object and it
+            # announces "unknown".  Restore the active map/street mode object.
+            self._show_mode_surface(focus=True)
 
 
     @staticmethod

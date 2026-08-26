@@ -24,7 +24,7 @@
 <body>
 
 <h1>Map in a Box — User Manual</h1>
-<p><strong>Version 2026.7.0</strong> &nbsp;|&nbsp; Windows &amp; macOS</p>
+<p><strong>Version 2026.8.0</strong> &nbsp;|&nbsp; Windows &amp; macOS</p>
 
 
 <nav aria-label="Table of contents">
@@ -89,7 +89,7 @@
 
 <p>Move across the map by using the arrow keys, adding shift or control where appropriate for smaller or larger jumps respectively. You can even virtually jump over a body of water into a neighbouring country if you wish, by using control+alt with arrow keys</p>
 
-<p>If demonstrating to a visual learner or educator, press <code>Shift+F8</code> to switch the map display between <strong>World</strong> and <strong>Country</strong> modes. World mode is the default global view, while Country mode visually focuses upon the country you're in, its main states or provinces, and a smaller set of nearby cities.</p>
+<p>If demonstrating to a visual learner or educator, press <code>Shift+F8</code> to switch the map display between <strong>World</strong> and <strong>Country</strong> modes. World mode is the default global view, while Country mode fits the current country to the map. Use <code>Ctrl+Plus</code> and <code>Ctrl+Minus</code> for geographic visual zoom from 1x through 128x; <code>Ctrl+0</code> returns to 1x. Closer Country views progressively show populated places, but never load or draw streets.</p>
 
 <p>Map mode also contains a host of useful lookups which can be activated with a single key press, including repeating position, announcing coordinates, toggling sounds on/off, postcode lookup, time and timezone check, air quality index, weather lookup, nearest airports,, and country currency. The full list is in <a href="#key-reference">Section 20</a>, but by now, you've probably realised that Map Mode is a launchpad for whatever you want to do next, and that MapInABox really contains a plethora of tools..</p>
 
@@ -167,6 +167,7 @@
 </ul>
 
 <p>MapInABox can download relevant transport timetable information that can be browsed in an accessible list. So, if you pick a transit stop, you can often open departure information immediately if the timetable data is known to the program and can be downloaded.</p>
+<p>Downloaded timetable data becomes stale after seven days. When a transport workflow next needs a stale feed, MapInABox asks whether to update it; choose No to use the existing timetable immediately. The Area Downloader is an explicit download action, so it refreshes stale feeds for the selected region without asking about each feed separately.</p>
 
 
 <h2 id="find-food">8. Find food</h2>
@@ -206,7 +207,7 @@
 
 <p>Normally street data is downloaded on demand. Press <code>F11</code> and the current area loads there and then. That's fine for casual exploring, but there is generally a delay whilst the suburb data is fetched. If you already know you're going to spend a while in, say, Brisbane, or you'd rather not wait on a download mid-navigation, you can grab a whole batch of suburbs ahead of time instead.</p>
 
-<p>Press <code>Ctrl+Shift+F11</code> to open the city data wizard. It walks you through four short steps:</p>
+<p>Press <code>Ctrl+Shift+F11</code> to open the Area Downloader. Choose a country and state or region, then either download its public-transport timetable data directly or find individual suburbs for street and address data.</p>
 
 <ol>
   <li><strong>Country.</strong> Pick from a worldwide list — the country you are currently exploring ought to be auto-selected</li>
@@ -475,7 +476,7 @@
 
 <h3>18.4 Get ready to explore a whole city ahead of time</h3>
 <ol>
-  <li>Press <code>Ctrl+Shift+F11</code> to open the city data wizard.</li>
+  <li>Press <code>Ctrl+Shift+F11</code> to open the Area Downloader.</li>
   <li>Pick a country, then a state/region (or a postcode range if you want a specific range, and if postcodes are supported in your region.</li>
   <li>Tick the suburbs you're interested in from the list, then press confirm.</li>
   <li>Keep doing whatever else you were doing — the download runs in the background, and each suburb loads instantly once it's done.</li>
@@ -504,7 +505,7 @@
 <h3>18.8 Open a business website instantly</h3>
 <ol>
   <li>Find a business in the POI list or in street mode.</li>
-  <li>Press <code>Ctrl+Alt+4</code> to hear the saved website field, or <code>Ctrl+W</code> to just open the site right away.</li>
+  <li>Press <code>Ctrl+Alt+4</code> to hear the saved website field. In the Pro edition, <code>Ctrl+W</code> opens the site in your browser; external POI website launching is unavailable in the Education edition.</li>
   <li>Can't find a site straight away? The app falls back to a web search so you're not stuck.</li>
 </ol>
 
@@ -547,7 +548,7 @@
 <h2 id="key-reference">20. Quick key reference</h2>
 
 <h3>20.0 macOS modifier and function-key equivalents</h3>
-<p>On macOS, use <code>Command</code> wherever the tables show <code>Ctrl</code>, and <code>Option</code> wherever they show <code>Alt</code>. For example, Settings is <code>Command+,</code>, refresh POIs is <code>Command+Option+P</code>, and the city data wizard is <code>Command+Shift+F11</code>.</p>
+<p>On macOS, use <code>Command</code> wherever the tables show <code>Ctrl</code>, and <code>Option</code> wherever they show <code>Alt</code>. For example, Settings is <code>Command+,</code>, refresh POIs is <code>Command+Option+P</code>, and the Area Downloader is <code>Command+Shift+F11</code>.</p>
 <p>On the tested Mac, bare <code>F11</code> was not delivered to wxPython even though other function keys worked normally. The verified alternative is:</p>
 <table>
   <tr><th>Documented key</th><th>Mac alternative</th><th>Action</th></tr>
@@ -568,7 +569,7 @@
   <tr><td><code>Shift+F4</code></td><td>Volume up</td></tr>
   <tr><td><code>F7</code></td><td>Sounds on/off</td></tr>
   <tr><td><code>F11</code></td><td>Street mode</td></tr>
-  <tr><td><code>Ctrl+Shift+F11</code></td><td>Download a city's suburbs in bulk (city data wizard)</td></tr>
+  <tr><td><code>Ctrl+Shift+F11</code></td><td>Area Downloader for street, address, and transport data</td></tr>
   <tr><td><code>F12</code></td><td>Tools menu</td></tr>
   <tr><td><code>Ctrl+Shift+F12</code></td><td>Report GNAF address state; press again within five seconds to toggle</td></tr>
   <tr><td><code>Ctrl+,</code></td><td>Settings</td></tr>
@@ -596,14 +597,21 @@
   <tr><td><code>F5</code></td><td>Continent</td></tr>
   <tr><td><code>F6</code></td><td>Country facts — asks to exit street mode first, since this reports on the world-map country, not your street-level position</td></tr>
   <tr><td><code>Shift+F6</code></td><td>Wikipedia summary — same exit-street-mode prompt as <code>F6</code></td></tr>
-  <tr><td><code>F8</code></td><td>Flash country (visual highlight of the country box on the map)</td></tr>
+  <tr><td><code>F8</code></td><td>At 1x, subdue the world map and show an enlarged country silhouette. At higher zoom, preserve the magnified viewport so an external visual-description tool can capture it.</td></tr>
   <tr><td><code>Shift+F8</code></td><td>Toggle map display between World and Country modes</td></tr>
-  <tr><td><code>F9</code></td><td>Visual Assist mode, with a larger map and marker, movement trail, coordinates and destination marker</td></tr>
+  <tr><td><code>Ctrl+Plus</code></td><td>Increase geographic visual zoom</td></tr>
+  <tr><td><code>Ctrl+Minus</code></td><td>Decrease geographic visual zoom</td></tr>
+  <tr><td><code>Ctrl+0</code></td><td>Reset geographic visual zoom to 1x</td></tr>
+  <tr><td><code>F9</code></td><td>Visual Assist mode, with a larger map, a cursor halo that pulses briefly after movement then becomes steady, one persistent location callout, a subdued movement trail, coordinates, view and zoom indicator, north indicator, destination marker, and a seven-second high-contrast caption for requested spoken information</td></tr>
   <tr><td><code>F10</code></td><td>Challenge game — asks to exit street mode first; playing the challenge means moving the world-map cursor, which street mode's arrow keys don't do</td></tr>
   <tr><td><code>Ctrl+F10</code></td><td>Scored, multi-player challenge session — same exit-street-mode prompt as <code>F10</code></td></tr>
   <tr><td><code>Shift+F10</code></td><td>Repeat challenge target (only does anything once a challenge is already running, so there's nothing to gate)</td></tr>
   <tr><td><code>Shift+F11</code></td><td>Pre-download streets for the current spot — restricted to map mode; if you try it in street mode, the app tells you to back out first</td></tr>
-  <tr><td><code>Ctrl+Arrows</code></td><td>Move in large steps (about 333 km or 207 miles) for fast long-distance navigation</td></tr>
+  <tr><td><code>Ctrl+Home</code></td><td>Jump to the North Pole while preserving longitude</td></tr>
+  <tr><td><code>Ctrl+End</code></td><td>Jump to the South Pole while preserving longitude</td></tr>
+  <tr><td><code>Arrow keys</code></td><td>Move about 5 km or 3.1 miles</td></tr>
+  <tr><td><code>Shift+Arrows</code></td><td>Move in fine steps of about 1 km or 0.6 miles</td></tr>
+  <tr><td><code>Ctrl+Arrows</code></td><td>Move in large steps of about 100 km or 62 miles</td></tr>
   <tr><td><code>Ctrl+Alt+Arrows</code></td><td>Jump to the nearest foreign country in that direction</td></tr>
   <tr><td><code>R</code></td><td>Current region</td></tr>
   <tr><td><code>C</code></td><td>Current country</td></tr>
@@ -659,9 +667,9 @@
   <tr><td><code>Ctrl+Alt+2</code></td><td>POI hours</td></tr>
   <tr><td><code>Ctrl+Alt+3</code></td><td>POI phone</td></tr>
   <tr><td><code>Ctrl+Alt+4</code></td><td>POI website</td></tr>
-  <tr><td><code>Ctrl+Alt+5</code></td><td>Open Google reviews for POI in browser</td></tr>
-  <tr><td><code>Ctrl+Alt+6</code></td><td>Find food menu links</td></tr>
-  <tr><td><code>Ctrl+W</code></td><td>Open POI website</td></tr>
+  <tr><td><code>Ctrl+Alt+5</code></td><td>Google rating and review count; Pro can open full reviews in a browser</td></tr>
+  <tr><td><code>Ctrl+Alt+6</code></td><td>Find food menu links (Pro edition only)</td></tr>
+  <tr><td><code>Ctrl+W</code></td><td>Open POI website (Pro edition only)</td></tr>
   <tr><td><code>Escape</code></td><td>Close POI list</td></tr>
   <tr><td><code>Backspace</code></td><td>Go back in POI exploration</td></tr>
   <tr><td><code>F11</code></td><td>Toggle street mode</td></tr>

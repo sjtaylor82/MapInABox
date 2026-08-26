@@ -11,19 +11,24 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-APP="$SCRIPT_DIR/MapInABox.app"
+if [ -d "$SCRIPT_DIR/MapInABox-Education.app" ]; then
+    APP_NAME="MapInABox-Education.app"
+else
+    APP_NAME="MapInABox.app"
+fi
+APP="$SCRIPT_DIR/$APP_NAME"
 
 if [ ! -d "$APP" ]; then
-    echo "Error: MapInABox.app not found next to this script."
+    echo "Error: MapInABox.app or MapInABox-Education.app not found next to this script."
     echo "Make sure both files are in the same folder."
     exit 1
 fi
 
-echo "Removing macOS quarantine flag from MapInABox.app..."
+echo "Removing macOS quarantine flag from $APP_NAME..."
 xattr -rd com.apple.quarantine "$APP"
 
-echo "Copying MapInABox.app to /Applications..."
-cp -r "$APP" /Applications/MapInABox.app
+echo "Copying $APP_NAME to /Applications..."
+cp -r "$APP" "/Applications/$APP_NAME"
 
 echo "Done. Launching Map in a Box..."
-open /Applications/MapInABox.app
+open "/Applications/$APP_NAME"

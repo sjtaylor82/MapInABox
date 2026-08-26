@@ -25,12 +25,16 @@ certifi_d,   certifi_b,   certifi_h   = collect_all('certifi')
 all_datas    = shapely_d  + ao2_d + pygame_d + certifi_d
 all_binaries = shapely_b  + ao2_b + pygame_b + certifi_b
 all_hidden   = shapely_h  + ao2_h + pygame_h + certifi_h
+build_edition = os.environ.get('MIAB_EDITION', 'pro').lower()
+education_datas = [
+    ('edition_markers/_education', '.'),
+] if build_edition == 'education' else []
 
 a = Analysis(
     ['core.py'],
     pathex=[os.getcwd()],
     binaries=all_binaries,
-    datas=all_datas + [
+    datas=all_datas + education_datas + [
         # ── Bundled read-only resources ───────────────────────────────────
         ('worldcities.csv.gz',   '.'),
         ('airports.csv.gz',      '.'),
@@ -130,9 +134,20 @@ coll = COLLECT(
 )
 
 if sys.platform == "darwin":
+    education_build = build_edition == 'education'
     app = BUNDLE(
         coll,
-        name='MapInABox.app',
+        name='MapInABox-Education.app' if education_build else 'MapInABox.app',
         icon='icon.icns' if os.path.exists('icon.icns') else None,
-        bundle_identifier='com.samtaylor.MapInABox',
+        bundle_identifier=(
+            'com.samtaylor.MapInABox.Education'
+            if education_build else 'com.samtaylor.MapInABox'
+        ),
+        version=os.environ.get('MIAB_VERSION', '0.0.0'),
+        info_plist={
+            'CFBundleDisplayName': (
+                'Map in a Box Education'
+                if education_build else 'Map in a Box'
+            ),
+        },
     )

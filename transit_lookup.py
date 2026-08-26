@@ -129,6 +129,8 @@ class TransitLookup:
         self._geocode_cache: dict[str, tuple[str, str]] = {}
         self._catalog_lock = threading.Lock()
         self._overrides: dict | None  = None
+        self.stale_confirm_cb = None
+        self._stale_decisions: dict[str, bool] = {}
 
     # ------------------------------------------------------------------
     # Public helpers used by MapNavigator
@@ -142,6 +144,122 @@ class TransitLookup:
     def is_major_station(self, poi: dict) -> bool:
         """Return True if poi is a major station warranting an Ask Mistral option."""
         return poi.get("kind", "").lower() in MAJOR_STATION_KINDS
+
+    def prefetch_for_location(
+        self,
+        lat: float,
+        lon: float,
+        status_cb=None,
+    ) -> list[str]:
+        """Discover, download and parse the GTFS feeds serving a location.
+
+        This is the explicit-download counterpart to the lazy loading used by
+        nearby_stops(). It deliberately returns feed IDs rather than stops so
+        an area downloader can prepare transit data without pretending the
+        representative city centre is the user's intended station.
+        """
+        if status_cb:
+            status_cb("Discovering public transport feeds…")
+        feed_ids = self._ensure_feeds_for_location(lat, lon)
+        if status_cb:
+            if feed_ids:
+                status_cb(
+                    f"Prepared {len(feed_ids)} public transport "
+                    f"feed{'s' if len(feed_ids) != 1 else ''}."
+                )
+            else:
+                status_cb("No public transport feed was found for this area.")
+        return feed_ids
+
+    def prefetch_for_region(
+        self,
+        lat: float,
+        lon: float,
+        subdivision: str,
+        status_cb=None,
+    ) -> list[str]:
+        """Download every active catalogue feed assigned to a subdivision.
+
+        ``lat``/``lon`` are used only to determine the country code. Unlike
+        lazy stop lookup, this explicit area download does not discard feeds
+        far from the representative city: selecting Queensland intentionally
+        includes regional and island feeds throughout Queensland.
+        """
+        if status_cb:
+            status_cb(f"Finding public transport feeds for {subdivision}…")
+
+        _region_key, country_code, _detected_subdivision = (
+            self._region_key_for(lat, lon)
+        )
+        if not country_code:
+            if status_cb:
+                status_cb("Could not determine the selected area's country.")
+            return []
+
+        if self._catalog_df_full is None:
+            self._ensure_catalog()
+        df = self._catalog_df_full
+        if df is None or not len(df):
+            if status_cb:
+                status_cb("The public transport feed catalogue is unavailable.")
+            return []
+
+        cc_col = "location.country_code"
+        sub_col = "location.subdivision_name"
+        wanted = (subdivision or "").strip().casefold()
+        matches = df[
+            (df[cc_col].fillna("").astype(str).str.upper() == country_code)
+            & (
+                df[sub_col].fillna("").astype(str).str.strip().str.casefold()
+                == wanted
+            )
+        ].copy()
+
+        # Stable feed-ID ordering makes progress repeatable and keeps related
+        # regional feeds together as they appear in the MobilityData catalogue.
+        try:
+            matches["_feed_sort"] = matches["mdb_source_id"].astype(int)
+            matches = matches.sort_values("_feed_sort")
+        except Exception:
+            matches = matches.sort_values("mdb_source_id")
+
+        candidates: list[tuple[str, str, str]] = []
+        seen_ids: set[str] = set()
+        for _, row in matches.iterrows():
+            feed_id = str(row.get("mdb_source_id", "")).strip()
+            url = str(row.get("urls.direct_download", "")).strip()
+            provider = str(row.get("provider", "")).strip()
+            if not feed_id or not url or url == "nan" or feed_id in seen_ids:
+                continue
+            seen_ids.add(feed_id)
+            candidates.append((feed_id, url, provider))
+
+        # Include any maintained supplementary feeds for the same region.
+        for feed_id, url in self._overrides_for_region(
+                country_code, subdivision):
+            if feed_id not in seen_ids:
+                seen_ids.add(feed_id)
+                candidates.append((feed_id, url, feed_id))
+
+        ready: list[str] = []
+        total = len(candidates)
+        for number, (feed_id, url, provider) in enumerate(candidates, 1):
+            if status_cb:
+                label = provider or f"feed {feed_id}"
+                status_cb(
+                    f"Preparing {label} ({number} of {total})…"
+                )
+            _fid, data = self._gtfs_ensure(
+                feed_id, url, refresh_stale=True)
+            if data:
+                ready.append(feed_id)
+
+        if status_cb:
+            status_cb(
+                f"Prepared {len(ready)} of {total} public transport "
+                f"feed{'s' if total != 1 else ''} for {subdivision}."
+            )
+        return ready
 
     def nearby_stops(
         self,
@@ -588,16 +706,49 @@ class TransitLookup:
         """
         loc_key = f"{round(lat, 2)}_{round(lon, 2)}"
 
+        # Load the current catalogue before consulting persistent/session feed
+        # indexes so feeds that have since become inactive or deprecated are
+        # not resurrected from an older successful lookup.
+        df = self._catalog_df
+        if df is None:
+            df = self._ensure_catalog()
+            self._catalog_df = df
+        usable_catalog_ids = {
+            str(feed_id)
+            for feed_id in (
+                self._catalog_df_full["mdb_source_id"].tolist()
+                if self._catalog_df_full is not None else []
+            )
+        }
+
         # ── 1. In-memory session cache ────────────────────────────────
         cached = self._location_feeds.get(loc_key)
         if cached is not None:
-            return cached
+            usable_cached = [
+                fid for fid in cached
+                if not str(fid).isdigit() or str(fid) in usable_catalog_ids
+            ]
+            self._location_feeds[loc_key] = usable_cached
+            return usable_cached
 
         # ── 2. Verified index (persistent, built by prior discovery) ──
         region_key, country_code, subdivision = self._region_key_for(lat, lon)
         if region_key:
             index = self._load_verified_index()
             entry = index.get(region_key)
+            if entry:
+                fid = entry["feed_id"]
+                url = entry["url"]
+                if str(fid).isdigit() and str(fid) not in usable_catalog_ids:
+                    miab_log(
+                        "navigation",
+                        f"[Transit] Verified index: feed {fid} is no longer "
+                        "active in the catalogue — evicting",
+                        getattr(self, "settings", None),
+                    )
+                    index.pop(region_key, None)
+                    self._save_verified_index(index)
+                    entry = None
             if entry:
                 fid = entry["feed_id"]
                 url = entry["url"]
@@ -634,11 +785,6 @@ class TransitLookup:
                     miab_log("navigation", f"[Transit] Verified index: feed {fid} unavailable, re-discovering", getattr(self, "settings", None))
 
         # ── 3. Discovery ──────────────────────────────────────────────
-        df = self._catalog_df
-        if df is None:
-            df = self._ensure_catalog()
-            self._catalog_df = df
-
         feed_ids: list[str] = []
 
         if df is not None and len(df):
@@ -1146,26 +1292,45 @@ class TransitLookup:
         return d
 
     def _gtfs_is_stale(self, feed_id: str) -> bool:
+        age = self._gtfs_cache_age_days(feed_id)
+        return age is None or age > GTFS_STALE_DAYS
+
+    def _gtfs_cache_age_days(self, feed_id: str) -> Optional[float]:
+        """Return the age of a usable cache, or None when none exists."""
         meta = os.path.join(self._cache_dir(), f"{feed_id}.meta.json")
         zp   = os.path.join(self._cache_dir(), f"{feed_id}.zip")
-        if not os.path.exists(zp) or not os.path.exists(meta):
-            return True
+        pickle_p = os.path.join(
+            self._cache_dir(), f"{feed_id}.parsed.pkl")
+        if (
+            not os.path.exists(meta)
+            or not (os.path.exists(zp) or os.path.exists(pickle_p))
+        ):
+            return None
         try:
             with open(meta, encoding="utf-8") as f:
                 m = json.load(f)
-            return (time.time() - m["downloaded_at"]) / 86400 > GTFS_STALE_DAYS
+            return max(0.0, (time.time() - m["downloaded_at"]) / 86400)
         except Exception:
-            return True
+            return None
 
     def _gtfs_ensure(
-        self, feed_id: str, download_url: str
+        self,
+        feed_id: str,
+        download_url: str,
+        refresh_stale: Optional[bool] = None,
     ) -> tuple[Optional[str], Optional[dict]]:
         """Return ``(feed_id, data)`` for *feed_id*, downloading at most once.
 
         Parsed data is pickled alongside the zip so re-parsing only happens
         when the zip is stale or the pickle is missing/corrupt.
         """
-        if feed_id in self._feeds:
+        if (
+            feed_id in self._feeds
+            and not (
+                refresh_stale is True
+                and self._gtfs_is_stale(feed_id)
+            )
+        ):
             return feed_id, self._feeds[feed_id]
         if feed_id in self._failed_feeds:
             return feed_id, None
@@ -1173,6 +1338,8 @@ class TransitLookup:
         zp      = os.path.join(self._cache_dir(), f"{feed_id}.zip")
         pickle_p = os.path.join(self._cache_dir(), f"{feed_id}.parsed.pkl")
         stale   = self._gtfs_is_stale(feed_id)
+        age_days = self._gtfs_cache_age_days(feed_id)
+        stale_fallback_data = None
 
         # ── Try loading from pickle cache first ───────────────────────
         # Always try pickle if it exists — even if the zip is stale/deleted.
@@ -1191,9 +1358,46 @@ class TransitLookup:
                     os.remove(pickle_p)
                     # fall through to download
                 else:
-                    miab_log("navigation", f"[Transit] Loaded parsed cache for {feed_id}", getattr(self, "settings", None))
-                    self._feeds[feed_id] = data
-                    return feed_id, data
+                    should_refresh = False
+                    if stale:
+                        if refresh_stale is not None:
+                            should_refresh = refresh_stale
+                        elif feed_id in self._stale_decisions:
+                            should_refresh = self._stale_decisions[feed_id]
+                        elif self.stale_confirm_cb and age_days is not None:
+                            try:
+                                should_refresh = bool(
+                                    self.stale_confirm_cb(feed_id, age_days))
+                            except Exception as exc:
+                                miab_log(
+                                    "errors",
+                                    f"[Transit] Stale-update prompt failed for "
+                                    f"{feed_id}: {exc}",
+                                    getattr(self, "settings", None),
+                                )
+                            self._stale_decisions[feed_id] = should_refresh
+
+                    if not stale or not should_refresh:
+                        state = (
+                            f"stale ({age_days:.0f} days old)"
+                            if stale and age_days is not None else "current"
+                        )
+                        miab_log(
+                            "navigation",
+                            f"[Transit] Loaded {state} parsed cache for {feed_id}",
+                            getattr(self, "settings", None),
+                        )
+                        self._feeds[feed_id] = data
+                        return feed_id, data
+
+                    miab_log(
+                        "navigation",
+                        f"[Transit] Refreshing stale parsed cache for {feed_id}",
+                        getattr(self, "settings", None),
+                    )
+                    stale_fallback_data = data
+                    # Keep the existing pickle on disk until the replacement
+                    # has downloaded and parsed successfully.
             except Exception as e:
                 miab_log("errors", f"[Transit] Pickle load failed for {feed_id}: {e} — will re-parse", getattr(self, "settings", None))
 
@@ -1213,6 +1417,15 @@ class TransitLookup:
                     zip_bytes = r.read()
             except Exception as exc:
                 miab_log("errors", f"[Transit] Download failed for {feed_id}: {exc}", getattr(self, "settings", None))
+                if stale_fallback_data is not None:
+                    miab_log(
+                        "navigation",
+                        f"[Transit] Using stale parsed cache for {feed_id} "
+                        "after refresh failure",
+                        getattr(self, "settings", None),
+                    )
+                    self._feeds[feed_id] = stale_fallback_data
+                    return feed_id, stale_fallback_data
                 self._failed_feeds.add(feed_id)
                 return feed_id, None
 
@@ -1221,12 +1434,19 @@ class TransitLookup:
                 f.write(zip_bytes)
             with open(meta_p, "w", encoding="utf-8") as f:
                 json.dump({"downloaded_at": time.time(), "feed_id": feed_id}, f)
-            # Invalidate any existing pickle when zip is refreshed
-            if os.path.exists(pickle_p):
-                os.remove(pickle_p)
-
         # ── Parse and save pickle ─────────────────────────────────────
-        data = self._parse_zip(zip_bytes, feed_id)
+        try:
+            data = self._parse_zip(zip_bytes, feed_id)
+        except Exception as exc:
+            miab_log(
+                "errors",
+                f"[Transit] Parse failed for refreshed feed {feed_id}: {exc}",
+                getattr(self, "settings", None),
+            )
+            if stale_fallback_data is not None:
+                self._feeds[feed_id] = stale_fallback_data
+                return feed_id, stale_fallback_data
+            return feed_id, None
         data["_parser_version"] = GTFS_PARSER_VERSION
         self._feeds[feed_id] = data
         try:
@@ -1523,11 +1743,19 @@ class TransitLookup:
                 low_memory=False,
             )
             # Full usable GTFS rows (may lack bbox — used for country fallback).
-            # Treat blank/missing status as active — only exclude "deprecated".
-            status_col = df.get("status", pd.Series(dtype=str)).fillna("").astype(str)
+            # MobilityData commonly leaves live feeds blank; explicitly active
+            # and blank are production-usable. Inactive, deprecated and
+            # development feeds must never enter any GTFS workflow.
+            status_col = (
+                df.get("status", pd.Series(dtype=str))
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                .str.lower()
+            )
             df_full = df[
                 (df.get("data_type", pd.Series(dtype=str)) == "gtfs")
-                & (status_col != "deprecated")
+                & status_col.isin(("", "active"))
                 & df["urls.direct_download"].notna()
             ].copy()
             self._catalog_df_full = df_full
