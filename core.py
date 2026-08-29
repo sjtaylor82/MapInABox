@@ -19,6 +19,7 @@ from logging_utils import miab_log
 from i18n import _, set_language
 from speech_dispatch import SpeechDispatch, braille as _braille, speak as _speak
 from wx_utils import IS_MAC, MSAAListBox, _log_key_event, _primary_down
+from keystrokes import action_for_event, disabled_default_for_event
 from lookups import LookupsMixin
 from nav import NavMixin
 from walk import WalkMixin
@@ -67,6 +68,8 @@ from free import FreeExploreEngine
 from nav import NavigationEngine
 from here_poi import HereClient as HerePoi
 import mall_directory
+import user_maps
+from user_map_dialogs import LocalRouteDialog, MapDrawerDialog
 from postal_codes import PostalCodeLookup
 from network_utils import NETWORK_UNAVAILABLE_MESSAGE
 from app_paths import (
@@ -875,6 +878,9 @@ DEFAULT_SETTINGS = {
     "weather_temperature_unit": "auto",  # "auto", "celsius", or "fahrenheit"
     "distance_unit":          "metric",  # "metric" or "imperial"
     "poi_source":             "osm",   # "osm" or "here"
+    "visual_mapping_source":  "auto",  # "google", "mapillary", or legacy-aware "auto"
+    "driving_route_source":   "osrm",  # paid Google driving is explicit opt-in
+    "key_bindings":           {},
     "language":               "",      # empty means system/default language
     "gnaf_enabled":           True,    # Australian address point overlay
     "jump_history":           [],      # last 5 J-key destinations [{label,lat,lon}]
@@ -1250,6 +1256,30 @@ class SoundEngine:
                 ch = pygame.mixer.Channel(idx)
                 if not ch.get_busy():
                     ch.play(snd)
+                    return
+            pygame.mixer.Channel(1).play(snd)
+        threading.Thread(target=_gen, daemon=True).start()
+
+    def play_barrier_tone(self):
+        """Play a low double pulse when local-map movement crosses a barrier."""
+        def _gen():
+            sr = 44100
+            pulse_length = 0.075
+            gap_length = 0.055
+            pulse_t = np.linspace(0, pulse_length, int(sr * pulse_length), False)
+            pulse = np.sin(2 * np.pi * 145.0 * pulse_t)
+            fade = max(1, int(sr * 0.015))
+            pulse[:fade] *= np.linspace(0, 1, fade)
+            pulse[-fade:] *= np.linspace(1, 0, fade)
+            gap = np.zeros(int(sr * gap_length))
+            wave = np.concatenate((pulse, gap, pulse)) * 0.55 * 32767
+            stereo = np.ascontiguousarray(
+                np.stack((wave, wave), axis=-1), dtype=np.int16)
+            snd = pygame.sndarray.make_sound(stereo)
+            for idx in range(1, pygame.mixer.get_num_channels()):
+                channel = pygame.mixer.Channel(idx)
+                if not channel.get_busy():
+                    channel.play(snd)
                     return
             pygame.mixer.Channel(1).play(snd)
         threading.Thread(target=_gen, daemon=True).start()
@@ -1831,13 +1861,29 @@ class WorldMapPanel(wx.Panel):
         zoom = max(1.0, float(self._visual_zoom_factor()))
         owner = self._owner_ref()
         country = getattr(owner, "last_country_found", "") if owner else ""
+        explore_points = getattr(self, "_explore_path_points", None) or []
+        explore_key = (
+            len(explore_points),
+            tuple(round(v, 5) for v in explore_points[0]) if explore_points else None,
+            tuple(round(v, 5) for v in explore_points[-1]) if explore_points else None,
+        )
         cache_key = (w, h, self._map_display_mode(), zoom,
                      round(self.lat, 5) if zoom > 1 else None,
-                     round(self.lon, 5) if zoom > 1 else None, country)
+                     round(self.lon, 5) if zoom > 1 else None, country,
+                     explore_key)
         if cache_key == self._view_bounds_cache_key:
             return self._view_bounds_cache_value
         lon_min, lon_max, lat_min, lat_max = -180.0, 180.0, -90.0, 90.0
-        if self._map_display_mode() == "country":
+        if explore_points:
+            lats = [point[0] for point in explore_points]
+            lons = [point[1] for point in explore_points]
+            lon_min, lon_max = min(lons), max(lons)
+            lat_min, lat_max = min(lats), max(lats)
+            lon_pad = max(0.005, (lon_max - lon_min) * 0.08)
+            lat_pad = max(0.005, (lat_max - lat_min) * 0.08)
+            lon_min -= lon_pad; lon_max += lon_pad
+            lat_min -= lat_pad; lat_max += lat_pad
+        elif self._map_display_mode() == "country":
             cached_country_bounds = self._country_bounds_cache.get(country)
             if cached_country_bounds:
                 lon_min, lon_max, lat_min, lat_max = cached_country_bounds
@@ -1868,7 +1914,11 @@ class WorldMapPanel(wx.Panel):
             lon_span = lat_span * panel_ratio
         else:
             lat_span = lon_span / panel_ratio
-        if zoom > 1:
+        if explore_points:
+            centre_lon = (lon_min + lon_max) / 2
+            centre_lat = (lat_min + lat_max) / 2
+            zoom = 1.0
+        elif zoom > 1:
             centre_lon, centre_lat = float(self.lon), float(self.lat)
         else:
             centre_lon = (lon_min + lon_max) / 2
@@ -1881,6 +1931,19 @@ class WorldMapPanel(wx.Panel):
         self._view_bounds_cache_key = cache_key
         self._view_bounds_cache_value = result
         return result
+
+    def set_explore_path(self, points=None, index=0, travel_mode="driving"):
+        """Show or clear the active Journey Planner route overlay."""
+        new_points = list(points or [])
+        geometry_changed = new_points != getattr(self, "_explore_path_points", [])
+        self._explore_path_points = new_points
+        self._explore_path_index = max(0, int(index))
+        self._explore_path_mode = travel_mode or "driving"
+        if geometry_changed:
+            self._view_bounds_cache_key = None
+            self._bg_bitmap = None
+            self._bg_bitmap_view_key = None
+        self.Refresh()
 
     def _geo_to_px(self, lon, lat, w, h, margin=6,
                    lon_min=None, lon_max=None, lat_min=None, lat_max=None):
@@ -1913,6 +1976,9 @@ class WorldMapPanel(wx.Panel):
     def _on_paint(self, event):
         dc = wx.AutoBufferedPaintDC(self)
         w, h = self.GetSize()
+        if self._owner and getattr(self._owner, "_user_map_data", None):
+            self._paint_user_map(dc, w, h)
+            return
         if self.street_mode:
             gc = wx.GraphicsContext.Create(dc)
             if gc:
@@ -1921,9 +1987,17 @@ class WorldMapPanel(wx.Panel):
 
         mode = self._map_display_mode()
         zoom = self._visual_zoom_factor()
-        view_key = (mode, zoom,
-                    round(self.lat, 4) if zoom > 1 else None,
-                    round(self.lon, 4) if zoom > 1 else None)
+        explore_points = getattr(self, "_explore_path_points", None) or []
+        if explore_points:
+            view_key = (
+                mode, "explore", len(explore_points),
+                tuple(round(v, 5) for v in explore_points[0]),
+                tuple(round(v, 5) for v in explore_points[-1]),
+            )
+        else:
+            view_key = (mode, zoom,
+                        round(self.lat, 4) if zoom > 1 else None,
+                        round(self.lon, 4) if zoom > 1 else None)
 
         # Build background bitmap once for the current map mode.
         if (not getattr(self, '_bg_bitmap', None) or
@@ -1947,6 +2021,7 @@ class WorldMapPanel(wx.Panel):
         gc = wx.GraphicsContext.Create(dc)
         if gc:
             self._draw_mode_overlay(gc, w, h)
+            self._draw_explore_path(gc, w, h)
             self._draw_classroom_trail(gc, w, h)
             self._draw_classroom_destination(gc, w, h)
             px, py = self._geo_to_px(self.lon, self.lat, w, h)
@@ -1976,6 +2051,82 @@ class WorldMapPanel(wx.Panel):
             self._draw_current_location_callout(gc, w, h, px, py)
             self._draw_classroom_hud(gc, w, h)
             self._draw_visual_assist_caption(gc, w, h)
+
+    def _paint_user_map(self, dc, w, h):
+        """Draw the background, author strokes, labels, and cursor of a local map."""
+        owner = self._owner
+        data = getattr(owner, "_user_map_floor", None) or owner._user_map_data
+        dc.SetBackground(wx.Brush(wx.Colour(248, 248, 244)))
+        dc.Clear()
+        background = getattr(owner, "_user_map_background", "")
+        if background and os.path.exists(background):
+            try:
+                bitmap = wx.Bitmap(background)
+                if bitmap.IsOk():
+                    image = bitmap.ConvertToImage().Scale(max(1, w), max(1, h), wx.IMAGE_QUALITY_HIGH)
+                    dc.DrawBitmap(wx.Bitmap(image), 0, 0)
+            except Exception:
+                pass
+
+        def to_px(x, y):
+            return (x / data["width"] * w,
+                    h - y / data["height"] * h)
+
+        dc.SetPen(wx.Pen(wx.Colour(20, 85, 155), 5))
+        for path in data.get("paths") or []:
+            points = [to_px(*point) for point in path["points"]]
+            for first, second in zip(points, points[1:]):
+                dc.DrawLine(round(first[0]), round(first[1]),
+                            round(second[0]), round(second[1]))
+
+        explore = getattr(self, "_explore_path_points", None) or []
+        if len(explore) >= 2:
+            dc.SetPen(wx.Pen(wx.Colour(255, 135, 20), 7))
+            route_points = [to_px(lon * 111195.0, lat * 111195.0) for lat, lon in explore]
+            for first, second in zip(route_points, route_points[1:]):
+                dc.DrawLine(round(first[0]), round(first[1]),
+                            round(second[0]), round(second[1]))
+
+        dc.SetFont(wx.Font(10, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        for place in data.get("places") or []:
+            px, py = to_px(place["x"], place["y"])
+            dc.SetBrush(wx.Brush(wx.Colour(235, 75, 45)))
+            dc.SetPen(wx.Pen(wx.Colour(80, 20, 10), 1))
+            dc.DrawCircle(round(px), round(py), 6)
+            dc.SetTextForeground(wx.Colour(15, 15, 15))
+            dc.DrawText(place["name"], round(px + 9), round(py - 8))
+
+        cursor_x, cursor_y = to_px(self.lon * 111195.0, self.lat * 111195.0)
+        dc.SetBrush(wx.Brush(COL_RING))
+        dc.SetPen(wx.Pen(wx.Colour(15, 15, 15), 2))
+        dc.DrawCircle(round(cursor_x), round(cursor_y), 9)
+        dc.SetBrush(wx.Brush(COL_DOT))
+        dc.DrawCircle(round(cursor_x), round(cursor_y), 4)
+
+    def _draw_explore_path(self, gc, w, h):
+        points = getattr(self, "_explore_path_points", None) or []
+        if len(points) < 2:
+            return
+        current = max(0, min(
+            int(getattr(self, "_explore_path_index", 0)), len(points) - 1))
+        mode = getattr(self, "_explore_path_mode", "driving")
+
+        def stroke(segment, colour, width):
+            if len(segment) < 2:
+                return
+            path = gc.CreatePath()
+            path.MoveToPoint(*self._geo_to_px(segment[0][1], segment[0][0], w, h))
+            for lat, lon in segment[1:]:
+                path.AddLineToPoint(*self._geo_to_px(lon, lat, w, h))
+            gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(colour).Width(width)))
+            gc.StrokePath(path)
+
+        remaining_colour = (wx.Colour(30, 210, 255) if mode == "walking"
+                            else wx.Colour(255, 165, 35))
+        # Dark underlay keeps both route colours visible over land and water.
+        stroke(points, wx.Colour(10, 20, 30), 8)
+        stroke(points[current:], remaining_colour, 5)
+        stroke(points[:current + 1], wx.Colour(60, 230, 105), 5)
 
     def _draw_label(self, gc, text, cx, cy, size):
         font = wx.Font(size, wx.FONTFAMILY_SWISS,
@@ -2339,6 +2490,8 @@ class WorldMapPanel(wx.Panel):
 
     def _draw_current_location_callout(self, gc, w, h, px, py):
         """Make the actual cursor unmistakable in Country/Visual Assist views."""
+        if getattr(self, "_explore_path_points", None):
+            return
         if (self._map_display_mode() != "country"
                 and not self._classroom_mode_active()):
             return
@@ -2968,6 +3121,15 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._last_shopping_store_poi = None
         self._map_marks             = {}     # slot -> {"coords": (lat, lon), "name": str}
         self._map_destination       = None   # {"coords": (lat, lon), "name": str}
+        self._user_map_data         = None   # active instructor-created local map
+        self._user_map_path         = ""
+        self._user_map_background   = ""
+        self._user_map_backgrounds  = []
+        self._user_map_floor        = None
+        self._user_map_floor_index  = 0
+        self._user_map_saved_state  = None
+        self._user_map_graph        = None
+        self._user_map_node         = None
         self._prev_lat              = None   # for latitude-line crossing detection
         self._prev_lon              = None   # for Date Line crossing detection
         self._distance_since_fetch  = 0.0
@@ -3359,6 +3521,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
         ids = {
             "settings": new_id(), "exit": new_id(),
+            "user_map_new": new_id(), "user_map_open": new_id(), "user_map_edit": new_id(),
+            "user_map_close": new_id(), "user_map_route": new_id(),
             "jump": new_id(), "jump_history": new_id(),
             "street": new_id(), "prefetch": new_id(), "city_packs": new_id(),
             "favourites": new_id(),
@@ -3398,6 +3562,15 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             return item
 
         file_menu = wx.Menu()
+        add_item(file_menu, "user_map_new", "&Create Map File...",
+                 lambda e: self._create_user_map())
+        add_item(file_menu, "user_map_open", "&Open Map File...",
+                 lambda e: self._open_user_map())
+        add_item(file_menu, "user_map_edit", "&Edit Map File...",
+                 lambda e: self._edit_user_map())
+        add_item(file_menu, "user_map_close", "&Close Map File",
+                 lambda e: self._close_user_map())
+        file_menu.AppendSeparator()
         add_item(file_menu, "settings", "&Settings\tCtrl+,",
                  lambda e: self._open_settings())
         if IS_MAC:
@@ -3436,13 +3609,16 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         add_item(marks_menu, "read_mark_3", "Read Mark &3\tCtrl+3",
                  lambda e: self._announce_mark(3))
         marks_menu.AppendSeparator()
-        add_item(marks_menu, "mark_distances", "&Compare Mark Distances\tShift+Alt+M",
+        add_item(marks_menu, "mark_distances", "&Compare Mark Distances and Directions\tShift+Alt+M",
                  lambda e: self._report_all_mark_distances())
         add_item(marks_menu, "clear_mark", "&Clear Mark\tCtrl+Shift+M",
                  lambda e: self._prompt_mark_slot(remove=True))
         menubar.Append(marks_menu, "Mar&ks")
 
         map_menu = wx.Menu()
+        add_item(map_menu, "user_map_route", "Directions Between Map Places\tCtrl+R",
+                 lambda e: self._user_map_route())
+        map_menu.AppendSeparator()
         add_item(map_menu, "nearby", "&Nearby",
                  lambda e: self._announce_poi_count())
         add_item(map_menu, "nearby_features", "Nearby &Features",
@@ -3577,6 +3753,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             (wx.ACCEL_NORMAL, wx.WXK_F3, int(ids["latitude"])),
             (wx.ACCEL_NORMAL, wx.WXK_F4, int(ids["longitude"])),
             (wx.ACCEL_NORMAL, wx.WXK_F11, int(ids["street"])),
+            (primary_accel, ord('R'), int(ids["user_map_route"])),
             (primary_accel, ord(','), int(ids["settings"])),
         ])
         self.SetAcceleratorTable(self._accelerator_table)
@@ -3587,7 +3764,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         tool_specs = [
             ("jump", "Jump", "Jump to a city, country, or coordinates (J)"),
             ("street", "Street", "Toggle street mode (F11)"),
-            ("nearby", "Nearby", "Nearby map menu (/)"),
+            ("nearby", "Nearby", "Nearby POI search (P)"),
             ("poi_search", "POIs", "Search points of interest in street mode (P)"),
             ("nav_address", "Navigate", "Navigate to an address in street mode (G)"),
             ("favourites", "Favourites", "Show favourites (Ctrl+F)"),
@@ -3603,6 +3780,281 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self._toolbar_tools[key] = tool
         toolbar.Realize()
         self._update_main_menu_state()
+
+    def _create_user_map(self):
+        """Open the intentionally small path-and-label map drawer."""
+        choice = wx.SingleChoiceDialog(
+            self, "How would you like to begin?", "Create Map File",
+            ["Draw a new map", "Import a JPG, PNG, or PDF"],
+        )
+        choice.SetSelection(1)
+        try:
+            if choice.ShowModal() != wx.ID_OK:
+                return
+            use_image = choice.GetSelection() == 1
+        finally:
+            choice.Destroy()
+        background = ""
+        source_path = ""
+        if use_image:
+            picker = wx.FileDialog(
+                self, "Choose a map image or PDF",
+                wildcard=("Map sources (*.jpg;*.jpeg;*.png;*.pdf)|*.jpg;*.jpeg;*.png;*.pdf|"
+                          "PDF files (*.pdf)|*.pdf|Image files (*.jpg;*.jpeg;*.png)|*.jpg;*.jpeg;*.png"),
+                style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+            )
+            try:
+                if picker.ShowModal() != wx.ID_OK:
+                    return
+                background = picker.GetPath()
+                source_path = background
+            finally:
+                picker.Destroy()
+        source_text = ""
+        source_page = 0
+        source_size = None
+        backgrounds = []
+        imported_floors = []
+        if background.lower().endswith(".pdf"):
+            try:
+                page_count = user_maps.pdf_page_count(background)
+                import_all = False
+                if page_count > 1:
+                    mode_dialog = wx.SingleChoiceDialog(
+                        self, "How should the PDF pages be imported?", "Import PDF",
+                        ["Import all pages as floors", "Import one page"])
+                    try:
+                        if mode_dialog.ShowModal() != wx.ID_OK:
+                            return
+                        import_all = mode_dialog.GetSelection() == 0
+                    finally:
+                        mode_dialog.Destroy()
+                    if not import_all:
+                        page_dialog = wx.SingleChoiceDialog(
+                            self, "Which PDF page should this map use?", "Select PDF Page",
+                            [f"Page {number}" for number in range(1, page_count + 1)])
+                        try:
+                            if page_dialog.ShowModal() != wx.ID_OK:
+                                return
+                            source_page = page_dialog.GetSelection()
+                        finally:
+                            page_dialog.Destroy()
+                pages = range(page_count) if import_all else [source_page]
+                for page_index in pages:
+                    rendered = os.path.join(CACHE_DIR, f"user_map_pdf_page_{page_index + 1}.png")
+                    text, pixel_width, pixel_height = user_maps.render_pdf_page(
+                        background, page_index, rendered)
+                    width = 500.0
+                    height = max(10.0, width * pixel_height / pixel_width)
+                    floor = user_maps.new_floor(
+                        f"Floor {page_index + 1}", width, height, page_index)
+                    floor["source_text"] = text
+                    try:
+                        floor["places"] = user_maps.detect_pdf_labels(
+                            background, page_index, width, height,
+                            f"floor-{page_index + 1}")
+                        if not floor["places"]:
+                            floor["places"] = user_maps.detect_image_labels(
+                                rendered, width, height, f"floor-{page_index + 1}")
+                    except Exception as exc:
+                        # Rendering the source is still useful when optional OCR
+                        # is unavailable; the instructor can label it later.
+                        miab_log("errors", f"PDF map label detection failed: {exc}", self.settings)
+                    if floor["places"]:
+                        floor["start"] = floor["places"][0]["id"]
+                    imported_floors.append(floor)
+                    backgrounds.append(rendered)
+                if not import_all:
+                    background = backgrounds[0]
+                    source_text = imported_floors[0]["source_text"]
+                    source_size = (imported_floors[0]["width"], imported_floors[0]["height"])
+            except Exception as exc:
+                wx.MessageBox(f"The PDF could not be imported.\n\n{exc}",
+                              "Create Map File", wx.OK | wx.ICON_ERROR, self)
+                return
+        name_dialog = wx.TextEntryDialog(self, "What is the map called?", "Create Map File")
+        try:
+            if name_dialog.ShowModal() != wx.ID_OK:
+                return
+            name = name_dialog.GetValue().strip() or "Untitled map"
+        finally:
+            name_dialog.Destroy()
+        data = user_maps.new_map(name, *(source_size or (500.0, 350.0)))
+        if len(imported_floors) > 1:
+            data["floors"] = imported_floors
+            background = backgrounds
+        elif imported_floors:
+            imported = imported_floors[0]
+            data["source_text"] = imported["source_text"]
+            data["source_page"] = imported["source_page"]
+            data["places"] = imported["places"]
+            data["start"] = imported["start"]
+        elif background:
+            try:
+                data["places"] = user_maps.detect_image_labels(
+                    background, data["width"], data["height"], "image")
+                if data["places"]:
+                    data["start"] = data["places"][0]["id"]
+            except Exception as exc:
+                miab_log("errors", f"Map image label detection failed: {exc}", self.settings)
+        else:
+            data["source_text"] = source_text
+            data["source_page"] = source_page
+        dialog = MapDrawerDialog(
+            self, data, background,
+            suggested_save_path=user_maps.suggested_save_path(source_path))
+        dialog.ShowModal()
+        dialog.Destroy()
+        self._focus_map_window_silently()
+
+    def _open_user_map(self):
+        picker = wx.FileDialog(
+            self, "Open Map File",
+            wildcard="Map in a Box maps (*.miabmap)|*.miabmap",
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+        )
+        try:
+            if picker.ShowModal() != wx.ID_OK:
+                return
+            path = picker.GetPath()
+        finally:
+            picker.Destroy()
+        sounds_were_enabled = getattr(self, "sounds_enabled", True)
+        self.sounds_enabled = False
+        try:
+            # Opening a local document is an audio boundary: stop looping
+            # world sounds and suppress incidental tones until it is ready.
+            try:
+                self.sound.stop()
+                pygame.mixer.stop()
+            except Exception:
+                pass
+            extract_dir = os.path.join(CACHE_DIR, "open_user_map")
+            data, background = user_maps.load_map(path, extract_dir)
+        except Exception as exc:
+            wx.MessageBox(f"The map file could not be opened.\n\n{exc}",
+                          "Open Map File", wx.OK | wx.ICON_ERROR, self)
+            return
+        finally:
+            self.sounds_enabled = sounds_were_enabled
+        if self._user_map_data:
+            self._close_user_map(announce=False)
+        self._user_map_saved_state = (
+            self.lat, self.lon, bool(self.street_mode), self.street_label,
+        )
+        self.street_mode = False
+        self._walking_mode = False
+        self._free_mode = False
+        self._user_map_data = data
+        self._user_map_path = path
+        self._user_map_backgrounds = (background if isinstance(background, list)
+                                      else [background])
+        self._user_map_floor_index = 0
+        if not self._activate_user_map_floor(0, announce=False):
+            self._close_user_map(announce=False)
+            wx.MessageBox("This map has no usable travel paths.", "Open Map File",
+                          wx.OK | wx.ICON_ERROR, self)
+            return
+        self.street_label = ""
+        self._update_main_menu_state()
+        floor_count = len(user_maps.floors_for(data))
+        floor_text = (f" {floor_count} floors." if floor_count > 1 else "")
+        self._status_update(f"Opened map {data['name']}.{floor_text} "
+                            f"{self._user_map_floor['name']}.", force=True)
+
+    def _edit_user_map(self):
+        picker = wx.FileDialog(
+            self, "Edit Map File",
+            wildcard="Map in a Box maps (*.miabmap)|*.miabmap",
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
+        try:
+            if picker.ShowModal() != wx.ID_OK:
+                return
+            path = picker.GetPath()
+        finally:
+            picker.Destroy()
+        try:
+            extract_dir = os.path.join(CACHE_DIR, "edit_user_map")
+            data, backgrounds = user_maps.load_map(path, extract_dir)
+        except Exception as exc:
+            wx.MessageBox(f"The map file could not be edited.\n\n{exc}",
+                          "Edit Map File", wx.OK | wx.ICON_ERROR, self)
+            return
+        dialog = MapDrawerDialog(self, data, backgrounds, save_path=path)
+        dialog.ShowModal()
+        dialog.Destroy()
+        self._focus_map_window_silently()
+
+    def _activate_user_map_floor(self, index, announce=True):
+        floors = user_maps.floors_for(self._user_map_data)
+        if not 0 <= index < len(floors):
+            return False
+        floor = floors[index]
+        coords, edges, place_nodes = user_maps.build_graph(floor)
+        self._user_map_floor_index = index
+        self._user_map_floor = floor
+        self._user_map_background = (
+            self._user_map_backgrounds[index]
+            if index < len(self._user_map_backgrounds) else "")
+        self._user_map_graph = (coords, edges, place_nodes)
+        places = floor.get("places") or []
+        start_id = floor.get("start")
+        start = next((p for p in places if p["id"] == start_id), places[0] if places else None)
+        self._user_map_node = place_nodes.get(start["id"]) if start else None
+        target_x = start["x"] if start else floor["width"] / 2.0
+        target_y = start["y"] if start else floor["height"] / 2.0
+        if self._user_map_node is None and coords:
+            self._user_map_node = min(coords, key=lambda node: math.hypot(
+                coords[node][0] - target_x, coords[node][1] - target_y))
+        if self._user_map_node is not None:
+            target_x, target_y = coords[self._user_map_node]
+        x, y = target_x, target_y
+        self.lat, self.lon = y / 111195.0, x / 111195.0
+        self.map_panel._bg_bitmap = None
+        self.map_panel.set_position(self.lat, self.lon, False, "")
+        self.map_panel.Refresh()
+        if announce:
+            location = f" Starting at {start['name']}." if start else ""
+            self._status_update(f"{floor['name']}.{location}", force=True)
+        return True
+
+    def _close_user_map(self, announce=True):
+        if not self._user_map_data:
+            if announce:
+                self._status_update("No map file is open.", force=True)
+            return
+        saved = self._user_map_saved_state
+        name = self._user_map_data.get("name", "map")
+        self._user_map_data = None
+        self._user_map_path = ""
+        self._user_map_background = ""
+        self._user_map_backgrounds = []
+        self._user_map_floor = None
+        self._user_map_floor_index = 0
+        self._user_map_saved_state = None
+        self._user_map_graph = None
+        self._user_map_node = None
+        if saved:
+            self.lat, self.lon, self.street_mode, self.street_label = saved
+        self.map_panel._bg_bitmap = None
+        self.map_panel.set_position(self.lat, self.lon, self.street_mode, self.street_label)
+        self.map_panel.Refresh()
+        self._update_main_menu_state()
+        if announce:
+            self._status_update(f"Closed map {name}.", force=True)
+
+    def _user_map_route(self):
+        data = getattr(self, "_user_map_floor", None)
+        if not data:
+            self._status_update("Open a map file before requesting a local route.", force=True)
+            return
+        if len(data.get("places") or []) < 2:
+            self._status_update("This map needs at least two labelled places for directions.", force=True)
+            return
+        dialog = LocalRouteDialog(self, data)
+        dialog.ShowModal()
+        dialog.Destroy()
+        self._focus_map_window_silently()
 
     def _on_main_menu_open(self, event):
         self._suppress_map_focus_repeat(1500)
@@ -3623,7 +4075,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _update_main_menu_state(self):
         street = bool(getattr(self, "street_mode", False))
-        world = not street and not getattr(self, "_walking_mode", False)
+        local_map = bool(getattr(self, "_user_map_data", None))
+        world = not street and not getattr(self, "_walking_mode", False) and not local_map
         has_streets = street and bool(getattr(self, "_road_fetched", False))
 
         for key in ("prefetch",):
@@ -3639,6 +4092,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         ):
             self._menu_items[key].Enable(street)
         self._menu_items["walking"].Enable(has_streets)
+        self._menu_items["user_map_close"].Enable(local_map)
+        self._menu_items["user_map_route"].Enable(local_map)
 
         street_shortcut = "Control+F11" if IS_MAC else "F11"
         street_label = (
@@ -4339,6 +4794,10 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._walk_node         = None
         self._walk_street       = None
         self._walk_heading      = 0.0
+        self._walk_road_side    = None
+        self._walk_side_name    = "unknown side"
+        self._walk_side_anchor  = ""
+        self._walk_on_anchor_side = None
         self._walk_browsing     = False
         self._walk_prev_node    = None
         self._walk_preferred_next = None
@@ -5011,6 +5470,29 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         else:
             wx.CallAfter(self._status_update,
                 f"Transit catalog updated: {len(df)} active feeds worldwide.")
+
+    def _refresh_cached_timetables(self):
+        """Force-refresh every timetable feed already cached on this device."""
+        def status(message):
+            wx.CallAfter(self._status_update, message, True)
+        status("Preparing to update all cached timetables…")
+        try:
+            updated, failed = self._transit.refresh_cached_feeds(
+                status_cb=status)
+        except Exception as exc:
+            miab_log(
+                "errors", f"[Transit] Cached timetable update failed: {exc}",
+                self.settings)
+            status("Cached timetable update failed. Existing data was retained.")
+            return
+        if failed:
+            status(
+                f"Timetable update finished: {len(updated)} updated; "
+                f"{len(failed)} failed and retained their previous data.")
+        else:
+            status(
+                f"Timetable update finished: {len(updated)} feed"
+                f"{'s' if len(updated) != 1 else ''} updated.")
 
     def _confirm_stale_gtfs_update(
         self,
@@ -7249,7 +7731,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 pinned_street = getattr(self, '_jump_address_street', None)
                 pin_lat = getattr(self, '_jump_street_pin_lat', None)
                 pin_lon = getattr(self, '_jump_street_pin_lon', None)
-                if (pinned_num and pinned_street and pin_lat is not None and pin_lon is not None
+                if (not getattr(self, '_walking_mode', False)
+                        and pinned_num and pinned_street and pin_lat is not None and pin_lon is not None
                         and dist_metres(self.lat, self.lon, pin_lat, pin_lon) <= 150.0):
                     suburb = getattr(self, "_current_suburb", "") or ""
                     wx.CallAfter(
@@ -7261,7 +7744,13 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 if getattr(self, '_walking_mode', False):
                     street = getattr(self, '_walk_street', '') or ''
                     if street:
-                        num = self._nearest_address_number(self.lat, self.lon, street, radius=200)
+                        num = self._walk_nearest_address_number(
+                            self.lat,
+                            self.lon,
+                            street,
+                            getattr(self, '_walk_heading', 0.0),
+                            radius=200,
+                        )
                         if num:
                             suburb = getattr(self, "_current_suburb", "") or ""
                             wx.CallAfter(self._status_update, f"{num} {street}" + (f", {suburb}" if suburb else ""))
@@ -10453,8 +10942,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         parts = []
         for i, (_slot_a, name_a, coords_a) in enumerate(entries):
             for _slot_b, name_b, coords_b in entries[i + 1:]:
-                dist_str, _direction = self._format_mark_distance(coords_a, coords_b)
-                parts.append(f"{name_a} to {name_b}: {dist_str}.")
+                dist_str, direction = self._format_mark_distance(
+                    coords_a, coords_b)
+                direction = direction.replace("-", " ")
+                parts.append(
+                    f"{name_b} is {dist_str} {direction} of {name_a}.")
         msg = " ".join(parts)
         if return_focus:
             self._announce_after_map_focus(msg)
@@ -11635,7 +12127,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _open_settings(self):
         try:
-            dlg = SettingsDialog(self, self.settings, user_dir=USER_DIR)
+            dlg = SettingsDialog(
+                self, self.settings, user_dir=USER_DIR,
+                transit_feeds=self._transit.cached_feed_summaries())
         except Exception as exc:
             # Settings used to fail silently in windowed release builds when
             # constructing a platform-specific control raised.  The errors
@@ -11653,6 +12147,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             return
         saved = dlg.ShowModal() == wx.ID_OK
         gtfs_refresh = dlg.gtfs_refreshed
+        timetable_refresh = dlg.timetables_refreshed
         set_home_requested = dlg.set_home_requested
         saved_settings = dlg.settings if saved else None
         # Destroy the ended modal before doing save work or speaking.  Leaving
@@ -11693,7 +12188,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 self.update_ui("Type your location to set as home.")
                 self.show_jump_dialog()
                 return
-        if saved and gtfs_refresh:
+        if saved and timetable_refresh:
+            self._status_update("Updating all cached timetables...")
+            threading.Thread(
+                target=self._refresh_cached_timetables, daemon=True).start()
+        elif saved and gtfs_refresh:
             self._status_update("Refreshing transit feed catalog...")
             threading.Thread(target=self._refresh_transit_catalog, daemon=True).start()
         self._focus_map_window_silently()
@@ -12640,11 +13139,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
     def _handle_global_function_keys(self, key, shift, primary, alt, no_mod):
         if primary and shift and not alt and (key == ord('S') or key == ord('s')):
-            miab_log("feature_usage", "Key: Ctrl+Shift+S (satellite view)", self.settings)
-            lat, lon = self._poi_lat_lon_if_focused()
-            self._satellite_view_at_location(lat, lon); return True
-        if primary and shift and alt and (key == ord('S') or key == ord('s')):
-            miab_log("feature_usage", "Key: Ctrl+Shift+Alt+S (street view)", self.settings)
+            miab_log("feature_usage", "Key: Ctrl+Shift+S (street view)", self.settings)
             lat, lon = self._poi_lat_lon_if_focused()
             poi_focused = (lat, lon) != (self.lat, self.lon) or (
                 bool(getattr(self, '_poi_list', [])) and
@@ -12659,6 +13154,14 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                     "Showing satellite instead.")
                 self._schedule_satellite_view(lat, lon)
             return True
+        if no_mod and (key == ord('C') or key == ord('c')):
+            if getattr(self, '_walking_mode', False):
+                self._walk_virtual_crossing()
+                return True
+        if primary and shift and alt and (key == ord('S') or key == ord('s')):
+            miab_log("feature_usage", "Key: Ctrl+Shift+Alt+S (satellite view)", self.settings)
+            lat, lon = self._poi_lat_lon_if_focused()
+            self._satellite_view_at_location(lat, lon); return True
         if no_mod and key == wx.WXK_F1:    self.show_help();              return True
         if shift and not primary and key == wx.WXK_F2:
             self._announce_climate_zone(); return True
@@ -13102,6 +13605,23 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         no_mod = not shift and not primary and not alt
         _log_key_event(self, event, "frame", f"street_mode={self.street_mode} walking={getattr(self, '_walking_mode', False)} nav={getattr(self, '_nav_active', False)}")
 
+        # An opened instructor map is an isolated local document.  Its arrows
+        # move within the drawing and never enter world/street navigation.
+        if self._handle_user_map_shortcuts(key, shift, primary, alt):
+            return
+
+        # Free mode owns a dense, purpose-built keyboard layer. Keep it ahead
+        # of user mappings so route/side exploration cannot be disrupted.
+        if not getattr(self, '_free_mode', False):
+            key_contexts = (("Street", "Global") if self.street_mode
+                            else ("Map", "Global"))
+            custom_bindings = self.settings.get("key_bindings", {})
+            custom_action = action_for_event(event, custom_bindings, key_contexts)
+            if custom_action and self._run_custom_keystroke_action(custom_action):
+                return
+            if disabled_default_for_event(event, custom_bindings, key_contexts):
+                return
+
         if self._handle_preface_shortcuts(event, key, shift, primary, alt, no_mod):
             return
         if self._handle_free_mode_shortcuts(key, shift, primary, alt, no_mod):
@@ -13258,6 +13778,160 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 self._prev_lon = self.lon
         else:
             event.Skip()
+
+    def _handle_user_map_shortcuts(self, key, shift, primary, alt):
+        if not getattr(self, "_user_map_data", None):
+            return False
+        data = self._user_map_floor
+        if key == wx.WXK_ESCAPE:
+            self._close_user_map()
+            return True
+        if primary and not shift and not alt and key in (ord("R"), ord("r")):
+            self._user_map_route()
+            return True
+        if primary and not shift and not alt and key in (wx.WXK_PAGEUP, wx.WXK_PAGEDOWN):
+            floors = user_maps.floors_for(self._user_map_data)
+            delta = 1 if key == wx.WXK_PAGEUP else -1
+            target = self._user_map_floor_index + delta
+            if not 0 <= target < len(floors):
+                edge = "highest" if delta > 0 else "lowest"
+                self._status_update(f"Already on the {edge} floor.", force=True)
+            else:
+                self._activate_user_map_floor(target)
+            return True
+        if primary and not shift and not alt and key in (wx.WXK_HOME, wx.WXK_END):
+            left, right, bottom, top = user_maps.exploration_bounds(data)
+            x = min(max(self.lon * 111195.0, left), right)
+            y = top if key == wx.WXK_HOME else bottom
+            self._user_map_node = None
+            self.lat, self.lon = y / 111195.0, x / 111195.0
+            self.map_panel.set_position(self.lat, self.lon, False, "")
+            self.map_panel.Refresh()
+            bounds = (bottom / 111195.0, top / 111195.0,
+                      left / 111195.0, right / 111195.0)
+            self._play_spatial_tone_if_allowed(self.lat, self.lon, bounds)
+            edge_name = "Top" if key == wx.WXK_HOME else "Bottom"
+            self._status_update(f"{edge_name} of map.", force=True)
+            return True
+        line_edge = None
+        if not shift and not alt:
+            if not primary and key == wx.WXK_HOME:
+                line_edge = "start"
+            elif not primary and key == wx.WXK_END:
+                line_edge = "end"
+            elif IS_MAC and primary and key == wx.WXK_LEFT:
+                line_edge = "start"
+            elif IS_MAC and primary and key == wx.WXK_RIGHT:
+                line_edge = "end"
+        if line_edge:
+            left, right, bottom, top = user_maps.exploration_bounds(data)
+            x = left if line_edge == "start" else right
+            y = min(max(self.lat * 111195.0, bottom), top)
+            self._user_map_node = None
+            self.lat, self.lon = y / 111195.0, x / 111195.0
+            self.map_panel.set_position(self.lat, self.lon, False, "")
+            self.map_panel.Refresh()
+            bounds = (bottom / 111195.0, top / 111195.0,
+                      left / 111195.0, right / 111195.0)
+            self._play_spatial_tone_if_allowed(self.lat, self.lon, bounds)
+            self._status_update(
+                f"{'Start' if line_edge == 'start' else 'End'} of row.",
+                force=True)
+            return True
+        if key not in (wx.WXK_UP, wx.WXK_DOWN, wx.WXK_LEFT, wx.WXK_RIGHT):
+            if key == wx.WXK_F11:
+                self._status_update("Street mode is unavailable while a map file is open.", force=True)
+                return True
+            return False
+        if alt:
+            return True
+        dx, dy = {
+            wx.WXK_UP: (0.0, 1.0), wx.WXK_DOWN: (0.0, -1.0),
+            wx.WXK_LEFT: (-1.0, 0.0), wx.WXK_RIGHT: (1.0, 0.0),
+        }[key]
+        left, right, bottom, top = user_maps.exploration_bounds(data)
+        old_x = min(max(self.lon * 111195.0, left), right)
+        old_y = min(max(self.lat * 111195.0, bottom), top)
+        cell_size = max(right - left, top - bottom) / 30.0
+        if primary:
+            place = user_maps.next_place_in_direction(
+                data, old_x, old_y, dx, dy, cell_size)
+            if not place:
+                self._status_update(
+                    f"No labelled place {user_maps.compass_name(dx, dy)}.", force=True)
+                return True
+            x, y = float(place["x"]), float(place["y"])
+        else:
+            x = min(max(old_x + dx * cell_size, left), right)
+            y = min(max(old_y + dy * cell_size, bottom), top)
+            place = None
+        if abs(x - old_x) < 1e-9 and abs(y - old_y) < 1e-9:
+            self._status_update(
+                f"Edge of map {user_maps.compass_name(dx, dy)}.", force=True)
+            return True
+        if user_maps.crosses_barrier(data, (old_x, old_y), (x, y)):
+            self.sound.play_barrier_tone()
+        self._user_map_node = None
+        self.lat, self.lon = y / 111195.0, x / 111195.0
+        self.map_panel.set_position(self.lat, self.lon, False, "")
+        self.map_panel.Refresh()
+        bounds = (bottom / 111195.0, top / 111195.0,
+                  left / 111195.0, right / 111195.0)
+        self._play_spatial_tone_if_allowed(self.lat, self.lon, bounds)
+        labels = ([place] if place else
+                  user_maps.places_in_grid_cell(data, x, y, cell_size))
+        if labels:
+            messages = []
+            for label in labels:
+                message = label["name"]
+                if label.get("description"):
+                    message += ". " + label["description"]
+                messages.append(message)
+            self._status_update("; ".join(messages) + ".", force=True)
+        elif key in (wx.WXK_UP, wx.WXK_DOWN) and not primary:
+            row_item_count = len(user_maps.places_in_grid_row(
+                data, y, cell_size))
+            if row_item_count:
+                noun = "item" if row_item_count == 1 else "items"
+                self._status_update(
+                    f"{row_item_count} {noun}", force=True)
+        return True
+
+    def _run_custom_keystroke_action(self, action):
+        """Run a command selected by the user-configurable keystroke map."""
+        if action == "street_imagery":
+            lat, lon = self._poi_lat_lon_if_focused()
+            poi_focused = (lat, lon) != (self.lat, self.lon) or (
+                bool(getattr(self, '_poi_list', [])) and
+                getattr(self, 'listbox', None) is not None and
+                self.listbox.HasFocus())
+            if self.street_mode or getattr(self, '_walking_mode', False) or poi_focused:
+                self._streetview_at_location(lat, lon)
+            else:
+                self._announce_transient_then_return(
+                    "Street View works in street mode or from a POI list. "
+                    "Showing satellite instead.")
+                self._schedule_satellite_view(lat, lon)
+            return True
+        if action == "satellite_imagery":
+            lat, lon = self._poi_lat_lon_if_focused()
+            self._satellite_view_at_location(lat, lon)
+            return True
+        actions = {
+            "jump": self.show_jump_dialog,
+            "weather": self._announce_weather,
+            "poi_search": self._announce_poi_count,
+            "street_search": self._street_search,
+            "address": self._announce_address,
+            "navigate_address": self._nav_to_address,
+            "walking_mode": self._walk_toggle,
+            "route_briefing": self._nav_request_narrative_briefing,
+        }
+        callback = actions.get(action)
+        if callback:
+            callback()
+            return True
+        return False
 
     def _place_between_context(self, current_idx, current_km):
         """Return 'between X and Y' context when a neighbour is similarly close."""
@@ -13828,15 +14502,15 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             "Ctrl+Shift+P: save current position as a personal POI.",
             "Ctrl+Shift+M: clear a mark (then press 1, 2, or 3).",
             "Ctrl+1, Ctrl+2, Ctrl+3: read a mark's distance from here.",
-            "Shift+Alt+M: compare distances between all saved marks.",
+            "Shift+Alt+M: compare distances and directions between all saved marks.",
             "G: nearby geographic features.",
             "P: POI search.",
             "POI menu: selected POI address, hours, phone, website, Mistral, menu lookup, and website launch.",
             "T: local time.",
             "Z: timezone.",
             "S: sunrise and sunset.",
-            "Ctrl+Shift+S: satellite view.",
-            "Ctrl+Shift+Alt+S: street view of selected POI (falls back to satellite if no coverage).",
+            "Ctrl+Shift+S: street view of selected POI (falls back to satellite if no coverage).",
+            "Ctrl+Shift+Alt+S: satellite view.",
             "Shift+A: overhead flights.",
             "Q: air quality.",
             "L: latitude and longitude.",
@@ -13945,8 +14619,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 "Escape: close POI list.",
                 "Backspace: go back in POI exploration.",
                 "F11: return to map mode.",
-                "Ctrl+Shift+S: satellite view.",
-                "Ctrl+Shift+Alt+S: street view (falls back to satellite if no coverage).",
+                "Ctrl+Shift+S: street view (falls back to satellite if no coverage).",
+                "Ctrl+Shift+Alt+S: satellite view.",
                 "F1: help.",
             ]
         else:
@@ -14042,15 +14716,23 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         """Fetch and display Street View imagery + description at (lat, lon).
         Falls back to satellite if no Street View coverage exists, or an
         open street-level viewer if Google isn't configured."""
+        google_key = self.settings.get("google_api_key", "").strip()
+        visual_source = self.settings.get("visual_mapping_source", "auto")
+        if visual_source == "auto":
+            visual_source = "google" if google_key else "mapillary"
+        if visual_source == "mapillary":
+            self._announce_transient_then_return(
+                "Opening Mapillary street-level imagery in your browser.")
+            wx.CallLater(2000, self._open_mapillary_view, lat, lon)
+            return
+        if not google_key:
+            # Defensive fallback for settings files edited outside the app.
+            self._announce_transient_then_return(
+                "Google Street View needs an API key. Opening Mapillary instead.")
+            wx.CallLater(2000, self._open_mapillary_view, lat, lon)
+            return
         if not lookup_streetview_description:
             self._announce_transient_then_return("Street View module not available.")
-            return
-
-        google_key = self.settings.get("google_api_key", "").strip()
-        if not google_key:
-            self._announce_transient_then_return(
-                "Street View is using an open fallback instead of Google.")
-            wx.CallLater(2000, self._open_mapillary_view, lat, lon)
             return
 
         self._status_update("Fetching Street View...", force=True)
@@ -14161,24 +14843,63 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         multi = len(image_bytes_list) > 1
         img_w, img_h = multi_img_size if multi else single_img_size
 
+        image_panel = wx.ScrolledWindow(dlg, style=wx.HSCROLL | wx.VSCROLL)
+        image_panel.SetScrollRate(20, 20)
         img_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        source_images = []
+        image_controls = []
         for img_bytes in image_bytes_list:
             try:
-                pil = Image.open(io.BytesIO(img_bytes))
-                pil.thumbnail((img_w, img_h), Image.Resampling.LANCZOS)
-                wx_img = wx.Image(pil.width, pil.height)
-                wx_img.SetData(pil.convert("RGB").tobytes())
-                bmp = wx.StaticBitmap(dlg, bitmap=wx.Bitmap(wx_img))
+                pil = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+                source_images.append(pil.copy())
+                preview = pil.copy()
+                preview.thumbnail((img_w, img_h), Image.Resampling.LANCZOS)
+                wx_img = wx.Image(preview.width, preview.height)
+                wx_img.SetData(preview.tobytes())
+                bmp = wx.StaticBitmap(image_panel, bitmap=wx.Bitmap(wx_img))
+                image_controls.append(bmp)
                 img_sizer.Add(bmp, 0, wx.ALL, 6)
             except Exception as e:
                 miab_log("errors", f"[UI] {title} image display failed: {e}", getattr(self, "settings", None))
-        vs.Add(img_sizer, 0, wx.ALL | wx.CENTER, 4)
+        image_panel.SetSizer(img_sizer)
+        image_panel.SetMinSize((-1, min(img_h + 20, 500)))
+        vs.Add(image_panel, 1, wx.ALL | wx.EXPAND, 4)
+
+        zoom = [1.0]
+        zoom_label = wx.StaticText(dlg, label="Zoom: 100%")
+
+        def apply_image_zoom(factor):
+            zoom[0] = max(0.5, min(3.0, factor))
+            for source, control in zip(source_images, image_controls):
+                base = source.copy()
+                base.thumbnail((img_w, img_h), Image.Resampling.LANCZOS)
+                width = max(1, round(base.width * zoom[0]))
+                height = max(1, round(base.height * zoom[0]))
+                scaled = base.resize((width, height), Image.Resampling.LANCZOS)
+                wx_img = wx.Image(width, height)
+                wx_img.SetData(scaled.tobytes())
+                control.SetBitmap(wx.Bitmap(wx_img))
+            zoom_label.SetLabel(f"Zoom: {round(zoom[0] * 100):d}%")
+            img_sizer.Layout()
+            image_panel.FitInside()
+            image_panel.Layout()
+
+        zoom_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        zoom_out = wx.Button(dlg, label="Zoom out")
+        zoom_reset = wx.Button(dlg, label="Reset zoom")
+        zoom_in = wx.Button(dlg, label="Zoom in")
+        zoom_out.Bind(wx.EVT_BUTTON, lambda e: apply_image_zoom(zoom[0] - 0.25))
+        zoom_reset.Bind(wx.EVT_BUTTON, lambda e: apply_image_zoom(1.0))
+        zoom_in.Bind(wx.EVT_BUTTON, lambda e: apply_image_zoom(zoom[0] + 0.25))
+        for control in (zoom_out, zoom_reset, zoom_in, zoom_label):
+            zoom_sizer.Add(control, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 4)
+        vs.Add(zoom_sizer, 0, wx.CENTER, 2)
 
         txt = wx.TextCtrl(
             dlg, value=description,
             style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2)
         txt.SetMinSize(text_min_size)
-        vs.Add(txt, 1, wx.ALL | wx.EXPAND, 10)
+        vs.Add(txt, 0, wx.ALL | wx.EXPAND, 10)
 
         btn = wx.Button(dlg, wx.ID_CLOSE, "Close")
         dlg.Bind(wx.EVT_BUTTON, lambda e: dlg.EndModal(wx.ID_CLOSE))

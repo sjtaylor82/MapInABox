@@ -27,14 +27,16 @@ class TimetableClient:
     def search(self, origin: str, dest: str,
                compression: str = "AUTO",
                results: int = 10,
-               sort: str = "Duration") -> list:
+               sort: str = "Duration",
+               departure_date: datetime.date | None = None) -> list:
         """Search for flights. Returns list of itinerary dicts."""
-        today  = datetime.datetime.utcnow().strftime("%Y%m%d")
+        search_date = departure_date or datetime.datetime.utcnow().date()
+        date_text = search_date.strftime("%Y%m%d")
         params = urllib.parse.urlencode({
             "Results": str(results),
             "Sort":    sort,
         })
-        url = f"{API_BASE}/TimeTable/{origin}/{dest}/{today}/?{params}"
+        url = f"{API_BASE}/TimeTable/{origin}/{dest}/{date_text}/?{params}"
         req = urllib.request.Request(url, headers={
             "X-RapidAPI-Key":  self._key,
             "X-RapidAPI-Host": API_HOST,

@@ -20,6 +20,14 @@ GENERIC_STREET_TYPES: frozenset = frozenset({
     "pedestrian area", "dirt track", "bridleway", "road under construction",
 })
 
+# Raw OpenStreetMap highway values sometimes become fallback ``name`` fields.
+# They may be useful internally as geometry, but are never meaningful spoken
+# street names for a pedestrian.
+INTERNAL_ROAD_LABELS: frozenset = frozenset({
+    "motorway_link", "trunk_link", "primary_link", "secondary_link",
+    "tertiary_link", "motorway_junction", "unclassified", "service",
+})
+
 # Low-priority OSM highway values (footways etc.) used when ranking roads.
 LOW_PRIORITY_HIGHWAY: frozenset = frozenset({
     "footway", "cycleway", "path", "steps", "pedestrian",

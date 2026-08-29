@@ -34,6 +34,7 @@
     <li><a href="#starting">2. Starting out</a></li>
     <li><a href="#map-mode">3. Map mode</a></li>
     <li><a href="#custom-sounds">3.1 Country sounds and custom sounds</a></li>
+    <li><a href="#user-maps">3.2 Instructor-created maps</a></li>
     <li><a href="#jumping">4. Jumping to a place</a></li>
     <li><a href="#marks">5. Marks</a></li>
     <li><a href="#favourites">6. Favourites</a></li>
@@ -111,6 +112,14 @@
 
 <p>Name a custom file after the country or region in lowercase, replacing spaces with underscores; for example, <code>new_zealand.ogg</code> or <code>south_america.mp3</code>. OGG and MP3 files are supported, with OGG preferred when both exist. On every launch, Map in a Box checks the user sound folders before the bundled library. Removing a custom file restores the bundled sound or normal regional fallback. Updates never alter the user sound folders.</p>
 
+<h3 id="user-maps">3.2 Instructor-created maps</h3>
+
+<p>Select <strong>File, Create Map File</strong> to draw a simple map. Begin with a blank page or import a JPG, PNG, or PDF as a visual guide. A multi-page PDF can be imported as separate floors. Use the floor selector in the builder, draw the paths students may travel, select <strong>Add a place</strong>, click its position, and enter its name. Test a route, then save the portable <code>.miabmap</code> file. Select <strong>File, Edit Map File</strong> to change an existing map made from any supported source.</p>
+
+<p>Select <strong>File, Open Map File</strong> to explore one. The arrow keys move only along connected drawn paths with spatial sound and announce nearby labelled entrances and places. Press <code>Ctrl+Page Up</code> or <code>Ctrl+Page Down</code> to explore another floor. Press <code>Ctrl+Home</code> or <code>Ctrl+End</code> for the top or bottom accessible point. Press <code>Ctrl+R</code> to choose two places, hear their crow-flight relationship, calculate a route that follows only the connected drawn paths, or explore that route with Journey Planner sound. Nearby but unconnected paths—such as parallel shopping-centre aisles—are never treated as connected. Press <code>Escape</code> to close the map file.</p>
+
+<p>Closing the map file restores the previous world-map position. Street, Walking, and Free modes do not operate inside an instructor-created map.</p>
+
 
 <h2 id="jumping">4. Jumping to a place</h2>
 
@@ -135,7 +144,7 @@
 
 <p>To save one, move to the place you want to remember and press <code>Ctrl+M</code>. You'll be asked which slot to use — press <code>1</code>, <code>2</code>, or <code>3</code>. To hear how far a mark is from where you are now, press <code>Ctrl+1</code>, <code>Ctrl+2</code>, or <code>Ctrl+3</code>. To jump back to one, press <code>Ctrl+J</code> and pick the slot if asked. Done with a mark? Press <code>Ctrl+Shift+M</code> and choose the slot to clear it.</p>
 
-<p>You can press <code>Shift+Alt+M</code> to hear the distances between all of your stored marks at once.</p>
+<p>You can press <code>Shift+Alt+M</code> to hear the distance and compass direction between every pair of stored marks at once.</p>
 
 
 <h2 id="favourites">6. Favourites</h2>
@@ -186,7 +195,7 @@
 
 <h3>9.2 Street View</h3>
 <p>Street View grabs up to two ground-level photographs of the current spot — one in each direction along the street — and shows them in an in-app dialog. Again, the Mistral description appears below the images and is announced by your screenreader, covering building types, street layout, signage, access features, and surroundings when a Mistral key is set. Without one, the images still load but the text just reads: <em>"Street View imagery loaded. A Mistral API key is required to fetch a visual description."</em></p>
-<p>No Google key at all? The program opens <a href="https://www.mapillary.com">Mapillary</a> in your browser instead. And if Google Street View simply has no coverage where you are, it falls back to satellite view.</p>
+<p>The street-level imagery source can be selected in Settings. Google Street View is available when a Google API key is configured. <a href="https://www.mapillary.com">Mapillary</a> remains available with or without a Google key and opens in your browser. If Google Street View has no coverage where you are, it falls back to satellite view.</p>
 
 
 <h2 id="street-mode">10. Street mode</h2>
@@ -277,15 +286,17 @@
 
 <h3 id="tool-journey">14.5 Journey Planner</h3>
 
-<p>Plans a public transport trip or walking route between two addresses or stops.</p>
+<p>Plans a public transport, walking, or driving route between two addresses, stops, cities, or coordinates.</p>
 
 <ol>
   <li>Enter origin and destination (address, stop name, or suburb).</li>
-  <li>Choose timing: leave now, depart at, or arrive by.</li>
-  <li>Enter a date and time if asked.</li>
+  <li>Choose transit, walking (for shorter trips), or driving.</li>
+  <li>For transit, choose leave now, depart at, or arrive by, then enter a date and time if asked.</li>
 </ol>
 
-<p>Results include connections, total duration, and per-leg departure times, as well as platform information where possible from GTFS data. Needs a Google API key; there's no fallback for this one.</p>
+<p>Transit results include connections, total duration, and per-leg departure times, as well as platform information where possible from GTFS data. Transit and walking results need a Google API key. Driving results include alternative routes, distance, duration, major roads, towns along the route, toll information when available, and spoken step directions. Driving uses open OSRM routing by default. When a Google key is configured, Settings displays a driving-source choice where paid Google traffic-aware routing can be explicitly selected. Merely storing a Google key does not enable Google driving requests.</p>
+
+<p>For a driving or walking result, Tab to <strong>Explore Path</strong> to follow its geographic shape. Up and Down move along the route; Home and End jump to the endpoints. In driving routes, Page Up and Page Down move by larger sections. In walking routes, they jump between turn instructions and the path is sampled at walking scale. The optional spatial-audio checkbox tracks progress across the route. Escape stops the path audio, restores the previous map position, and returns to the journey results.</p>
 
 <h3 id="tool-departures">14.6 Departure Board</h3>
 
@@ -448,6 +459,12 @@
 
 <p>When a key's missing and there's a fallback, Map in a Box just quietly uses it. When there isn't one, it'll tell you what's needed.</p>
 
+<h3>Keystroke Manager</h3>
+
+<p>Open <strong>Settings</strong>, then choose <strong>Keystroke Manager</strong> to customise principal Map, Street, and Global commands. Search or browse the command list, then use Assign, Clear, or Restore defaults. Conflicting keys in the same context can be replaced after confirmation. Map and Street contexts may reuse the same key because only the active context runs.</p>
+
+<p>The first version covers street-level and satellite imagery, jump, weather, POI and street search, address announcement, address navigation, walking mode, and route briefing. Context-sensitive movement and native menu accelerators remain fixed to protect arrow navigation and keep visible menu labels accurate.</p>
+
 
 <h2 id="workflows">18. Common workflows</h2>
 
@@ -489,10 +506,10 @@
   <li>Press <code>F12</code>, choose <strong>Find Food</strong>, select mark 1 as the start and mark 2 as the destination, and look over the venues along the way.</li>
 </ol>
 
-<h3>18.6 Compare distances between marked places</h3>
+<h3>18.6 Compare distances and directions between marked places</h3>
 <ol>
   <li>Move to each place and press <code>Ctrl+M</code>, saving them as marks 1, 2, and 3.</li>
-  <li>Press <code>Shift+Alt+M</code> to hear the distances between all three.</li>
+  <li>Press <code>Shift+Alt+M</code> to hear the distances and compass directions between all three.</li>
 </ol>
 
 <h3>18.7 Play the geography challenge</h3>
@@ -582,12 +599,12 @@
   <tr><td><code>Ctrl+Shift+P</code></td><td>Save current position as a personal POI</td></tr>
   <tr><td><code>Ctrl+Shift+M</code></td><td>Clear a mark (prompts for slot)</td></tr>
   <tr><td><code>Ctrl+1/2/3</code></td><td>Read a mark's distance from here</td></tr>
-  <tr><td><code>Shift+Alt+M</code></td><td>Compare distances between all saved marks</td></tr>
+  <tr><td><code>Shift+Alt+M</code></td><td>Compare distances and compass directions between all saved marks</td></tr>
   <tr><td><code>G</code></td><td>Nearby geographic features</td></tr>
   <tr><td><code>L</code></td><td>Latitude and longitude</td></tr>
   <tr><td><code>Shift+L</code></td><td>Languages</td></tr>
-  <tr><td><code>Ctrl+Shift+S</code></td><td>Satellite view</td></tr>
-  <tr><td><code>Ctrl+Shift+Alt+S</code></td><td>Street view</td></tr>
+  <tr><td><code>Ctrl+Shift+S</code></td><td>Street view or Mapillary</td></tr>
+  <tr><td><code>Ctrl+Shift+Alt+S</code></td><td>Satellite view</td></tr>
 </table>
 
 <h3>20.2 Map hotkeys</h3>
@@ -682,6 +699,7 @@
   <tr><td><code>Left / Right</code></td><td>Choose turns</td></tr>
   <tr><td><code>Space</code></td><td>List turn options</td></tr>
   <tr><td><code>H</code></td><td>Heading</td></tr>
+  <tr><td><code>C</code></td><td>Virtually cross to the opposite side of the current road for orientation</td></tr>
   <tr><td><code>X</code></td><td>Nearest intersection</td></tr>
   <tr><td><code>I</code></td><td>Position information</td></tr>
   <tr><td><code>P</code></td><td>POI search</td></tr>

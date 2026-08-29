@@ -661,7 +661,7 @@ class TransitLookup:
         return best or []
 
     def refresh_catalog(self) -> Optional[object]:
-        """Force-download a fresh MobilityData catalog CSV and clear all caches.
+        """Force-download the catalogue and clear feed-discovery indexes.
 
         Called by F12.  Clears the verified feed index so every region is
         re-discovered against the fresh catalog on next visit.
@@ -685,8 +685,89 @@ class TransitLookup:
         self._catalog_df_full = None
         self._location_feeds.clear()
         self._geocode_cache.clear()
-        miab_log("navigation", "[Transit] Cleared verified feed index and all caches", getattr(self, "settings", None))
+        miab_log(
+            "navigation",
+            "[Transit] Cleared verified feed-discovery indexes; timetable caches retained",
+            getattr(self, "settings", None),
+        )
         return self._ensure_catalog()
+
+    def cached_feed_summaries(self) -> list[dict]:
+        """Describe parsed timetable feeds currently installed on disk."""
+        cache_dir = self._cache_dir()
+        providers: dict[str, str] = {}
+        catalog_path = self._catalog_csv_path()
+        if os.path.exists(catalog_path):
+            try:
+                with open(catalog_path, encoding="utf-8-sig", newline="") as f:
+                    for row in csv.DictReader(f):
+                        feed_id = str(row.get("mdb_source_id", "")).strip()
+                        provider = str(row.get("provider", "")).strip()
+                        if feed_id and provider:
+                            providers[feed_id] = provider
+            except Exception as exc:
+                miab_log("errors", f"[Transit] Could not read cached feed names: {exc}",
+                         getattr(self, "settings", None))
+        summaries = []
+        for filename in os.listdir(cache_dir):
+            if not filename.endswith(".parsed.pkl"):
+                continue
+            feed_id = filename[:-len(".parsed.pkl")]
+            parsed_path = os.path.join(cache_dir, filename)
+            age = self._gtfs_cache_age_days(feed_id)
+            summaries.append({
+                "feed_id": feed_id,
+                "provider": providers.get(feed_id, ""),
+                "age_days": age,
+                "size_bytes": os.path.getsize(parsed_path),
+            })
+        return sorted(
+            summaries,
+            key=lambda item: (item["provider"].casefold(), item["feed_id"]),
+        )
+
+    def refresh_cached_feeds(self, status_cb=None) -> tuple[list[str], list[str]]:
+        """Force-refresh every parsed feed cache, retaining failures as fallback."""
+        feed_ids = [item["feed_id"] for item in self.cached_feed_summaries()]
+        if not feed_ids:
+            return [], []
+        df = self.refresh_catalog()
+        urls: dict[str, str] = {}
+        catalog_feeds = self._catalog_df_full if self._catalog_df_full is not None else df
+        if catalog_feeds is not None:
+            for _, row in catalog_feeds.iterrows():
+                feed_id = str(row.get("mdb_source_id", "")).strip()
+                url = str(row.get("urls.direct_download", "")).strip()
+                if feed_id and url and url != "nan":
+                    urls[feed_id] = url
+        updated, failed = [], []
+        total = len(feed_ids)
+        for number, feed_id in enumerate(feed_ids, 1):
+            if status_cb:
+                status_cb(f"Updating timetable {number} of {total}, feed {feed_id}…")
+            url = urls.get(feed_id)
+            if not url:
+                miab_log(
+                    "errors",
+                    f"[Transit] Cached feed {feed_id} has no active catalogue download URL",
+                    getattr(self, "settings", None),
+                )
+                failed.append(feed_id)
+                continue
+            parsed_path = os.path.join(
+                self._cache_dir(), f"{feed_id}.parsed.pkl")
+            previous_mtime = (
+                os.path.getmtime(parsed_path)
+                if os.path.exists(parsed_path) else 0.0
+            )
+            _fid, data = self._gtfs_ensure(
+                feed_id, url, force_refresh=True)
+            if (data is not None and os.path.exists(parsed_path)
+                    and os.path.getmtime(parsed_path) > previous_mtime):
+                updated.append(feed_id)
+            else:
+                failed.append(feed_id)
+        return updated, failed
 
     # ------------------------------------------------------------------
     # Feed discovery
@@ -1318,6 +1399,7 @@ class TransitLookup:
         feed_id: str,
         download_url: str,
         refresh_stale: Optional[bool] = None,
+        force_refresh: bool = False,
     ) -> tuple[Optional[str], Optional[dict]]:
         """Return ``(feed_id, data)`` for *feed_id*, downloading at most once.
 
@@ -1326,6 +1408,7 @@ class TransitLookup:
         """
         if (
             feed_id in self._feeds
+            and not force_refresh
             and not (
                 refresh_stale is True
                 and self._gtfs_is_stale(feed_id)
@@ -1358,6 +1441,15 @@ class TransitLookup:
                     os.remove(pickle_p)
                     # fall through to download
                 else:
+                    if force_refresh:
+                        stale_fallback_data = data
+                        miab_log(
+                            "navigation",
+                            f"[Transit] Force-refreshing parsed cache for {feed_id}",
+                            getattr(self, "settings", None),
+                        )
+                        # Keep the parsed cache until its replacement succeeds.
+                        raise StopIteration
                     should_refresh = False
                     if stale:
                         if refresh_stale is not None:
@@ -1398,11 +1490,13 @@ class TransitLookup:
                     stale_fallback_data = data
                     # Keep the existing pickle on disk until the replacement
                     # has downloaded and parsed successfully.
+            except StopIteration:
+                pass
             except Exception as e:
                 miab_log("errors", f"[Transit] Pickle load failed for {feed_id}: {e} — will re-parse", getattr(self, "settings", None))
 
         # ── Load or download the zip ──────────────────────────────────
-        if not stale and os.path.exists(zp):
+        if not force_refresh and not stale and os.path.exists(zp):
             miab_log("navigation", f"[Transit] Using cached GTFS zip for {feed_id}", getattr(self, "settings", None))
             with open(zp, "rb") as f:
                 zip_bytes = f.read()

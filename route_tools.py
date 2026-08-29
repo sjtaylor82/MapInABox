@@ -458,6 +458,30 @@ class RouteTools:
                 suburbs.append(name)
         return suburbs
 
+    def _suburb_anchors(
+        self, points: list[tuple[float, float]], sample_interval_m: float,
+        status_cb: Optional[Callable[[str], None]] = None,
+    ) -> list[dict]:
+        """Return named route samples with their approximate distance along."""
+        samples = _sample_polyline(points, interval_m=sample_interval_m)
+        anchors: list[dict] = []
+        for i, (lat, lon) in enumerate(samples):
+            if status_cb and i % 3 == 0:
+                status_cb(f"Identifying suburbs... ({i + 1}/{len(samples)})")
+            name = self._reverse_geocode_suburb(lat, lon)
+            if not name:
+                continue
+            distance_m = float((i + 1) * sample_interval_m)
+            if anchors and anchors[-1]["name"] == name:
+                continue
+            anchors.append({
+                "name": name,
+                "lat": lat,
+                "lon": lon,
+                "distance_m": distance_m,
+            })
+        return anchors
+
     # ------------------------------------------------------------------
     # Route computation (Google or open fallback) — internal
     # ------------------------------------------------------------------
@@ -524,6 +548,8 @@ class RouteTools:
             "routes.duration",
             "routes.distanceMeters",
             "routes.description",
+            "routes.legs.steps.navigationInstruction.instructions",
+            "routes.legs.steps.distanceMeters",
         ]
         if request_polyline:
             fields.append("routes.polyline.encodedPolyline")
@@ -693,6 +719,7 @@ class RouteTools:
             polyline = (route.get("polyline") or {}).get("encodedPolyline", "")
 
             legs = []
+            instructions = []
             for leg in route.get("legs", []):
                 leg_dur = leg.get("duration", "0s")
                 leg_s = int(leg_dur.rstrip("s")) if isinstance(leg_dur, str) else int(leg_dur)
@@ -703,6 +730,15 @@ class RouteTools:
                     "duration_text": _fmt_duration(leg_s),
                     "distance_text": _fmt_distance(leg_m),
                 })
+                for step in leg.get("steps", []) or []:
+                    instruction = ((step.get("navigationInstruction") or {})
+                                   .get("instructions", "")).strip()
+                    if not instruction:
+                        continue
+                    step_m = int(step.get("distanceMeters", 0) or 0)
+                    if step_m:
+                        instruction = f"{instruction} for {_fmt_distance(step_m)}"
+                    instructions.append(instruction.rstrip(".") + ".")
 
             return {
                 "duration_s": duration_s,
@@ -714,6 +750,7 @@ class RouteTools:
                 "description": description,
                 "polyline": polyline,
                 "legs": legs,
+                "instructions": instructions,
                 "provider": "google",
                 "supports_tolls": True,
             }
@@ -722,6 +759,7 @@ class RouteTools:
         distance_m = int(round(float(route.get("distance", 0))))
         geometry = route.get("geometry", "")
         legs = []
+        instructions = []
         summaries = []
         for leg in route.get("legs", []):
             leg_s = int(round(float(leg.get("duration", 0))))
@@ -735,6 +773,22 @@ class RouteTools:
                 "duration_text": _fmt_duration(leg_s),
                 "distance_text": _fmt_distance(leg_m),
             })
+            for step in leg.get("steps", []) or []:
+                maneuver = step.get("maneuver") or {}
+                kind = str(maneuver.get("type", "continue")).replace("_", " ")
+                modifier = str(maneuver.get("modifier", "")).replace("_", " ")
+                road = (step.get("name") or step.get("ref") or "the road").strip()
+                if kind == "depart":
+                    instruction = f"Start on {road}"
+                elif kind == "arrive":
+                    instruction = "Arrive at the destination"
+                else:
+                    action = " ".join(part for part in (kind, modifier) if part)
+                    instruction = f"{action.capitalize()} onto {road}"
+                step_m = int(round(float(step.get("distance", 0) or 0)))
+                if step_m and kind != "arrive":
+                    instruction += f" for {_fmt_distance(step_m)}"
+                instructions.append(instruction.rstrip(".") + ".")
         description = " / ".join(dict.fromkeys(summaries)) if summaries else "OSRM route"
         return {
             "duration_s": duration_s,
@@ -746,6 +800,7 @@ class RouteTools:
             "description": description,
             "polyline": geometry,
             "legs": legs,
+            "instructions": instructions,
             "provider": "osrm",
             "supports_tolls": False,
         }
@@ -1095,6 +1150,7 @@ class RouteTools:
 
             # Decode polyline and sample suburbs
             suburbs: list[str] = []
+            suburb_anchors: list[dict] = []
             if r["polyline"]:
                 points = _decode_polyline(r["polyline"])
                 # Adjust sample interval based on route length
@@ -1105,9 +1161,17 @@ class RouteTools:
                     interval = 7000.0
                 else:
                     interval = 15000.0
-                suburbs = self._suburb_chain(points, interval, status_cb)
+                suburb_anchors = self._suburb_anchors(
+                    points, interval, status_cb)
+                suburbs = [anchor["name"] for anchor in suburb_anchors]
+                if points:
+                    r["origin_offset_m"] = _haversine_m(
+                        o[0], o[1], points[0][0], points[0][1])
+                    r["destination_offset_m"] = _haversine_m(
+                        d[0], d[1], points[-1][0], points[-1][1])
 
             r["suburbs"] = suburbs
+            r["suburb_anchors"] = suburb_anchors
             parsed.append(r)
 
         # Sort by duration (fastest first)

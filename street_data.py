@@ -32,7 +32,7 @@ from overpass_client import OverpassRequestCancelled
 from geo import (
     dist_metres,
     dist_to_segment_metres,
-    GENERIC_STREET_TYPES, LOW_PRIORITY_HIGHWAY,
+    GENERIC_STREET_TYPES, INTERNAL_ROAD_LABELS, LOW_PRIORITY_HIGHWAY,
 )
 
 # ---------------------------------------------------------------------------
@@ -1336,7 +1336,8 @@ class StreetFetcher:
             has_real_name = bool(seg.get("raw_name", "").strip())
             if not clean:
                 continue
-            if not has_real_name and clean.lower() in GENERIC_STREET_TYPES:
+            if (not has_real_name and
+                    clean.lower() in GENERIC_STREET_TYPES | INTERNAL_ROAD_LABELS):
                 continue
             if kind in _LOW_DETAIL:
                 penalty = 100.0
@@ -1400,7 +1401,8 @@ class StreetFetcher:
             # name) — streets genuinely called "Main Road" or "Station Street"
             # must still appear.
             has_real_name = bool(seg.get("raw_name", "").strip())
-            if not has_real_name and low in GENERIC_STREET_TYPES:
+            if (not has_real_name and
+                    low in GENERIC_STREET_TYPES | INTERNAL_ROAD_LABELS):
                 continue
             seen.add(low)
             names.append(name)
@@ -1422,4 +1424,5 @@ class StreetFetcher:
         node_streets = walk_graph.get("node_streets", {})
         all_streets  = node_streets.get(node_id, set())
         return [s for s in all_streets
-                if s.lower() != current_street.lower()]
+                if s.lower() != current_street.lower()
+                and s.lower() not in INTERNAL_ROAD_LABELS]

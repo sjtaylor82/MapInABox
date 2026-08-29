@@ -15,6 +15,7 @@ StreetSearchDialog    — filterable street/name picker
 
 import os
 import re
+import math
 import wx
 import wx.adv
 
@@ -212,7 +213,8 @@ POI_CATEGORY_CHOICES: list[tuple[str, str]] = [
 class SettingsDialog(wx.Dialog):
     """Walk-mode POI announcement settings."""
 
-    def __init__(self, parent, settings: dict, user_dir: str = "") -> None:
+    def __init__(self, parent, settings: dict, user_dir: str = "",
+                 transit_feeds: list[dict] | None = None) -> None:
         super().__init__(
             parent, title=_("Settings"), size=(640, 680),
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
@@ -224,17 +226,21 @@ class SettingsDialog(wx.Dialog):
         self.notebook = wx.Notebook(panel)
 
         self.general_page = wx.ScrolledWindow(self.notebook, style=wx.VSCROLL)
+        self.transit_page = wx.ScrolledWindow(self.notebook, style=wx.VSCROLL)
         self.api_page = wx.ScrolledWindow(self.notebook, style=wx.VSCROLL)
         self.logging_page = wx.ScrolledWindow(self.notebook, style=wx.VSCROLL)
-        for page in (self.general_page, self.api_page, self.logging_page):
+        for page in (self.general_page, self.transit_page,
+                     self.api_page, self.logging_page):
             page.SetScrollRate(0, 20)
 
         self.notebook.AddPage(self.general_page, _("General"))
+        self.notebook.AddPage(self.transit_page, _("Transit Feeds"))
         self.notebook.AddPage(self.api_page, _("API Keys"))
         self.notebook.AddPage(self.logging_page, _("Logging"))
         vs.Add(self.notebook, 1, wx.EXPAND | wx.ALL, 8)
 
         general_vs = wx.BoxSizer(wx.VERTICAL)
+        transit_vs = wx.BoxSizer(wx.VERTICAL)
         api_vs = wx.BoxSizer(wx.VERTICAL)
         log_vs = wx.BoxSizer(wx.VERTICAL)
 
@@ -306,6 +312,43 @@ class SettingsDialog(wx.Dialog):
         general_vs.Add(self.combo_poi_source, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        general_vs.Add(wx.StaticText(
+            self.general_page, label=_("Street-level imagery source:")),
+            0, wx.LEFT, 8)
+        self.combo_visual_source = wx.Choice(
+            self.general_page,
+            choices=[_("Google Street View (requires Google API key)"),
+                     _("Mapillary (opens in web browser)")],
+            name=_("Street-level imagery source"),
+        )
+        _set_explicit_accessible_name(
+            self, self.combo_visual_source, _("Street-level imagery source"))
+        general_vs.Add(self.combo_visual_source, 0,
+                       wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+
+        self.drive_source_line = wx.StaticLine(self.general_page)
+        general_vs.Add(self.drive_source_line, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        self.drive_source_label = wx.StaticText(
+            self.general_page,
+            label=_("Journey Planner driving route source:"))
+        general_vs.Add(self.drive_source_label, 0, wx.LEFT, 8)
+        self.combo_drive_source = wx.Choice(
+            self.general_page,
+            choices=[_("OpenStreetMap/OSRM (keyless)"),
+                     _("Google Maps traffic-aware routes (may incur charges)")],
+            name=_("Journey Planner driving route source"),
+        )
+        _set_explicit_accessible_name(
+            self, self.combo_drive_source,
+            _("Journey Planner driving route source"))
+        general_vs.Add(self.combo_drive_source, 0,
+                       wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+        self._drive_source_controls = (
+            self.drive_source_line, self.drive_source_label,
+            self.combo_drive_source,
+        )
+
+        general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         general_vs.Add(wx.StaticText(self.general_page, label=_("Navigation provider (walking routes):")), 0, wx.LEFT, 8)
         self.combo_nav = wx.Choice(
             self.general_page,
@@ -329,11 +372,6 @@ class SettingsDialog(wx.Dialog):
         )
         general_vs.Add(self.combo_postcode_lookup, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
-        self.btn_gtfs = wx.Button(self.general_page, label=_("Refresh Transit Feed Catalog"))
-        general_vs.Add(self.btn_gtfs, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        self.gtfs_refreshed = False
-        self.btn_gtfs.Bind(wx.EVT_BUTTON, self._on_gtfs_refresh)
-
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         self.cb_auto_updates = wx.CheckBox(
             self.general_page, label=_("Automatically check for updates at startup"))
@@ -345,7 +383,59 @@ class SettingsDialog(wx.Dialog):
             label=_("Clear favourites and personal POIs when the app closes"))
         general_vs.Add(self.cb_clear_favourites_on_exit, 0, wx.LEFT | wx.BOTTOM, 8)
 
+        general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        self.btn_keystrokes = wx.Button(
+            self.general_page, label=_("Keystroke Manager..."))
+        general_vs.Add(self.btn_keystrokes, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+
         self.general_page.SetSizer(general_vs)
+
+        transit_vs.Add(wx.StaticText(
+            self.transit_page,
+            label=_("Installed timetable feeds:")), 0, wx.ALL, 8)
+        feed_rows = []
+        for feed in transit_feeds or []:
+            provider = feed.get("provider") or f"Feed {feed.get('feed_id', '')}"
+            feed_id = feed.get("feed_id", "")
+            age = feed.get("age_days")
+            age_text = ("age unknown" if age is None
+                        else f"{max(0, round(age))} days old")
+            size_mb = float(feed.get("size_bytes", 0)) / (1024 * 1024)
+            feed_rows.append(
+                f"{provider}; feed {feed_id}; {age_text}; {size_mb:.1f} MB")
+        if not feed_rows:
+            feed_rows = [_("No timetable feeds are currently installed.")]
+        self.transit_feed_list = wx.ListBox(
+            self.transit_page, choices=feed_rows, style=wx.LB_SINGLE)
+        if feed_rows:
+            self.transit_feed_list.SetSelection(0)
+        transit_vs.Add(
+            self.transit_feed_list, 1,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+
+        self.btn_gtfs = wx.Button(
+            self.transit_page, label=_("Refresh Feed Catalogue"))
+        self.btn_update_timetables = wx.Button(
+            self.transit_page, label=_("Update All Cached Timetables..."))
+        transit_vs.Add(self.btn_gtfs, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        transit_vs.Add(
+            self.btn_update_timetables, 0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        self.gtfs_refreshed = False
+        self.timetables_refreshed = False
+        self.btn_gtfs.Bind(wx.EVT_BUTTON, self._on_gtfs_refresh)
+        self.btn_update_timetables.Bind(
+            wx.EVT_BUTTON, self._on_timetable_refresh)
+        if not transit_feeds:
+            self.btn_update_timetables.Disable()
+        transit_vs.Add(wx.StaticText(
+            self.transit_page,
+            label=_(
+                "Catalogue refresh updates the directory of available feeds. "
+                "Timetable update downloads fresh data for every installed feed "
+                "and retains the previous data if an update fails.")),
+            0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+        self.transit_page.SetSizer(transit_vs)
 
         api_vs.Add(wx.StaticText(self.api_page, label=_("Google API key - enhanced geocoding/routing, satellite/street view, Google navigation:")), 0, wx.ALL, 8)
         self.txt_google_key = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
@@ -443,8 +533,10 @@ class SettingsDialog(wx.Dialog):
         panel.SetSizer(vs)
 
         self.set_home_requested = False
+        self._key_bindings = dict(settings.get("key_bindings", {}) or {})
         btn_home.Bind(wx.EVT_BUTTON, self._on_set_home)
         btn_folder.Bind(wx.EVT_BUTTON, self._on_open_folder)
+        self.btn_keystrokes.Bind(wx.EVT_BUTTON, self._on_keystroke_manager)
 
         # Populate from existing settings
         self.cb_walk.SetValue(settings.get("walk_announce_pois", True))
@@ -481,6 +573,17 @@ class SettingsDialog(wx.Dialog):
         postcode_lookup = settings.get("postcode_lookup", "included")
         self.combo_postcode_lookup.SetSelection(1 if postcode_lookup == "online" else 0)
         self.txt_google_key.SetValue(settings.get("google_api_key", ""))
+        google_available = bool(self.txt_google_key.GetValue().strip())
+        visual_source = settings.get("visual_mapping_source", "auto")
+        if visual_source == "auto":
+            visual_source = "google" if google_available else "mapillary"
+        self.combo_visual_source.SetSelection(
+            0 if visual_source == "google" and google_available else 1)
+        driving_source = settings.get("driving_route_source", "osrm")
+        self.combo_drive_source.SetSelection(
+            1 if driving_source == "google" and google_available else 0)
+        self._update_google_dependent_controls(google_available)
+        self.txt_google_key.Bind(wx.EVT_TEXT, self._on_google_key_changed)
         self.txt_mistral_key.SetValue(settings.get("mistral_api_key", ""))
         self.txt_here_key.SetValue(settings.get("here_api_key", ""))
         self.txt_ors_key.SetValue(settings.get("ors_api_key", ""))
@@ -518,6 +621,34 @@ class SettingsDialog(wx.Dialog):
         else:
             os.startfile(self._user_dir)
 
+    def _on_keystroke_manager(self, event=None) -> None:
+        from keystrokes import KeystrokeManagerDialog
+        dlg = KeystrokeManagerDialog(self, self._key_bindings)
+        if dlg.ShowModal() == wx.ID_OK:
+            self._key_bindings = dict(dlg.bindings)
+        dlg.Destroy()
+
+    def _on_google_key_changed(self, event) -> None:
+        """Google imagery can only be selected while a key is present."""
+        available = bool(self.txt_google_key.GetValue().strip())
+        if not available:
+            if self.combo_visual_source.GetSelection() == 0:
+                self.combo_visual_source.SetSelection(1)
+            if self.combo_drive_source.GetSelection() == 1:
+                self.combo_drive_source.SetSelection(0)
+        self._update_google_dependent_controls(available)
+        event.Skip()
+
+    def _update_google_dependent_controls(self, available: bool) -> None:
+        """Keep keyless fallbacks selected when Google is unavailable."""
+        if not available:
+            self.combo_visual_source.SetSelection(1)
+            self.combo_drive_source.SetSelection(0)
+        for control in self._drive_source_controls:
+            control.Show(True)
+        self.general_page.Layout()
+        self.general_page.FitInside()
+
 
     def _on_ok(self, event) -> None:
         cat_keys = [k for k, _ in POI_CATEGORY_CHOICES]
@@ -546,6 +677,13 @@ class SettingsDialog(wx.Dialog):
             "nav_provider":           nav_provider,
             "departure_board_source": departure_board_source,
             "poi_source":             "here" if self.combo_poi_source.GetSelection() == 1 else "osm",
+            "visual_mapping_source":  "google" if (
+                self.txt_google_key.GetValue().strip()
+                and self.combo_visual_source.GetSelection() == 0) else "mapillary",
+            "driving_route_source":   "google" if (
+                self.txt_google_key.GetValue().strip()
+                and self.combo_drive_source.GetSelection() == 1) else "osrm",
+            "key_bindings":           dict(self._key_bindings),
             "postcode_lookup":        "online" if self.combo_postcode_lookup.GetSelection() == 1 else "included",
             "google_api_key":         self.txt_google_key.GetValue().strip(),
             "mistral_api_key":         self.txt_mistral_key.GetValue().strip(),
@@ -573,6 +711,26 @@ class SettingsDialog(wx.Dialog):
         self.gtfs_refreshed = True
         self.btn_gtfs.SetLabel("Catalog refresh will run on save")
         self.btn_gtfs.Disable()
+
+    def _on_timetable_refresh(self, event) -> None:
+        """Confirm before saving settings and starting all feed updates."""
+        dlg = wx.MessageDialog(
+            self,
+            _("Proceed with timetable updates?\n\n"
+              "This will download fresh data for every installed timetable "
+              "feed. Existing data will be retained if an update fails."),
+            _("Update Cached Timetables?"),
+            wx.YES_NO | wx.NO_DEFAULT | wx.ICON_QUESTION,
+        )
+        try:
+            proceed = dlg.ShowModal() == wx.ID_YES
+        finally:
+            dlg.Destroy()
+        if not proceed:
+            self.btn_update_timetables.SetFocus()
+            return
+        self.timetables_refreshed = True
+        self._on_ok(event)
 
 
 # ---------------------------------------------------------------------------
@@ -1561,11 +1719,16 @@ class JourneyResultsDialog(wx.Dialog):
             action_row.Add(self._platforms_btn, 0, wx.RIGHT, 10)
             self._stops_btn = wx.Button(panel, label="Show Stops")
             action_row.Add(self._stops_btn, 0, wx.RIGHT, 10)
+        self._explore_path_btn = wx.Button(panel, label="Explore Path")
+        self._explore_path_btn.Enable(any(self._route_has_path(r) for r in routes))
+        action_row.Add(self._explore_path_btn, 0, wx.RIGHT, 10)
         self._sizer.Add(action_row, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
 
         accessible_row = wx.BoxSizer(wx.HORIZONTAL)
-        self._accessible_osm_btn = wx.Button(panel, label="Accessible directions")
-        accessible_row.Add(self._accessible_osm_btn, 0)
+        self._accessible_osm_btn = None
+        if not any(r.get("travel_mode") == "driving" for r in routes):
+            self._accessible_osm_btn = wx.Button(panel, label="Accessible directions")
+            accessible_row.Add(self._accessible_osm_btn, 0)
         self._sizer.Add(accessible_row, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
 
         btn_row = wx.BoxSizer(wx.HORIZONTAL)
@@ -1580,7 +1743,9 @@ class JourneyResultsDialog(wx.Dialog):
             self._platforms_btn.Bind(wx.EVT_BUTTON, self._on_show_platforms)
         if self._stops_btn:
             self._stops_btn.Bind(wx.EVT_BUTTON, self._on_show_stops)
-        self._accessible_osm_btn.Bind(wx.EVT_BUTTON, self._on_accessible_osm)
+        if self._accessible_osm_btn:
+            self._accessible_osm_btn.Bind(wx.EVT_BUTTON, self._on_accessible_osm)
+        self._explore_path_btn.Bind(wx.EVT_BUTTON, self._on_explore_path)
         close_btn.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CLOSE))
         self.listbox.Bind(wx.EVT_LISTBOX_DCLICK, lambda e: self._show_detail())
         self.listbox.Bind(wx.EVT_KEY_DOWN, self._on_list_key)
@@ -1611,6 +1776,16 @@ class JourneyResultsDialog(wx.Dialog):
         if sel == wx.NOT_FOUND or sel >= len(self._routes):
             return 0 if self._routes else wx.NOT_FOUND
         return sel
+
+    @staticmethod
+    def _route_has_path(route):
+        if route.get("polyline"):
+            return True
+        return any(
+            leg.get("_walk_path_points")
+            for leg in (route.get("legs") or [])
+            if leg.get("type") == "walking"
+        )
 
     def _show_accessible_result(self, title: str, text: str):
         dlg = wx.Dialog(self, title=title, style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
@@ -1710,6 +1885,21 @@ class JourneyResultsDialog(wx.Dialog):
                 "Journey Planner - Accessible directions",
                 "Accessible directions are not available here.")
 
+    def _on_explore_path(self, event=None):
+        idx = self._selected_route_index()
+        if idx == wx.NOT_FOUND:
+            return
+        route = self._routes[idx]
+        if not self._route_has_path(route):
+            return
+        dlg = ExplorePathDialog(self, route)
+        dlg.ShowModal()
+        dlg.Destroy()
+        if self._showing_detail:
+            self.detail.SetFocus()
+        else:
+            self.listbox.SetFocus()
+
     def _show_accessible_segments(self, title, items):
         """Open the navigable segment list for an accessible route."""
         if isinstance(items, str):
@@ -1744,6 +1934,340 @@ class JourneyResultsDialog(wx.Dialog):
         if _hook_detail_list(self, event, self._showing_detail, self._show_list, self._show_detail):
             return
         event.Skip()
+
+
+class ExplorePathDialog(wx.Dialog):
+    """Keyboard and audio exploration of a selected driving polyline."""
+
+    def __init__(self, parent, route):
+        super().__init__(parent, title="Explore Path",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        from route_tools import _decode_polyline, _haversine_m
+
+        self._owner = parent.GetParent()
+        self._route = route
+        self._local_user_map = bool(getattr(self._owner, "_user_map_data", None))
+        self._walking_route = route.get("travel_mode") == "walking"
+        if route.get("polyline"):
+            raw_points = _decode_polyline(route.get("polyline", ""))
+        else:
+            raw_points = []
+            for leg in route.get("legs") or []:
+                if leg.get("type") != "walking":
+                    continue
+                for point in leg.get("_walk_path_points") or []:
+                    try:
+                        coordinate = (float(point["lat"]), float(point["lon"]))
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    if not raw_points or coordinate != raw_points[-1]:
+                        raw_points.append(coordinate)
+        self._points = self._sample_points(
+            raw_points, _haversine_m,
+            interval_m=35.0 if self._walking_route else 2500.0,
+            maximum=600 if self._walking_route else 160,
+        )
+        self._index = 0
+        self._closed = False
+        self._saved_map_position = (
+            getattr(self._owner, "lat", 0.0),
+            getattr(self._owner, "lon", 0.0),
+            bool(getattr(self._owner, "street_mode", False)),
+            getattr(self._owner, "street_label", ""),
+        )
+        self._cumulative = [0.0]
+        for a, b in zip(self._points, self._points[1:]):
+            self._cumulative.append(
+                self._cumulative[-1] + _haversine_m(a[0], a[1], b[0], b[1]))
+        self._instructions_by_index = {}
+        if self._walking_route and self._points:
+            for leg in route.get("legs") or []:
+                for step in leg.get("_walk_points") or []:
+                    instruction = str(step.get("instruction", "")).strip()
+                    try:
+                        step_lat = float(step["lat"])
+                        step_lon = float(step["lon"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    if not instruction:
+                        continue
+                    nearest = min(
+                        range(len(self._points)),
+                        key=lambda i: _haversine_m(
+                            step_lat, step_lon,
+                            self._points[i][0], self._points[i][1]),
+                    )
+                    self._instructions_by_index[nearest] = instruction.rstrip(".") + "."
+        if self._points:
+            lats = [p[0] for p in self._points]
+            lons = [p[1] for p in self._points]
+            # Use one physical scale for both axes. Independently filling the
+            # pitch and stereo ranges makes a mostly east/west route's small
+            # latitude changes sound like dramatic north/south detours.
+            mid_lat = (min(lats) + max(lats)) / 2.0
+            mid_lon = (min(lons) + max(lons)) / 2.0
+            lat_span_km = (max(lats) - min(lats)) * 111.195
+            lon_scale = max(0.01, abs(math.cos(math.radians(mid_lat))))
+            lon_span_km = ((max(lons) - min(lons)) * 111.195 * lon_scale)
+            minimum_span_km = 0.05 if self._local_user_map else 2.0
+            physical_span_km = max(minimum_span_km, lat_span_km, lon_span_km) * 1.10
+            half_lat_deg = physical_span_km / 111.195 / 2.0
+            half_lon_deg = physical_span_km / (111.195 * lon_scale) / 2.0
+            self._tone_bounds = (
+                mid_lat - half_lat_deg, mid_lat + half_lat_deg,
+                mid_lon - half_lon_deg, mid_lon + half_lon_deg,
+            )
+        else:
+            self._tone_bounds = None
+
+        panel = wx.Panel(self)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        page_help = ("Page Up and Page Down jump between turn instructions. "
+                     if self._walking_route else
+                     "Page Up and Page Down move by larger sections. ")
+        intro = wx.StaticText(
+            panel,
+            label=("Use Up and Down to follow the route. Page Up and Page Down "
+                   + page_help.replace("Page Up and Page Down ", "")
+                   + "Home and End jump to either end. "
+                   "Escape returns to the journey results."),
+        )
+        intro.Wrap(620)
+        sizer.Add(intro, 0, wx.ALL | wx.EXPAND, 10)
+
+        self._status = wx.TextCtrl(
+            panel, value="",
+            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2,
+        )
+        self._status.SetMinSize((620, 120))
+        sizer.Add(self._status, 1, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
+
+        self._audio = wx.CheckBox(panel, label="Track path with spatial audio")
+        self._audio.SetValue(True)
+        sizer.Add(self._audio, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        previous_btn = wx.Button(panel, label="Previous point")
+        next_btn = wx.Button(panel, label="Next point")
+        start_btn = wx.Button(panel, label="Start of route")
+        end_btn = wx.Button(panel, label="End of route")
+        close_btn = wx.Button(panel, wx.ID_CLOSE, "Return to results")
+        for button in (previous_btn, next_btn, start_btn, end_btn, close_btn):
+            buttons.Add(button, 0, wx.RIGHT, 8)
+        sizer.Add(buttons, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        panel.SetSizer(sizer)
+        self.SetSize(720, 360)
+        previous_btn.Bind(wx.EVT_BUTTON, lambda e: self._move(-1))
+        next_btn.Bind(wx.EVT_BUTTON, lambda e: self._move(1))
+        start_btn.Bind(wx.EVT_BUTTON, lambda e: self._go_to(0))
+        end_btn.Bind(wx.EVT_BUTTON,
+                     lambda e: self._go_to(max(0, len(self._points) - 1)))
+        close_btn.Bind(wx.EVT_BUTTON, self._close)
+        self.Bind(wx.EVT_CLOSE, self._close)
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+        self.CentreOnParent()
+        # Focus the route description before populating it so a screen reader
+        # announces the starting instruction instead of only the Next button.
+        wx.CallAfter(self._status.SetFocus)
+        wx.CallLater(120, self._go_to, 0)
+
+    @staticmethod
+    def _sample_points(points, distance_fn, interval_m=2500.0, maximum=160):
+        """Distance-sample a polyline while retaining both endpoints."""
+        if len(points) <= 2:
+            return list(points)
+        cumulative = [0.0]
+        for a, b in zip(points, points[1:]):
+            cumulative.append(
+                cumulative[-1] + distance_fn(a[0], a[1], b[0], b[1]))
+        total = cumulative[-1]
+        if total <= 0:
+            return [points[0], points[-1]]
+        count = min(maximum, max(2, int(total / max(1.0, interval_m)) + 1))
+        sampled = [points[0]]
+        source_index = 1
+        for sample_index in range(1, count - 1):
+            target = total * sample_index / (count - 1)
+            while source_index < len(cumulative) - 1 and cumulative[source_index] < target:
+                source_index += 1
+            previous_index = max(0, source_index - 1)
+            segment_start = cumulative[previous_index]
+            segment_end = cumulative[source_index]
+            fraction = ((target - segment_start) / (segment_end - segment_start)
+                        if segment_end > segment_start else 0.0)
+            start = points[previous_index]
+            end = points[source_index]
+            sampled.append((
+                start[0] + (end[0] - start[0]) * fraction,
+                start[1] + (end[1] - start[1]) * fraction,
+            ))
+        sampled.append(points[-1])
+        return sampled
+
+    @staticmethod
+    def _heading_name(a, b):
+        lat1, lat2 = math.radians(a[0]), math.radians(b[0])
+        dlon = math.radians(b[1] - a[1])
+        y = math.sin(dlon) * math.cos(lat2)
+        x = (math.cos(lat1) * math.sin(lat2)
+             - math.sin(lat1) * math.cos(lat2) * math.cos(dlon))
+        bearing = (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
+        names = ("north", "north-east", "east", "south-east",
+                 "south", "south-west", "west", "north-west")
+        return names[round(bearing / 45.0) % 8]
+
+    def _description(self):
+        if not self._points:
+            return "This route has no path coordinates."
+        travelled = self._cumulative[self._index]
+        total = self._cumulative[-1]
+        remaining = max(0.0, total - travelled)
+        if self._index < len(self._points) - 1:
+            heading = self._heading_name(
+                self._points[self._index], self._points[self._index + 1])
+        elif self._index:
+            heading = self._heading_name(
+                self._points[self._index - 1], self._points[self._index])
+        else:
+            heading = "unknown"
+        if self._index == 0:
+            position = "Start of route. "
+        elif self._index == len(self._points) - 1:
+            position = "Destination. "
+        else:
+            position = ""
+        suburbs = self._route.get("suburbs") or []
+        anchors = self._route.get("suburb_anchors") or []
+        near = ""
+        if self._index == 0:
+            origin = self._route.get("_journey_origin") or {}
+            origin_name = str(origin.get("name", "")).strip()
+            offset = float(self._route.get("origin_offset_m", 0.0) or 0.0)
+            if origin_name and offset > 500.0:
+                near = (
+                    f"Route begins {offset / 1000.0:.1f} kilometres from "
+                    f"{origin_name}. "
+                )
+            elif origin_name:
+                near = f"{origin_name}. "
+        elif self._index == len(self._points) - 1:
+            destination = self._route.get("_journey_destination") or {}
+            destination_name = str(destination.get("name", "")).strip()
+            offset = float(self._route.get("destination_offset_m", 0.0) or 0.0)
+            if destination_name and offset > 500.0:
+                near = (
+                    f"Route ends {offset / 1000.0:.1f} kilometres from "
+                    f"{destination_name}. "
+                )
+            elif destination_name:
+                near = f"{destination_name}. "
+        elif anchors:
+            anchor = min(
+                anchors,
+                key=lambda item: abs(float(item.get("distance_m", 0.0)) - travelled),
+            )
+            anchor_name = str(anchor.get("name", "")).strip()
+            if anchor_name:
+                near = f"Near {anchor_name}. "
+        elif suburbs and total > 0:
+            # Compatibility with route results cached before anchors existed.
+            suburb_index = min(
+                len(suburbs) - 1,
+                int((travelled / total) * len(suburbs)),
+            )
+            near = f"Near {suburbs[suburb_index]}. "
+        return (
+            f"{self._instructions_by_index.get(self._index, '')} "
+            f"{position}{near}Heading {heading}. "
+            f"{format_distance(remaining)} remaining; "
+            f"{format_distance(travelled)} from the start. "
+            f"{self._index + 1} of {len(self._points)}."
+        ).strip()
+
+    def _go_to(self, index):
+        if not self._points:
+            self._status.SetValue("This route has no path coordinates.")
+            return
+        self._index = max(0, min(len(self._points) - 1, int(index)))
+        lat, lon = self._points[self._index]
+        text = self._description()
+        self._status.SetValue(text)
+        self._status.SetInsertionPoint(0)
+        map_panel = getattr(self._owner, "map_panel", None)
+        if map_panel:
+            map_panel.set_explore_path(
+                self._points, self._index,
+                "walking" if self._walking_route else "driving")
+            map_panel.set_position(lat, lon, False, "")
+            map_panel.Refresh()
+        if self._audio.GetValue():
+            sound = getattr(self._owner, "sound", None)
+            if sound:
+                sound.play_spatial_tone(lat, lon, self._tone_bounds)
+        announce = getattr(self._owner, "_status_update", None)
+        if callable(announce):
+            announce(text, force=True)
+
+    def _move(self, amount):
+        self._go_to(self._index + amount)
+
+    def _move_instruction(self, direction):
+        indices = sorted(self._instructions_by_index)
+        if direction > 0:
+            target = next((i for i in indices if i > self._index),
+                          len(self._points) - 1)
+        else:
+            target = next((i for i in reversed(indices) if i < self._index), 0)
+        self._go_to(target)
+
+    def _on_char_hook(self, event):
+        key = event.GetKeyCode()
+        if key == wx.WXK_ESCAPE:
+            self._close()
+            return
+        if key == wx.WXK_UP:
+            self._move(1)
+            return
+        if key == wx.WXK_DOWN:
+            self._move(-1)
+            return
+        if key == wx.WXK_PAGEUP:
+            if self._walking_route:
+                self._move_instruction(1)
+            else:
+                self._move(10)
+            return
+        if key == wx.WXK_PAGEDOWN:
+            if self._walking_route:
+                self._move_instruction(-1)
+            else:
+                self._move(-10)
+            return
+        if key == wx.WXK_HOME:
+            self._go_to(0)
+            return
+        if key == wx.WXK_END:
+            self._go_to(len(self._points) - 1)
+            return
+        event.Skip()
+
+    def _close(self, event=None):
+        if self._closed:
+            return
+        self._closed = True
+        sound = getattr(self._owner, "sound", None)
+        if sound:
+            try:
+                sound.stop()
+            except Exception:
+                pass
+        map_panel = getattr(self._owner, "map_panel", None)
+        if map_panel:
+            map_panel.set_explore_path()
+            map_panel.set_position(*self._saved_map_position)
+            map_panel.Refresh()
+        self.EndModal(wx.ID_CLOSE)
 
 
 class AccessibleRouteDialog(wx.Dialog):
@@ -2118,7 +2642,7 @@ class TransitLookupDialog(wx.Dialog):
 
 
 class FlightSearchDialog(wx.Dialog):
-    """Flight search — two-step airport picker (origin then destination)."""
+    """Flight search — airport picker with an explicit departure date."""
 
     def __init__(self, parent, airports_csv_path: str):
         super().__init__(parent, title="Flight search — origin",
@@ -2126,6 +2650,8 @@ class FlightSearchDialog(wx.Dialog):
         self.airports_csv_path = airports_csv_path
         self.origin_iata = ""
         self.dest_iata   = ""
+        self.departure_date = None
+        self._choosing_date = False
         self._airports   = []
         self._load_airports()
         self._matches    = []  # current suggestion list
@@ -2142,12 +2668,43 @@ class FlightSearchDialog(wx.Dialog):
         self._prompt_lbl.SetBackgroundColour(self.GetBackgroundColour())
         self._prompt_lbl.SetForegroundColour(wx.SystemSettings.GetColour(wx.SYS_COLOUR_WINDOWTEXT))
         vs.Add(self._prompt_lbl, 0, wx.LEFT | wx.TOP | wx.EXPAND, 8)
-        self.txt = wx.TextCtrl(self)
+        self.txt = wx.TextCtrl(self, name="From airport")
+        _set_explicit_accessible_name(self, self.txt, "From airport")
         vs.Add(self.txt, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
 
         self.lb = wx.ListBox(self, style=wx.LB_SINGLE)
         self.lb.SetMinSize((420, 180))
         vs.Add(self.lb, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 4)
+
+        # Brisbane has no daylight saving, so a fixed UTC+10 default avoids
+        # UTC's previous-day problem without depending on system timezone data.
+        import datetime
+        brisbane_now = datetime.datetime.now(
+            datetime.timezone(datetime.timedelta(hours=10)))
+        date_row = wx.BoxSizer(wx.HORIZONTAL)
+        date_row.Add(wx.StaticText(self, label="Departure date:"),
+                     0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+
+        self.cmb_day = wx.ComboBox(
+            self, choices=[str(day) for day in range(1, 32)],
+            style=wx.CB_READONLY, name="Departure day")
+        self.cmb_month = wx.ComboBox(
+            self, choices=["January", "February", "March", "April", "May", "June",
+                           "July", "August", "September", "October", "November", "December"],
+            style=wx.CB_READONLY, name="Departure month")
+        self._year_values = [brisbane_now.year + offset for offset in range(6)]
+        self.cmb_year = wx.ComboBox(
+            self, choices=[str(year) for year in self._year_values],
+            style=wx.CB_READONLY, name="Departure year")
+        self.cmb_day.SetSelection(brisbane_now.day - 1)
+        self.cmb_month.SetSelection(brisbane_now.month - 1)
+        self.cmb_year.SetSelection(0)
+        date_row.Add(self.cmb_day, 0, wx.RIGHT, 6)
+        date_row.Add(self.cmb_month, 1, wx.RIGHT, 6)
+        date_row.Add(self.cmb_year, 0)
+        vs.Add(date_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
+        self._date_row = date_row
+        date_row.ShowItems(False)
 
         hs = wx.BoxSizer(wx.HORIZONTAL)
         self.btn_next = wx.Button(self, wx.ID_OK, "Next")
@@ -2251,6 +2808,22 @@ class FlightSearchDialog(wx.Dialog):
         return ""
 
     def _on_next(self, evt):
+        if self._choosing_date:
+            import datetime
+            try:
+                self.departure_date = datetime.date(
+                    self._year_values[self.cmb_year.GetSelection()],
+                    self.cmb_month.GetSelection() + 1,
+                    self.cmb_day.GetSelection() + 1,
+                )
+            except (ValueError, IndexError):
+                wx.MessageBox("Please choose a valid departure date.",
+                              "Invalid departure date", wx.OK | wx.ICON_WARNING)
+                self.cmb_day.SetFocus()
+                return
+            self.EndModal(wx.ID_OK)
+            return
+
         iata = self._selected_iata()
         if not iata:
             q = self.txt.GetValue().strip().upper()
@@ -2268,17 +2841,28 @@ class FlightSearchDialog(wx.Dialog):
             self.SetTitle(f"Flight search — {prompt}")
             self._prompt_lbl.SetValue(f"{prompt}:")
             self._prompt_lbl.SetName(f"{prompt}:")
+            _set_explicit_accessible_name(self, self.txt, "To airport")
             self.txt.Clear()
             self.lb.Clear()
             self._matches = []
-            self.btn_next.SetLabel("Search")
+            self.btn_next.SetLabel("Next")
             # Focus label first so NVDA reads it, then move to textctrl
             self._prompt_lbl.SetFocus()
             wx.CallLater(100, self.txt.SetFocus)
         else:
-            # Second step — got destination
+            # Second step — got destination; only now expose the date fields.
             self.dest_iata = iata
-            self.EndModal(wx.ID_OK)
+            self._choosing_date = True
+            self.SetTitle("Flight search — departure date")
+            self._prompt_lbl.Hide()
+            self.txt.Hide()
+            self.lb.Hide()
+            self._date_row.ShowItems(True)
+            self.btn_next.SetLabel("Search")
+            self.Layout()
+            self.Fit()
+            self.CentreOnScreen()
+            self.cmb_day.SetFocus()
 
 
 class FindFoodDialog(wx.Dialog):

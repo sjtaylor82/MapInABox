@@ -1599,19 +1599,6 @@ class ToolsMixin:
         if not rt:
             self._resume_location_sound()
             return
-        if not rt.is_configured:
-            _key_required(
-                self,
-                "Journey Planner Requires Google",
-                "Google API key required.\n\n"
-                "Journey Planner needs a Google API key in order to work.\n"
-                "",
-                "Get a Google API key",
-                "https://developers.google.com/maps/get-started",
-            )
-            self._resume_location_sound()
-            return
-
         country_code = self._ask_country_code()
         if not country_code:
             self._status_update("Journey planner cancelled.", force=True)
@@ -1640,19 +1627,36 @@ class ToolsMixin:
                * math.cos(math.radians((o_lat + d_lat) / 2.0))) ** 2)
 
         from dialogs import ChoiceDialog
-        if direct_km > walk_limit_km:
-            travel_mode = "transit"
-        else:
-            # Transit is the normal Journey Planner mode; walking is secondary.
-            trip_choices = ["Transit directions", "Walking directions"]
-            dlg = ChoiceDialog(self, "What kind of journey?", "Journey Type", trip_choices)
-            if dlg.ShowModal() != wx.ID_OK:
-                dlg.Destroy()
-                self._status_update("Journey planner cancelled.", force=True)
-                return
-            trip_sel = dlg.GetSelection()
+        # Transit remains the default. Long journeys omit walking but always
+        # retain driving, which can use the open OSRM fallback without a key.
+        trip_choices = ["Transit directions"]
+        trip_modes = ["transit"]
+        if direct_km <= walk_limit_km:
+            trip_choices.append("Walking directions")
+            trip_modes.append("walking")
+        trip_choices.append("Driving directions")
+        trip_modes.append("driving")
+        dlg = ChoiceDialog(self, "What kind of journey?", "Journey Type", trip_choices)
+        if dlg.ShowModal() != wx.ID_OK:
             dlg.Destroy()
-            travel_mode = "transit" if trip_sel == 0 else "walking"
+            self._status_update("Journey planner cancelled.", force=True)
+            return
+        trip_sel = dlg.GetSelection()
+        dlg.Destroy()
+        travel_mode = trip_modes[max(0, trip_sel)]
+
+        if travel_mode != "driving" and not rt.is_configured:
+            _key_required(
+                self,
+                "Journey Planner Requires Google",
+                "Google API key required.\n\n"
+                "Transit and walking Journey Planner results need a Google API key. "
+                "Driving directions can use the open routing fallback.\n",
+                "Get a Google API key",
+                "https://developers.google.com/maps/get-started",
+            )
+            self._resume_location_sound()
+            return
         timing_mode = "now"
         timestamp = None
 
@@ -1706,18 +1710,72 @@ class ToolsMixin:
 
         def _calc():
             try:
-                routes = rt.journey_plan(
-                    o_name, d_name, country_code,
-                    origin_coords=(o_lat, o_lon),
-                    dest_coords=(d_lat, d_lon),
-                    origin_place_id=getattr(origin, "place_id", ""),
-                    dest_place_id=getattr(dest, "place_id", ""),
-                    timing_mode=timing_mode,
-                    timestamp=timestamp,
-                    transit_filter=transit_filter,
-                    status_cb=_status,
-                    travel_mode=travel_mode,
-                )
+                if travel_mode == "driving":
+                    driving_source = self.settings.get(
+                        "driving_route_source", "osrm")
+                    google_key = self.settings.get("google_api_key", "").strip()
+                    use_google_driving = (
+                        driving_source == "google" and bool(google_key))
+                    driving_rt = RouteTools(google_key if use_google_driving else "")
+                    result = driving_rt.explore_routes(
+                        (o_lat, o_lon, o_name),
+                        (d_lat, d_lon, d_name),
+                        status_cb=_status,
+                    )
+                    routes = []
+                    driving_routes = result.get("routes", [])
+                    for index, route in enumerate(driving_routes, 1):
+                        provider_label = (
+                            "Google Maps traffic-aware"
+                            if route.get("provider") == "google"
+                            else "OpenStreetMap/OSRM")
+                        desc = route.get("description") or "driving route"
+                        summary = (
+                            f"Option {index}: {provider_label} route via {desc}, "
+                            f"{route.get('duration_text', '')}, "
+                            f"{route.get('distance_text', '')}."
+                        )
+                        toll = route.get("toll_price")
+                        if toll is not None and toll > 0:
+                            summary += (
+                                f" Toll {toll:.2f} "
+                                f"{route.get('toll_currency', '')}."
+                            )
+                        suburbs = route.get("suburbs") or []
+                        detail_lines = [summary]
+                        if suburbs:
+                            detail_lines.extend(["", "Through: " + ", ".join(suburbs) + "."])
+                        instructions = route.get("instructions") or []
+                        if instructions:
+                            detail_lines.extend(["", "Driving directions:"])
+                            detail_lines.extend(
+                                f"{step_number}. {instruction}"
+                                for step_number, instruction in enumerate(instructions, 1)
+                            )
+                        detail_lines.extend([
+                            "",
+                            "Select Explore Path to follow this route with the arrow keys and spatial audio.",
+                        ])
+                        route.update({
+                            "summary": summary,
+                            "detail_text": "\n".join(detail_lines),
+                            "travel_mode": "driving",
+                            "legs": route.get("legs") or [],
+                        })
+                        routes.append(route)
+                else:
+                    routes = rt.journey_plan(
+                        o_name, d_name, country_code,
+                        origin_coords=(o_lat, o_lon),
+                        dest_coords=(d_lat, d_lon),
+                        origin_place_id=getattr(origin, "place_id", ""),
+                        dest_place_id=getattr(dest, "place_id", ""),
+                        timing_mode=timing_mode,
+                        timestamp=timestamp,
+                        transit_filter=transit_filter,
+                        status_cb=_status,
+                        travel_mode=travel_mode,
+                    )
                 for route in routes:
                     route["_journey_origin"] = {
                         "lat": o_lat,
@@ -2042,8 +2100,19 @@ class ToolsMixin:
                         result = candidates[0].get("stop_list", []) if candidates else []
                         if candidates:
                             items.append(f"Possible GTFS match: {candidates[0].get('label', heading)}")
-                    if not isinstance(result, list) or not result:
-                        items.append("No stop sequence available for this service.")
+                    unavailable = (not isinstance(result, list) or not result
+                                   or (len(result) == 1
+                                       and isinstance(result[0], str)
+                                       and result[0].startswith("No ")))
+                    if unavailable:
+                        google_count = leg.get("num_stops")
+                        if google_count:
+                            noun = "stop" if google_count == 1 else "stops"
+                            items.append(
+                                f"{google_count} {noun} reported by Google; "
+                                "intermediate stop names are unavailable.")
+                        else:
+                            items.append("Intermediate stop names are unavailable.")
                     else:
                         for stop in result:
                             name = (stop.get("name", stop.get("stop_name", "Unknown"))
@@ -2150,7 +2219,7 @@ class ToolsMixin:
         miab_log("navigation",
                  f"Journey planner returned {len(routes)} route(s).", self.settings)
         if not routes:
-            self._status_update("No transit options found.", force=True)
+            self._status_update("No journey options found.", force=True)
             self._finish_thinking()
             return
         self._status_update(f"Found {len(routes)} option{'s' if len(routes) != 1 else ''}.", force=True)
@@ -3687,6 +3756,7 @@ class ToolsMixin:
 
         origin = dlg.origin_iata
         dest   = dlg.dest_iata
+        departure_date = dlg.departure_date
         dlg.Destroy()
 
         self._thinking()
@@ -3699,7 +3769,8 @@ class ToolsMixin:
                     timetable_results = self._timetable.search(
                         origin, dest,
                         results=15,
-                        sort="Duration")
+                        sort="Duration",
+                        departure_date=departure_date)
                 except Exception as e:
                     miab_log("errors", f"[FlightSearch] Timetable API error: {e}", None)
 
@@ -3711,7 +3782,14 @@ class ToolsMixin:
                     return
 
                 from timetable import fmt_itinerary
-                lines = [f"Flights: {origin} → {dest}", ""]
+                # The API has already sorted by duration. This stable grouping
+                # promotes every non-stop itinerary while retaining that order
+                # within the direct and connecting result groups.
+                timetable_results.sort(
+                    key=lambda itinerary: 0
+                    if len(itinerary.get("Flights", [])) == 1 else 1)
+                date_label = departure_date.strftime("%A, %d %B %Y")
+                lines = [f"Flights: {origin} → {dest}, {date_label}", ""]
 
                 for i, itin in enumerate(timetable_results, 1):
                     lines.append(f"Option {i}:")
@@ -3720,7 +3798,7 @@ class ToolsMixin:
 
                 # Sound resumes when dialog closes, not now
                 wx.CallAfter(self._show_flight_results,
-                             "\n".join(lines), origin, dest)
+                             "\n".join(lines), origin, dest, date_label)
 
             except Exception as exc:
                 import traceback
@@ -3730,9 +3808,11 @@ class ToolsMixin:
 
         threading.Thread(target=_fetch, daemon=True).start()
 
-    def _show_flight_results(self, text: str, origin: str, dest: str):
+    def _show_flight_results(self, text: str, origin: str, dest: str,
+                             date_label: str = ""):
         self._begin_tools_workflow()
-        dlg = wx.Dialog(self, title=f"Flights {origin} → {dest}",
+        title_date = f" — {date_label}" if date_label else ""
+        dlg = wx.Dialog(self, title=f"Flights {origin} → {dest}{title_date}",
                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         vs  = wx.BoxSizer(wx.VERTICAL)
         txt = wx.TextCtrl(dlg, value=text,

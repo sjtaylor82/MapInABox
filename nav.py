@@ -26,7 +26,8 @@ import urllib.parse
 import urllib.request
 from typing import Optional
 
-from geo import dist_metres, bearing_deg, bearing_between_nodes, compass_name, GENERIC_STREET_TYPES
+from geo import (dist_metres, bearing_deg, bearing_between_nodes, compass_name,
+                 GENERIC_STREET_TYPES, INTERNAL_ROAD_LABELS)
 from distance_units import format_distance
 
 
@@ -190,7 +191,11 @@ class NavigationEngine:
             )
             for i in range(1, len(path))
         )
-        n_turns  = sum(1 for inst in instructions if "arriving" not in inst[2].lower())
+        n_turns  = sum(
+            1 for inst in instructions
+            if "arriving" not in inst[2].lower()
+            and not inst[2].lower().startswith("continue across ")
+        )
         n_steps  = len(instructions)
         first    = instructions[0][2] if instructions else ""
         total_min = max(1, int(round(total_m / 80.0))) if total_m > 0 else 0
@@ -569,6 +574,7 @@ class NavigationEngine:
 
         leg_dist     = 0.0
         prev_bearing = _bearing(node_path[0], node_path[1])
+        intersections = graph.get("intersections", set())
 
         for i in range(1, n - 1):
             leg_dist    += _dist(node_path[i - 1], node_path[i])
@@ -586,8 +592,26 @@ class NavigationEngine:
                     wlat, wlon,
                 ))
                 leg_dist = 0.0
+            elif node_path[i] in intersections:
+                incoming_street = _street_between(node_path[i - 1], node_path[i])
+                route_names = {incoming_street.casefold(), next_street.casefold()}
+                crosses = sorted({
+                    name for name in node_streets.get(node_path[i], set())
+                    if name and name.casefold() not in route_names
+                    and name.casefold() not in GENERIC_STREET_TYPES | INTERNAL_ROAD_LABELS
+                }, key=str.casefold)
+                if crosses:
+                    cross_text = ", ".join(crosses)
+                    wlat, wlon = nodes[node_path[i]]
+                    instructions.append((
+                        i, leg_dist,
+                        f"Continue across {cross_text}.",
+                        wlat, wlon,
+                    ))
+                    leg_dist = 0.0
             prev_bearing = curr_bearing
 
+        leg_dist += _dist(node_path[-2], node_path[-1])
         last       = node_path[-1]
         last_name  = next(iter(node_streets.get(last, set())), "destination")
         alat, alon = nodes[last]
@@ -751,7 +775,7 @@ class NavigationEngine:
             for nb, sname in edges.get(mid, []):
                 if not sname or sname == cur_street:
                     continue
-                if sname.lower() in GENERIC_STREET_TYPES:
+                if sname.lower() in GENERIC_STREET_TYPES | INTERNAL_ROAD_LABELS:
                     continue
                 blat, blon = nodes[nb]
                 br = bearing_deg(nlat, nlon, blat, blon)
@@ -1463,7 +1487,11 @@ class NavMixin:
                 for i in range(1, len(route))
             )))
         n_steps = len(instructions)
-        n_turns = sum(1 for inst in instructions if "arriving" not in inst[2].lower())
+        n_turns = sum(
+            1 for inst in instructions
+            if "arriving" not in inst[2].lower()
+            and not inst[2].lower().startswith("continue across ")
+        )
         first = self._nav_format_instruction(0, instructions[0])
         dist_part = f"{total_m}m, " if total_m > 0 else ""
         mode = getattr(self, '_nav_route_mode', 'walking')

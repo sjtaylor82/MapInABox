@@ -10,7 +10,8 @@ import threading
 
 import wx
 
-from geo import GENERIC_STREET_TYPES, bearing_between_nodes, bearing_deg, compass_name
+from geo import (GENERIC_STREET_TYPES, bearing_between_nodes, bearing_deg,
+                 compass_name, dist_metres)
 from logging_utils import miab_log
 
 
@@ -226,7 +227,8 @@ class WalkMixin:
         nlat, nlon = nodes[node_id]
 
         # Nearest house number from preloaded local data — no API call
-        num = self._nearest_address_number(nlat, nlon, street_name, radius=60)
+        num = self._walk_nearest_address_number(
+            nlat, nlon, street_name, heading, radius=60)
         addr_part = f"  Near {num} {street_name}." if num else ""
 
         shape = self._walk_describe_intersection_shape(node_id, street_name, heading)
@@ -247,8 +249,11 @@ class WalkMixin:
             walk_radius = self.settings.get("walk_poi_radius_m", 80)
             show_kind   = self.settings.get("walk_announce_category", True)
             nearby_pois = self._poi_grid_nearby(nlat, nlon, walk_radius)
+            nearby_pois.sort(key=lambda poi: dist_metres(
+                nlat, nlon,
+                float(poi.get("lat", nlat)), float(poi.get("lon", nlon))))
             nearby = []
-            for poi in nearby_pois:
+            for poi in nearby_pois[:5]:
                 name = poi["label"].split(",")[0].strip()
                 kind = poi.get("kind", "")
                 if show_kind and kind:
@@ -257,7 +262,44 @@ class WalkMixin:
                     nearby.append(name)
             if nearby:
                 desc += "  Nearby: " + "; ".join(nearby) + "."
+                if len(nearby_pois) > len(nearby):
+                    desc += "  More nearby places are available with P."
         return desc
+
+    def _walk_nearest_address_number(self, lat, lon, street_name, heading, radius=60):
+        """Return the nearest number on the currently tracked side of the road."""
+        tracked_side = getattr(self, "_walk_road_side", None)
+        if tracked_side not in ("left", "right"):
+            return self._nearest_address_number(lat, lon, street_name, radius=radius)
+
+        def bare(value):
+            return re.sub(r"\s*\(.*?\)", "", value or "").strip().casefold()
+
+        candidates = []
+        for address in getattr(self, "_address_points", []):
+            if bare(address.get("street")) != bare(street_name):
+                continue
+            try:
+                address_lat = float(address["lat"])
+                address_lon = float(address["lon"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            distance = dist_metres(lat, lon, address_lat, address_lon)
+            if distance > radius:
+                continue
+            address_bearing = bearing_deg(lat, lon, address_lat, address_lon)
+            relative = (address_bearing - heading + 180.0) % 360.0 - 180.0
+            lateral = distance * math.sin(math.radians(relative))
+            # Ignore points effectively on the road centre line; they do not
+            # provide reliable evidence of which footpath they belong to.
+            if abs(lateral) < 3.0:
+                continue
+            side = "left" if lateral < 0 else "right"
+            if side == tracked_side:
+                number = str(address.get("number", "")).strip()
+                if number:
+                    candidates.append((distance, number))
+        return min(candidates, default=(None, None), key=lambda item: item[0])[1]
 
     def _walk_describe_intersection_shape(self, node_id, current_street, heading):
         """Describe which side each intersecting branch is on.
@@ -346,6 +388,7 @@ class WalkMixin:
             return
 
         # Find nearest intersection to current position
+        entry_lat, entry_lon = self.lat, self.lon
         best_nid = None
         best_dist = float("inf")
         nodes = self._walk_graph["nodes"]
@@ -373,7 +416,16 @@ class WalkMixin:
             self._status_update("No named streets at nearest intersection.", force=True)
             return
 
-        self._walk_street = named[0]
+        preferred_labels = [
+            getattr(self, "_jump_address_street", ""),
+            getattr(self, "_jump_street_label", ""),
+            getattr(self, "street_label", ""),
+        ]
+        preferred = next((
+            street for label in preferred_labels if label
+            for street in named if street.casefold() == str(label).casefold()
+        ), None)
+        self._walk_street = preferred or named[0]
         self._walk_node = best_nid
 
         # Pick initial heading: direction with more intersections ahead
@@ -400,13 +452,46 @@ class WalkMixin:
         self._walk_prev_node = None
         self._walk_preferred_next = None
         self._walk_history = []
+        self._walk_road_side = None
+        self._walk_side_name = "unknown side"
+        self._walk_side_anchor = ""
+        self._walk_on_anchor_side = None
+
+        # Use the actual selected/nearest address coordinate to establish the
+        # starting footpath. Address parity alone is not geographically safe.
+        def bare(value):
+            return re.sub(r"\s*\(.*?\)", "", value or "").strip().casefold()
+
+        address_number = str(getattr(self, "_jump_address_number", "") or "")
+        address_candidates = []
+        for address in getattr(self, "_address_points", []):
+            if bare(address.get("street")) != bare(self._walk_street):
+                continue
+            if address_number and str(address.get("number", "")) != address_number:
+                continue
+            distance = dist_metres(entry_lat, entry_lon, address["lat"], address["lon"])
+            address_candidates.append((distance, address))
+        if address_candidates:
+            _distance, address = min(address_candidates, key=lambda item: item[0])
+            nlat, nlon = nodes[best_nid]
+            address_bearing = bearing_deg(nlat, nlon, address["lat"], address["lon"])
+            relative = (address_bearing - self._walk_heading + 180.0) % 360.0 - 180.0
+            lateral = dist_metres(nlat, nlon, address["lat"], address["lon"]) * math.sin(math.radians(relative))
+            if abs(lateral) >= 3.0:
+                self._walk_road_side = "left" if lateral < 0 else "right"
+                anchor_number = str(address.get("number", "")).strip()
+                self._walk_side_anchor = (
+                    f"{anchor_number} {self._walk_street}" if anchor_number
+                    else self._walk_street
+                )
+                self._walk_on_anchor_side = True
 
         self._walking_mode = True
         n_intersections = len(self._walk_graph["intersections"])
         desc = self._walk_describe_intersection(best_nid, self._walk_street, self._walk_heading)
         self.street_label = self._walk_street
         wx.CallAfter(self.map_panel.set_position, self.lat, self.lon, True, self.street_label)
-        self.update_ui(f"Walking mode on.  {n_intersections} intersections found.  {desc}", force=True)
+        self.update_ui(f"Walking mode.  {desc}", force=True)
         # Fetch POIs in background for walk-announce if not already loaded
         # Delayed 3s so walk graph build and first announcement complete first
         if not getattr(self, '_all_pois', []):
@@ -533,6 +618,16 @@ class WalkMixin:
         if incoming_nid is None:
             options = [o for o in options if abs(o["relative"]) <= 150]
 
+        road_side = getattr(self, "_walk_road_side", None)
+        if road_side in ("left", "right"):
+            options = [
+                option for option in options
+                if option["is_current_street"]
+                or (option["relative"] < -25 and road_side == "left")
+                or (option["relative"] > 25 and road_side == "right")
+                or abs(option["relative"]) <= 25
+            ]
+
         options.sort(key=lambda o: (o["relative"], o["street"].lower()))
 
         # Collapse only near-identical branches with the same street name and angle.
@@ -548,20 +643,26 @@ class WalkMixin:
         return collapsed
 
     def _walk_option_text(self, option):
-        """Speak a turn option using relative degrees from current travel direction."""
+        """Speak a pedestrian-friendly turn followed by its compass heading."""
         rel = option["relative"]
         street = option["street"]
+        heading = self._walk_compass_name(option["bearing"])
 
         if abs(rel) <= 15:
             if option["is_current_street"]:
-                return f"Straight ahead on {street}."
-            return f"Straight ahead onto {street}."
+                return f"Straight ahead on {street}, heading {heading}."
+            return f"Straight ahead onto {street}, heading {heading}."
 
-        degrees = int(round(abs(rel)))
         side = "left" if rel < 0 else "right"
-        if option["is_current_street"]:
-            return f"{side} {degrees} degrees onto {street}."
-        return f"{side} {degrees} degrees onto {street}."
+        angle = abs(rel)
+        if angle < 55:
+            action = f"Bear slightly {side}"
+        elif angle < 125:
+            action = f"Turn {side}"
+        else:
+            action = f"Take a sharp {side}"
+        preposition = "along" if option["is_current_street"] else "onto"
+        return f"{action} {preposition} {street}, heading {heading}."
 
     def _walk_browse_turn(self, direction):
         """Browse turn options from left to right. direction is -1 for left, +1 for right."""
@@ -591,28 +692,55 @@ class WalkMixin:
         msg = (f"{self._walk_option_text(chosen)}  "
                f"Option {self._walk_option_idx + 1} of {n}.")
 
-        # Announce nearby POIs in this direction if available
+        # Announce only POIs genuinely ahead along the selected branch.  A
+        # radius around the branch's first graph node makes every option at a
+        # compact intersection return almost the same places.
         if self.settings.get("walk_announce_pois") and getattr(self, '_poi_grid', {}):
-            neighbour_nid = chosen.get("neighbour")
-            if neighbour_nid is not None and self._walk_graph:
-                nodes = self._walk_graph["nodes"]
-                if neighbour_nid in nodes:
-                    nlat, nlon = nodes[neighbour_nid]
-                    walk_radius = self.settings.get("walk_poi_radius_m", 80)
-                    show_kind = self.settings.get("walk_announce_category", True)
-                    nearby_pois = self._poi_grid_nearby(nlat, nlon, walk_radius)
-                    nearby = []
-                    for poi in nearby_pois:
-                        name = poi["label"].split(",")[0].strip()
-                        kind = poi.get("kind", "")
-                        if show_kind and kind:
-                            nearby.append(f"{name}, {kind}")
-                        else:
-                            nearby.append(name)
-                    if nearby:
-                        msg += "  Ahead: " + "; ".join(nearby) + "."
+            nearby = self._walk_pois_along_option(chosen)
+            if nearby:
+                msg += "  Ahead along this path: " + "; ".join(nearby) + "."
 
         self.update_ui(msg, force=True)
+
+    def _walk_pois_along_option(self, option, maximum=5):
+        """Return nearby POI labels inside the selected branch's forward cone."""
+        graph = self._walk_graph or {}
+        nodes = graph.get("nodes", {})
+        origin = nodes.get(self._walk_node)
+        if origin is None:
+            return []
+        radius = float(self.settings.get("walk_poi_radius_m", 80))
+        heading = float(option.get("bearing", self._walk_heading))
+        show_kind = self.settings.get("walk_announce_category", True)
+        candidates = []
+        seen = set()
+        for poi in self._poi_grid_nearby(origin[0], origin[1], radius):
+            try:
+                plat, plon = float(poi["lat"]), float(poi["lon"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            distance = dist_metres(origin[0], origin[1], plat, plon)
+            if distance < 2.0 or distance > radius:
+                continue
+            poi_bearing = bearing_deg(origin[0], origin[1], plat, plon)
+            difference = abs((poi_bearing - heading + 180.0) % 360.0 - 180.0)
+            # A 35-degree cone distinguishes branches while retaining places
+            # a pedestrian can reasonably regard as ahead on either side.
+            if difference > 35.0:
+                continue
+            lateral = distance * math.sin(math.radians(difference))
+            if lateral > 35.0:
+                continue
+            name = poi.get("label", "").split(",")[0].strip()
+            key = name.casefold()
+            if not name or key in seen:
+                continue
+            seen.add(key)
+            kind = poi.get("kind", "")
+            label = f"{name}, {kind}" if show_kind and kind else name
+            candidates.append((distance, label))
+        candidates.sort(key=lambda item: (item[0], item[1].casefold()))
+        return [label for _distance, label in candidates[:maximum]]
 
     def _walk_turn_right(self):
         """Right arrow — browse turn options toward the right."""
@@ -630,11 +758,17 @@ class WalkMixin:
             return False
 
         chosen = options[idx]
+        old_street = self._walk_street
         self._walk_street = chosen["street"]
         self._walk_heading = chosen["bearing"]
         self.street_label = chosen["street"]
         self._walk_preferred_next = chosen["neighbour"]
         self._walk_prev_node = self._walk_node
+        if chosen["street"] != old_street:
+            self._walk_road_side = None
+            self._walk_side_name = "unknown side"
+            self._walk_side_anchor = ""
+            self._walk_on_anchor_side = None
 
         if announce:
             heading_name = self._walk_compass_name(self._walk_heading)
@@ -645,8 +779,40 @@ class WalkMixin:
     def _walk_turnaround(self):
         """X key — turn 180 degrees."""
         self._walk_heading = (self._walk_heading + 180) % 360
+        if self._walk_road_side == "left":
+            self._walk_road_side = "right"
+        elif self._walk_road_side == "right":
+            self._walk_road_side = "left"
         heading_name = self._walk_compass_name(self._walk_heading)
         self.update_ui(f"Turning around.  Now heading {heading_name} along {self._walk_street}.", force=True)
+
+    def _walk_virtual_crossing(self):
+        """Move to the opposite simulated footpath at this intersection."""
+        side = getattr(self, "_walk_road_side", None)
+        if side not in ("left", "right"):
+            self.update_ui(
+                "Your current side of the road is unknown, so a virtual crossing cannot be represented.",
+                force=True,
+            )
+            return
+        self._walk_road_side = "right" if side == "left" else "left"
+        on_anchor = getattr(self, "_walk_on_anchor_side", None)
+        self._walk_on_anchor_side = not on_anchor if on_anchor is not None else None
+        self._walk_browsing = False
+        self._walk_turn_options = []
+        self._walk_option_idx = None
+        cross = self._walk_get_cross_streets(self._walk_node, self._walk_street)
+        location = f" at {', '.join(cross)}" if cross else " at this position"
+        options = self._walk_get_turn_options(
+            self._walk_node, self._walk_street, self._walk_heading)
+        available = [o["street"] for o in options if not o["is_current_street"]]
+        suffix = (" Available from this side: " + ", ".join(dict.fromkeys(available)) + "."
+                  if available else " No side street is available from this side.")
+        self.update_ui(
+            f"Virtual crossing of {self._walk_street}{location}. "
+            f"{suffix.lstrip()}",
+            force=True,
+        )
 
     def _download_new_area(self):
         """User pressed Space outside the barrier — fetch street data for current position."""
