@@ -348,6 +348,25 @@ class SettingsDialog(wx.Dialog):
             self.combo_drive_source,
         )
 
+        general_vs.Add(wx.StaticLine(self.general_page),
+                       0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        general_vs.Add(wx.StaticText(
+            self.general_page, label=_("Journey Planner transport source:")),
+            0, wx.LEFT, 8)
+        self.combo_journey_transport_source = wx.Choice(
+            self.general_page,
+            choices=[
+                _("Rome2Rio (free multimodal results)"),
+                _("Google Maps (API key required)"),
+            ],
+            name=_("Journey Planner transport source"),
+        )
+        _set_explicit_accessible_name(
+            self, self.combo_journey_transport_source,
+            _("Journey Planner transport source"))
+        general_vs.Add(self.combo_journey_transport_source, 0,
+                       wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         general_vs.Add(wx.StaticText(self.general_page, label=_("Navigation provider (walking routes):")), 0, wx.LEFT, 8)
         self.combo_nav = wx.Choice(
@@ -582,6 +601,9 @@ class SettingsDialog(wx.Dialog):
         driving_source = settings.get("driving_route_source", "osrm")
         self.combo_drive_source.SetSelection(
             1 if driving_source == "google" and google_available else 0)
+        journey_source = settings.get("journey_transport_source", "rome2rio")
+        self.combo_journey_transport_source.SetSelection(
+            1 if journey_source == "google" else 0)
         self._update_google_dependent_controls(google_available)
         self.txt_google_key.Bind(wx.EVT_TEXT, self._on_google_key_changed)
         self.txt_mistral_key.SetValue(settings.get("mistral_api_key", ""))
@@ -683,6 +705,8 @@ class SettingsDialog(wx.Dialog):
             "driving_route_source":   "google" if (
                 self.txt_google_key.GetValue().strip()
                 and self.combo_drive_source.GetSelection() == 1) else "osrm",
+            "journey_transport_source": "google" if (
+                self.combo_journey_transport_source.GetSelection() == 1) else "rome2rio",
             "key_bindings":           dict(self._key_bindings),
             "postcode_lookup":        "online" if self.combo_postcode_lookup.GetSelection() == 1 else "included",
             "google_api_key":         self.txt_google_key.GetValue().strip(),
@@ -1676,8 +1700,8 @@ class JourneyResultsDialog(wx.Dialog):
     """Two-level journey results: listbox of route summaries,
     Enter expands to detail, Escape/Backspace goes back.
 
-    Accessible buttons offer a screen-reader-friendly summary from Google
-    directions, plus an OSM walking alternative when available."""
+    Accessible buttons offer source-appropriate actions for Google, OSRM and
+    Rome2Rio results."""
 
     def __init__(self, parent, routes):
         super().__init__(parent, title="Journey Planner",
@@ -1719,14 +1743,20 @@ class JourneyResultsDialog(wx.Dialog):
             action_row.Add(self._platforms_btn, 0, wx.RIGHT, 10)
             self._stops_btn = wx.Button(panel, label="Show Stops")
             action_row.Add(self._stops_btn, 0, wx.RIGHT, 10)
-        self._explore_path_btn = wx.Button(panel, label="Explore Path")
-        self._explore_path_btn.Enable(any(self._route_has_path(r) for r in routes))
-        action_row.Add(self._explore_path_btn, 0, wx.RIGHT, 10)
+        self._explore_path_btn = None
+        if any(self._route_has_path(r) for r in routes):
+            self._explore_path_btn = wx.Button(panel, label="Explore Path")
+            action_row.Add(self._explore_path_btn, 0, wx.RIGHT, 10)
+        self._open_source_btn = None
+        if any(r.get("source") == "rome2rio" for r in routes):
+            self._open_source_btn = wx.Button(panel, label="Open in Rome2Rio")
+            action_row.Add(self._open_source_btn, 0, wx.RIGHT, 10)
         self._sizer.Add(action_row, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
 
         accessible_row = wx.BoxSizer(wx.HORIZONTAL)
         self._accessible_osm_btn = None
-        if not any(r.get("travel_mode") == "driving" for r in routes):
+        if (not any(r.get("travel_mode") == "driving" for r in routes)
+                and not all(r.get("source") == "rome2rio" for r in routes)):
             self._accessible_osm_btn = wx.Button(panel, label="Accessible directions")
             accessible_row.Add(self._accessible_osm_btn, 0)
         self._sizer.Add(accessible_row, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
@@ -1745,7 +1775,10 @@ class JourneyResultsDialog(wx.Dialog):
             self._stops_btn.Bind(wx.EVT_BUTTON, self._on_show_stops)
         if self._accessible_osm_btn:
             self._accessible_osm_btn.Bind(wx.EVT_BUTTON, self._on_accessible_osm)
-        self._explore_path_btn.Bind(wx.EVT_BUTTON, self._on_explore_path)
+        if self._explore_path_btn:
+            self._explore_path_btn.Bind(wx.EVT_BUTTON, self._on_explore_path)
+        if self._open_source_btn:
+            self._open_source_btn.Bind(wx.EVT_BUTTON, self._on_open_source)
         close_btn.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CLOSE))
         self.listbox.Bind(wx.EVT_LISTBOX_DCLICK, lambda e: self._show_detail())
         self.listbox.Bind(wx.EVT_KEY_DOWN, self._on_list_key)
@@ -1884,6 +1917,14 @@ class JourneyResultsDialog(wx.Dialog):
             self._show_accessible_result(
                 "Journey Planner - Accessible directions",
                 "Accessible directions are not available here.")
+
+    def _on_open_source(self, event=None):
+        idx = self._selected_route_index()
+        if idx == wx.NOT_FOUND:
+            return
+        url = self._routes[idx].get("source_url", "")
+        if url:
+            wx.LaunchDefaultBrowser(url)
 
     def _on_explore_path(self, event=None):
         idx = self._selected_route_index()

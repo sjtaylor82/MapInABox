@@ -82,7 +82,7 @@ from distance_units import (
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '2026.8.0'
+APP_VERSION   = '2026.8.1'
 
 POI_LIVE_COOLDOWN_SECS = 3.0
 POI_BACKGROUND_WAIT_SECS = 2.0
@@ -879,6 +879,7 @@ DEFAULT_SETTINGS = {
     "distance_unit":          "metric",  # "metric" or "imperial"
     "poi_source":             "osm",   # "osm" or "here"
     "visual_mapping_source":  "auto",  # "google", "mapillary", or legacy-aware "auto"
+    "journey_transport_source": "rome2rio",  # free multimodal discovery by default
     "driving_route_source":   "osrm",  # paid Google driving is explicit opt-in
     "key_bindings":           {},
     "language":               "",      # empty means system/default language
@@ -1256,6 +1257,29 @@ class SoundEngine:
                 ch = pygame.mixer.Channel(idx)
                 if not ch.get_busy():
                     ch.play(snd)
+                    return
+            pygame.mixer.Channel(1).play(snd)
+        threading.Thread(target=_gen, daemon=True).start()
+
+    def play_shared_address_tone(self):
+        """Very short centred cue for multiple POIs at one address."""
+        def _gen():
+            sr = 44100
+            duration = 0.055
+            t = np.linspace(0, duration, int(sr * duration), False)
+            wave = np.sin(2 * np.pi * 950.0 * t)
+            fade = max(1, int(sr * 0.008))
+            wave[:fade] *= np.linspace(0, 1, fade)
+            wave[-fade:] *= np.linspace(1, 0, fade)
+            stereo = np.ascontiguousarray(
+                np.stack((wave, wave), axis=-1) * 0.35 * 32767,
+                dtype=np.int16,
+            )
+            snd = pygame.sndarray.make_sound(stereo)
+            for idx in range(1, pygame.mixer.get_num_channels()):
+                channel = pygame.mixer.Channel(idx)
+                if not channel.get_busy():
+                    channel.play(snd)
                     return
             pygame.mixer.Channel(1).play(snd)
         threading.Thread(target=_gen, daemon=True).start()
@@ -8871,7 +8895,10 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         if lat is None or lon is None:
             self._announce_transient_then_return(f"No GPS coordinate for {name}.")
             return
-        self._replace_poi_action_item(f"Navigating to {name}...", clear_model=True)
+        self._poi_list = []
+        self._poi_index = 0
+        self._poi_explore_stack = []
+        self.listbox.SetFocus()
         self._nav_launch(
             float(lat), float(lon), name,
             target_source="poi",
@@ -11749,7 +11776,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                              self.settings)
                     threading.Thread(
                         target=self._fetch_all_pois_background,
-                        args=(address_points, False, lat, lon, fetch_id),
+                        # The cache was already preloaded above.  Bypass it
+                        # here so the intended six-hour refresh genuinely
+                        # queries OSM/HERE and replaces changed or removed
+                        # POIs instead of returning the same 30-day entry.
+                        args=(address_points, True, lat, lon, fetch_id),
                         daemon=True,
                     ).start()
                 else:
@@ -12354,6 +12385,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
     def _clear_street_survey_cache(self):
         self._street_survey_cache = {}
         self._street_survey_current_poi = None
+        self._street_survey_same_address_pois = []
+        self._street_survey_same_address_poi_index = 0
 
     def _street_survey_cache_key(self, prefix, street_name, *extra):
         return (
@@ -12505,7 +12538,16 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             proj = self._street_survey_project(street_name, ap["lat"], ap["lon"])
             if not proj:
                 continue
-            key = (str(ap["number"]).lower(), round(ap["lat"], 7), round(ap["lon"], 7))
+            # Different businesses commonly share an address and therefore
+            # have identical coordinates.  Include the POI name in their
+            # identity so one tenant does not erase the others; unnamed
+            # address records still collapse normally.
+            key = (
+                str(ap["number"]).lower(),
+                round(ap["lat"], 7),
+                round(ap["lon"], 7),
+                str(ap.get("name") or "").casefold(),
+            )
             if key in seen:
                 continue
             seen.add(key)
@@ -12631,9 +12673,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self._announce_transient_then_return(f"No current house number found on {street}.")
             return True
         current_key = self._street_survey_number_key(current_num)
+        address_groups = {}
         unique = {}
         for addr in addresses:
             key = addr["number"].lower()
+            address_groups.setdefault(key, []).append(addr)
             existing = unique.get(key)
             if existing is None or (addr.get("name") and not existing.get("name")):
                 unique[key] = addr
@@ -12688,13 +12732,52 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             if address_mode in ("poi_names", "poi_only") and target.get("name")
             else None
         )
+        same_address_pois = []
+        seen_names = set()
+        if address_mode in ("poi_names", "poi_only"):
+            for addr in address_groups.get(target["number"].lower(), []):
+                name = str(addr.get("name") or "").strip()
+                if not name or name.casefold() in seen_names:
+                    continue
+                seen_names.add(name.casefold())
+                same_address_pois.append(addr)
+        self._street_survey_same_address_pois = same_address_pois
+        self._street_survey_same_address_poi_index = 0
+        if target.get("name"):
+            for index, addr in enumerate(same_address_pois):
+                if addr.get("name") == target.get("name"):
+                    self._street_survey_same_address_poi_index = index
+                    break
         self._street_survey_last_direction = direction
         wx.CallAfter(self.map_panel.set_position, self.lat, self.lon, True, street)
         name = target.get("name", "") if address_mode in ("poi_names", "poi_only") else ""
         if name:
-            self._announce_transient(f"{name}, {target['number']} {street}.")
+            if len(same_address_pois) > 1:
+                self.sound.play_shared_address_tone()
+                wx.CallLater(
+                    70,
+                    self._announce_transient,
+                    f"Multiple POIs. {name}, {target['number']} {street}.",
+                )
+            else:
+                self._announce_transient(f"{name}, {target['number']} {street}.")
         else:
             self._announce_transient(f"{target['number']} {street}.")
+        return True
+
+    def _street_survey_cycle_same_address_poi(self, direction):
+        """Shift+Page Up/Down — browse POIs sharing the current address."""
+        pois = getattr(self, "_street_survey_same_address_pois", []) or []
+        if len(pois) < 2:
+            self._announce_transient("No other POIs at this address.")
+            return True
+        index = getattr(self, "_street_survey_same_address_poi_index", 0)
+        index = (index + direction) % len(pois)
+        self._street_survey_same_address_poi_index = index
+        target = pois[index]
+        self._street_survey_current_poi = target.get("poi")
+        street = self._street_survey_current_street()
+        self._announce_transient(f"{target['name']}, {target['number']} {street}.")
         return True
 
     def _street_survey_intersections(self, street_name):
@@ -13449,6 +13532,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 self._street_survey_go_block(direction)
             elif primary and shift and not alt:
                 self._street_survey_turn_cross_street(turn_back=(key == page_up))
+            elif shift and not primary and not alt:
+                self._street_survey_cycle_same_address_poi(direction)
             elif not primary and not shift and not alt:
                 self._street_survey_go_address(direction)
             else:
@@ -13697,8 +13782,13 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         new_lat, new_lon, pinned_street)
                     if pinned_snap and pinned_snap[0] <= 120.0:
                         _snap_dist, new_lat, new_lon, test_label = pinned_snap
-                        self._jump_street_pin_lat = new_lat
-                        self._jump_street_pin_lon = new_lon
+                        # Keep a selected house number anchored to the address
+                        # where it was found.  Moving its pin with the cursor
+                        # makes that number follow the user along the street
+                        # and be announced at unrelated intersections.
+                        if not getattr(self, "_jump_address_number", None):
+                            self._jump_street_pin_lat = new_lat
+                            self._jump_street_pin_lon = new_lon
                         miab_log("snap",
                                  f"arrow move: following pinned street '{pinned_street}' "
                                  f"via snap {pinned_snap[0]:.1f}m to ({new_lat:.5f},{new_lon:.5f})",
@@ -14578,6 +14668,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 "Ctrl+arrows: larger movement.",
                 "Page Up: previous known house number.",
                 "Page Down: next known house number.",
+                "Shift+Page Up or Shift+Page Down: browse multiple POIs at the current address.",
                 "Ctrl+F12: cycle address mode: POI names, plain numbers, POI numbers only.",
                 "Ctrl+Alt+F12: cycle house-number filter between all, odd only, and even only.",
                 "Ctrl+Page Up: previous intersection.",

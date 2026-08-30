@@ -481,7 +481,8 @@ class ToolsMixin:
         actions.append("current")
         return choices, actions, mark_list
 
-    def _pick_location(self, prompt: str, purpose: str, rt, country_code: str):
+    def _pick_location(self, prompt: str, purpose: str, rt, country_code: str,
+                       preferred_country_code: str = ""):
         """Return (lat, lon, name) from a mark, favourite, current position, or typed address.
 
         The chooser always offers a small set of explicit options, then falls
@@ -543,17 +544,24 @@ class ToolsMixin:
             return None
         # "Type an address..." selected — fall through to text input
 
-        dlg = self._dlgs[1](self, prompt, title=purpose.title())
-        if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
+        while True:
+            dlg = self._dlgs[1](self, prompt, title=purpose.title())
+            if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue():
+                dlg.Destroy()
+                return None
+            text = dlg.GetValue()
             dlg.Destroy()
-            return None
-        text = dlg.GetValue()
-        dlg.Destroy()
-        try:
-            return self._resolve_geocode(rt, text, country_code, purpose)
-        except Exception as exc:
-            self._status_update(f"Could not find '{text}': {exc}", force=True)
-            return None
+            try:
+                return self._resolve_geocode(
+                    rt, text, country_code, purpose,
+                    preferred_country_code=preferred_country_code)
+            except Exception:
+                wx.MessageBox(
+                    f"Could not find '{text}'. Please add more detail, such as "
+                    "the city and country, then try again.",
+                    "Place not found",
+                    wx.OK | wx.ICON_INFORMATION,
+                )
 
     def _thinking(self, msg: str = "Thinking...", play_busy_sound: bool = True) -> None:
         """Announce that a longer tool action is still running."""
@@ -735,7 +743,8 @@ class ToolsMixin:
         return self._country_name_to_code(country_name)
 
     def _resolve_geocode(self, rt, value: str, country_code: str, purpose: str = "location",
-                          require_confirmation: bool = True):
+                          require_confirmation: bool = True,
+                          preferred_country_code: str = ""):
         """Resolve an address and require the user to confirm the match —
         same pattern as the "Online Jump Results" dialog: geocoding can
         return a loose/best-guess match even for nonsense input, so the
@@ -748,7 +757,27 @@ class ToolsMixin:
         user prompt to confirm against and showing a dialog would be
         either a threading violation or an unwanted interruption."""
         try:
-            candidates = rt.geocode_candidates(value, country_code, limit=8)
+            candidates = []
+            # Worldwide tools should still make places in the currently open
+            # map's country easy to find.  Ask for local matches first, then
+            # append worldwide matches so an unqualified name such as
+            # "Cleveland" offers both Queensland and Ohio.
+            preferred = (preferred_country_code or "").strip()
+            if preferred and not country_code:
+                candidates.extend(
+                    rt.geocode_candidates(value, preferred, limit=8))
+            candidates.extend(rt.geocode_candidates(value, country_code, limit=8))
+
+            unique = []
+            seen_candidates = set()
+            for candidate in candidates:
+                lat, lon, formatted = candidate
+                key = (round(float(lat), 5), round(float(lon), 5),
+                       (formatted or "").strip().casefold())
+                if key not in seen_candidates:
+                    seen_candidates.add(key)
+                    unique.append(candidate)
+            candidates = unique[:8]
         except Exception as exc:
             self._tool_trace(f"Geocode candidate lookup failed for {value!r}: {exc}")
             candidates = []
@@ -1599,20 +1628,32 @@ class ToolsMixin:
         if not rt:
             self._resume_location_sound()
             return
-        country_code = self._ask_country_code()
-        if not country_code:
-            self._status_update("Journey planner cancelled.", force=True)
-            return
+        # Journey Planner is explicitly worldwide. Restricting geocoding to
+        # the currently open map's country made searches such as Tokyo resolve
+        # inside Australia. Users can include a country in either place name
+        # when disambiguation is useful.
+        country_code = ""
+        preferred_country_code = (
+            getattr(self, "_current_country_code", "") or "").strip()
+        if not preferred_country_code:
+            preferred_country_code = self._country_name_to_code(
+                getattr(self, "last_country_found", "") or "")
+        self._tool_trace(
+            "Journey Planner geocoding preference: "
+            f"{preferred_country_code or 'none (worldwide only)'}."
+        )
 
         origin = self._pick_location(
-            "Leaving from? (address, stop or suburb):", "starting point", rt, country_code)
+            "Leaving from? (address, stop or suburb):", "starting point", rt,
+            country_code, preferred_country_code=preferred_country_code)
         if origin is None:
             self._status_update("Journey planner cancelled.", force=True)
             return
         o_lat, o_lon, o_name = origin
 
         dest = self._pick_location(
-            "Going to? (address, stop or suburb):", "destination", rt, country_code)
+            "Going to? (address, stop or suburb):", "destination", rt,
+            country_code, preferred_country_code=preferred_country_code)
         if dest is None:
             self._status_update("Journey planner cancelled.", force=True)
             return
@@ -1627,11 +1668,17 @@ class ToolsMixin:
                * math.cos(math.radians((o_lat + d_lat) / 2.0))) ** 2)
 
         from dialogs import ChoiceDialog
-        # Transit remains the default. Long journeys omit walking but always
-        # retain driving, which can use the open OSRM fallback without a key.
-        trip_choices = ["Transit directions"]
-        trip_modes = ["transit"]
-        if direct_km <= walk_limit_km:
+        transport_source = self.settings.get(
+            "journey_transport_source", "rome2rio")
+        if transport_source == "google":
+            trip_choices = ["Google public transport directions"]
+            trip_modes = ["transit"]
+        else:
+            trip_choices = ["Rome2Rio multimodal transport options"]
+            trip_modes = ["rome2rio"]
+        # Walking remains independent of the transport-results source, but the
+        # current walking implementation requires a configured Google key.
+        if direct_km <= walk_limit_km and rt.is_configured:
             trip_choices.append("Walking directions")
             trip_modes.append("walking")
         trip_choices.append("Driving directions")
@@ -1645,7 +1692,19 @@ class ToolsMixin:
         dlg.Destroy()
         travel_mode = trip_modes[max(0, trip_sel)]
 
-        if travel_mode != "driving" and not rt.is_configured:
+        rome2rio_date = None
+        if travel_mode == "rome2rio":
+            import datetime as _dt
+            date_text = self._ask_hotel_date(
+                "Rome2Rio travel date",
+                _dt.date.today() + _dt.timedelta(days=1))
+            if not date_text:
+                self._status_update("Journey planner cancelled.", force=True)
+                return
+            rome2rio_date = _dt.datetime.strptime(
+                date_text, "%Y%m%d").date()
+
+        if travel_mode in ("transit", "walking") and not rt.is_configured:
             _key_required(
                 self,
                 "Journey Planner Requires Google",
@@ -1710,7 +1769,19 @@ class ToolsMixin:
 
         def _calc():
             try:
-                if travel_mode == "driving":
+                if travel_mode == "rome2rio":
+                    from app_paths import CACHE_DIR
+                    from rome2rio import Rome2RioClient
+                    _status("Loading free multimodal options from Rome2Rio…")
+                    routes = Rome2RioClient(CACHE_DIR).search(
+                        o_name, d_name, departure_date=rome2rio_date)
+                    miab_log(
+                        "navigation",
+                        f"Rome2Rio journey lookup returned {len(routes)} route(s) "
+                        f"for {o_name!r} to {d_name!r}.",
+                        self.settings,
+                    )
+                elif travel_mode == "driving":
                     driving_source = self.settings.get(
                         "driving_route_source", "osrm")
                     google_key = self.settings.get("google_api_key", "").strip()

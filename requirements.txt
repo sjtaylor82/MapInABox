@@ -11,6 +11,8 @@ shapely
 tzfpy
 accessible-output2
 certifi
+beautifulsoup4
+curl_cffi
 
 # ── Build-only (needed to produce release binaries, not to run from source) ──
 pyinstaller
