@@ -4,9 +4,13 @@ import unittest
 from rome2rio import (
     add_rome2rio_flights_for_all_routes,
     add_rome2rio_upcoming_flight,
+    add_rome2rio_transit_schedules,
     parse_routes,
     route_url,
 )
+
+BUS_SCHEDULE_HTML = r'''<section id="schedules"><p>Buses run twice daily.</p></section>
+<script>window.data={"scheduleGroups":[{"date":"2026-08-31","title":"Departing Monday, August 31, 2026","scheduleItems":[{"departureTime":"09:30:00","arrivalTime":"11:10:00","durationInMinutes":100,"changesMessage":"Direct","operators":[{"name":"Greyhound Australia"}]},{"departureTime":"14:00:00","arrivalTime":"15:30:00","durationInMinutes":90,"changesMessage":"Direct","operators":[{"name":"Premier Motor Service"}]}]}]};</script>'''
 
 
 HTML = """
@@ -53,6 +57,46 @@ HTML = """
 
 
 class Rome2RioTests(unittest.TestCase):
+    def test_dated_bus_departures_are_added_with_full_details(self):
+        class Response:
+            content = BUS_SCHEDULE_HTML.encode()
+            def raise_for_status(self):
+                pass
+
+        calls = []
+        routes = [{"detail_text": (
+            "Overview:\n1. Take the bus from Brisbane to Maroochydore.\n\n"
+            "This is a broad Rome2Rio estimate") }]
+        added = add_rome2rio_transit_schedules(
+            routes, lambda url, **kwargs: calls.append(url) or Response(),
+            datetime.date(2026, 8, 31))
+        self.assertEqual(added, 1)
+        self.assertEqual(calls, [
+            "https://www.rome2rio.com/Bus/Brisbane/Maroochydore"])
+        detail = routes[0]["detail_text"]
+        self.assertIn("Bus schedules for Monday, August 31, 2026", detail)
+        self.assertIn("Buses run twice daily", detail)
+        self.assertIn("Greyhound Australia", detail)
+        self.assertIn("Depart Brisbane at 9:30 AM", detail)
+        self.assertIn("arrive Maroochydore at 11:10 AM", detail)
+        self.assertIn("Duration 1h 40m. Direct.", detail)
+        self.assertIn("Premier Motor Service", detail)
+
+    def test_transit_schedule_fetch_is_shared_by_duplicate_routes(self):
+        class Response:
+            content = BUS_SCHEDULE_HTML.encode()
+            def raise_for_status(self):
+                pass
+        calls = []
+        routes = [{"detail_text": "1. Take the bus from Brisbane to Maroochydore."}
+                  for _ in range(2)]
+        added = add_rome2rio_transit_schedules(
+            routes, lambda *args, **kwargs: calls.append(1) or Response(),
+            datetime.date(2026, 9, 1))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(added, 2)
+        self.assertIn("No bus departures were listed for Tuesday, 01 September 2026",
+                      routes[0]["detail_text"])
     def test_route_url_uses_place_slugs(self):
         self.assertEqual(
             route_url("Brisbane", "Batemans Bay"),

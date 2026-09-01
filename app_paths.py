@@ -20,13 +20,19 @@ PORTABLE_MODE = (
     or os.path.isfile(_LEGACY_PORTABLE_MARKER)
 )
 
-# Education builds ship with an "_education" marker file alongside the
-# resources (same convention as the portable marker above). Its presence
-# withholds the in-app Tools menu (F12), food-menu search (Ctrl+Alt+6), and
-# external POI website launching (Ctrl+W), and defaults the "clear favourites
-# and personal POIs on exit" setting to on. Pro builds carry no marker.
-_EDUCATION_MARKER = os.path.join(RESOURCE_DIR, "_education")
-EDUCATION_EDITION = os.path.isfile(_EDUCATION_MARKER)
+# PyInstaller runs an edition-specific hook from inside the executable before
+# importing application modules. Source runs deliberately default to Pro.
+# Unlike the old external ``_education`` marker, this value cannot be changed
+# by deleting or renaming a file in the installation directory.
+APPLICATION_EDITION = (
+    getattr(sys, "_miab_embedded_edition", "education")
+    if getattr(sys, "frozen", False)
+    else "pro"
+)
+if APPLICATION_EDITION not in {"pro", "education"}:
+    # An invalid frozen identity must not accidentally enable Pro features.
+    APPLICATION_EDITION = "education"
+EDUCATION_EDITION = APPLICATION_EDITION == "education"
 
 
 def writable_dirs(

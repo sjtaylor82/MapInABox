@@ -141,13 +141,26 @@ build_env = os.environ.copy()
 build_env["MIAB_EDITION"] = EDITION
 build_env["MIAB_VERSION"] = VERSION
 
-result = subprocess.run(
-    [sys.executable, "-m", "PyInstaller",
-     os.path.join(HERE, "MapInABox.spec"), "--noconfirm", "--clean",
-     "--workpath", PYI_WORK],
-    cwd=HERE,
-    env=build_env,
-)
+# Generate an edition-specific runtime hook. PyInstaller stores this inside the
+# executable archive and executes it before importing application modules.
+hook_dir = tempfile.mkdtemp(prefix="miab-edition-")
+edition_hook = os.path.join(hook_dir, "miab_edition_runtime.py")
+with open(edition_hook, "w", encoding="utf-8") as hook_file:
+    hook_file.write(
+        "import sys\n"
+        f"sys._miab_embedded_edition = {EDITION!r}\n"
+    )
+build_env["MIAB_EDITION_RUNTIME_HOOK"] = edition_hook
+try:
+    result = subprocess.run(
+        [sys.executable, "-m", "PyInstaller",
+         os.path.join(HERE, "MapInABox.spec"), "--noconfirm", "--clean",
+         "--workpath", PYI_WORK],
+        cwd=HERE,
+        env=build_env,
+    )
+finally:
+    shutil.rmtree(hook_dir, ignore_errors=True)
 if result.returncode != 0:
     fail("PyInstaller exited with errors (see above)")
 
@@ -180,10 +193,10 @@ if not DO_MAC_APP:
         fail(f"PyInstaller omitted {len(missing_sounds)} sound files: {preview}")
     print(f"Verified bundled sound library: {len(bundled_sounds)} files")
 
-    marker = os.path.join(dist_root, "_internal", "_education")
-    if (EDITION == "education") != os.path.isfile(marker):
-        fail(f"{EDITION.title()} build has an incorrect Education marker")
-    print(f"Verified {EDITION.title()} edition marker state")
+    legacy_marker = os.path.join(dist_root, "_internal", "_education")
+    if os.path.exists(legacy_marker):
+        fail("Build unexpectedly contains the obsolete Education marker")
+    print(f"Verified {EDITION.title()} edition is embedded in the executable")
 
     manifest_path = write_manifest(dist_root, VERSION, EDITION)
     print(f"WROTE {manifest_path}  (portable update manifest)")
@@ -198,9 +211,9 @@ if DO_MAC_APP:
         for name in names
         if name == "_education"
     ]
-    if (EDITION == "education") != bool(markers):
-        fail(f"{EDITION.title()} macOS bundle has an incorrect Education marker")
-    print(f"Verified {EDITION.title()} edition marker state")
+    if markers:
+        fail("macOS bundle unexpectedly contains the obsolete Education marker")
+    print(f"Verified {EDITION.title()} edition is embedded in the executable")
     print(f"\nMac app ready — test it before packaging:")
     print(f"  {app_path}")
 else:

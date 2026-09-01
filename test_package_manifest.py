@@ -64,6 +64,28 @@ class PackageManifestTests(unittest.TestCase):
         self.assertTrue(
             education["browser_download_url"].endswith("/education"))
 
+    def test_installer_asset_selection_respects_edition(self):
+        assets = [
+            {
+                "name": "MapInABox-1.2.3-setup.exe",
+                "browser_download_url": "https://example.invalid/pro",
+            },
+            {
+                "name": "MapInABox-Education-1.2.3-setup.exe",
+                "browser_download_url": "https://example.invalid/education",
+            },
+        ]
+
+        education = _pick_asset(
+            assets, portable=False, platform="win32", education=True)
+        pro = _pick_asset(
+            list(reversed(assets)), portable=False,
+            platform="win32", education=False)
+
+        self.assertTrue(
+            education["browser_download_url"].endswith("/education"))
+        self.assertTrue(pro["browser_download_url"].endswith("/pro"))
+
     def test_calendar_version_migrates_from_historical_version(self):
         self.assertTrue(_is_newer("v2026.7.0", "1.0.0.34"))
         self.assertTrue(_is_newer("2026.7.1", "2026.7.0"))

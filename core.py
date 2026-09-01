@@ -82,7 +82,7 @@ from distance_units import (
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '2026.8.1'
+APP_VERSION   = '2026.09.0'
 
 POI_LIVE_COOLDOWN_SECS = 3.0
 POI_BACKGROUND_WAIT_SECS = 2.0
@@ -2683,7 +2683,7 @@ class _StreetSearchFrame(wx.Frame):
         self._list.SetForegroundColour(wx.Colour(220, 220, 220))
         vsz.Add(self._list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
 
-        lbl_num = wx.StaticText(panel, label="House number (optional):")
+        lbl_num = wx.StaticText(panel, label="Number (optional):")
         lbl_num.SetForegroundColour(wx.Colour(220, 220, 220))
         vsz.Add(lbl_num, 0, wx.LEFT | wx.TOP, 10)
 
@@ -2858,7 +2858,7 @@ class _StreetSearchFrame(wx.Frame):
         if not sel:
             sel = query
         if house_number and not query and self.FindFocus() != self._list:
-            self._nav._status_update("Type or select a street before entering a house number.", force=True)
+            self._nav._status_update("Type or select a street before entering a number.", force=True)
             self._search.SetFocus()
             return
         if not sel:
@@ -5593,6 +5593,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
     # ── GNAF preload ──────────────────────────────────────────────────────────
 
     def _confirm_or_toggle_gnaf_addresses(self):
+        if str(getattr(self, "_current_country_code", "") or "").upper() != "AU":
+            self._gnaf_toggle_pending_until = 0.0
+            self._status_update(
+                "GNAF addresses are available only in Australia.", force=True)
+            return
         now = time.time()
         pending_until = getattr(self, "_gnaf_toggle_pending_until", 0.0)
         if pending_until and now <= pending_until:
@@ -5612,6 +5617,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self._gnaf_toggle_pending_until = 0.0
 
     def _toggle_gnaf_addresses(self):
+        if str(getattr(self, "_current_country_code", "") or "").upper() != "AU":
+            self._gnaf_toggle_pending_until = 0.0
+            self._status_update(
+                "GNAF addresses are available only in Australia.", force=True)
+            return
         self._gnaf_toggle_pending_until = 0.0
         enabled = not self.settings.get("gnaf_enabled", True)
         self.settings["gnaf_enabled"] = enabled
@@ -5636,6 +5646,8 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
     def _gnaf_preload_addresses(self, lat, lon, radius=2000):
         """Fetch all GNAF addresses for current area and merge into _address_points."""
         if not GNAF_URL:
+            return
+        if str(getattr(self, "_current_country_code", "") or "").upper() != "AU":
             return
         if not self.settings.get("gnaf_enabled", True):
             miab_log("verbose", "GNAF preload skipped because GNAF is disabled.", self.settings)
@@ -6752,18 +6764,30 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                         _collect(pois)
                 elif source == "here" and here_key:
                     self._poi_fetcher.set_here_key(here_key)
-                    cached_raw_pois = _live_cache_get("category", source, category_key, attempt_radius)
+                    cache_kind = "name" if name_filter else "category"
+                    cache_extra = name_filter if name_filter else ""
+                    cached_raw_pois = _live_cache_get(
+                        cache_kind, source, category_key, attempt_radius,
+                        cache_extra)
                     raw_pois = cached_raw_pois
                     if raw_pois is None:
-                        live_raw_pois, _ = self._poi_fetcher.fetch_pois(
-                            self.lat, self.lon,
-                            category=category_key, radius=attempt_radius,
-                            timeout=timeout,
-                            address_points=getattr(self, "_address_points", []),
-                        )
+                        if name_filter:
+                            live_raw_pois = self._poi_fetcher.fetch_here_name_search(
+                                self.lat, self.lon, name_filter,
+                                radius=attempt_radius,
+                                address_points=getattr(self, "_address_points", []))
+                        else:
+                            live_raw_pois, _ = self._poi_fetcher.fetch_pois(
+                                self.lat, self.lon,
+                                category=category_key, radius=attempt_radius,
+                                timeout=timeout,
+                                address_points=getattr(self, "_address_points", []),
+                            )
                         if live_raw_pois is not None:
                             raw_pois = live_raw_pois
-                            _live_cache_set("category", source, category_key, attempt_radius, raw_pois)
+                            _live_cache_set(
+                                cache_kind, source, category_key,
+                                attempt_radius, raw_pois, cache_extra)
                     if _discard_if_poi_context_changed("HERE live"):
                         return
                     pois = [p for p in raw_pois if _name_match(p) and _street_match(p)]
@@ -9426,6 +9450,25 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         wx.CallAfter(self.map_panel.set_position, self.lat, self.lon, True, street_name)
         wx.CallAfter(self._update_street_display)
 
+        # The city-wide street geometry may place a selected road beyond the
+        # one-kilometre background POI area.  Re-centre that fetch so HERE/OSM
+        # businesses and their structured addresses become available to Page
+        # Up/Down and shared-address browsing on the selected street.
+        poi_lat = getattr(self, "_poi_fetch_lat", None)
+        poi_lon = getattr(self, "_poi_fetch_lon", None)
+        if (poi_lat is None or poi_lon is None or
+                dist_metres(self.lat, self.lon, poi_lat, poi_lon) >
+                POI_BACKGROUND_RADIUS_METRES):
+            self._clear_street_survey_cache()
+            self._status_update(
+                f"Loading nearby businesses for {street_name}...", force=True)
+            threading.Thread(
+                target=self._fetch_all_pois_background,
+                args=(getattr(self, "_address_points", []), True,
+                      self.lat, self.lon, self._street_fetch_id),
+                daemon=True,
+            ).start()
+
     def _explore_poi(self):
         """Enter on a top-level explorable POI — drill into its child elements."""
         if not self._poi_list:
@@ -11863,6 +11906,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             self._poi_grid = self._build_poi_grid(self._all_pois)
             self._poi_fetch_lat = poi_lat
             self._poi_fetch_lon = poi_lon
+            self._clear_street_survey_cache()
             try:
                 self._free_engine.set_pois(self._all_pois)
             except Exception:
@@ -12324,9 +12368,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         next_mode = {"all": "odd", "odd": "even", "even": "all"}[current]
         self._street_survey_number_filter_mode = next_mode
         label = {
-            "all": "all house numbers",
-            "odd": "odd house numbers only",
-            "even": "even house numbers only",
+            "all": "all numbers",
+            "odd": "odd numbers only",
+            "even": "even numbers only",
         }[next_mode]
         self._announce_transient(f"Street number filter: {label}.")
         return True
@@ -12359,9 +12403,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         }[current]
         self._street_survey_address_announce_mode_value = next_mode
         label = {
-            "poi_names": "announce POI names before house numbers",
-            "plain": "do not announce POI names before house numbers",
-            "poi_only": "skip house numbers without POIs",
+            "poi_names": "announce POI names before numbers",
+            "plain": "do not announce POI names before numbers",
+            "poi_only": "skip numbers without POIs",
         }[next_mode]
         self._announce_transient(f"Address mode: {label}.")
         return True
@@ -12387,6 +12431,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._street_survey_current_poi = None
         self._street_survey_same_address_pois = []
         self._street_survey_same_address_poi_index = 0
+        self._street_survey_address_cursor = None
 
     def _street_survey_cache_key(self, prefix, street_name, *extra):
         return (
@@ -12441,6 +12486,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
     def _street_survey_address_candidates(self, street_name):
         target = self._street_survey_bare(street_name)
         out = []
+        seen_pois = set()
 
         def add_candidate(number, street, lat, lon, source="", name="", poi=None):
             if not number or lat is None or lon is None:
@@ -12460,14 +12506,33 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             except (TypeError, ValueError):
                 return
 
-        for poi in getattr(self, "_all_pois", []) or []:
-            if not isinstance(poi, dict):
-                continue
-            tags = poi.get("tags", {}) if isinstance(poi.get("tags"), dict) else {}
-            number = poi.get("number") or tags.get("addr:housenumber")
-            street = poi.get("street") or tags.get("addr:street")
-            name = poi.get("name") or poi.get("label") or tags.get("name") or ""
-            add_candidate(number, street, poi.get("lat"), poi.get("lon"), "poi", name, poi=poi)
+        # Background and live-search POIs are separate collections.  HERE's
+        # structured houseNumber/street fields are retained on both, so merge
+        # both globally: a business found with P should immediately become an
+        # address-navigation candidate even when it was outside the original
+        # background radius.  OSM remains the base and GNAF remains an optional
+        # Australian supplement below.
+        for collection in (getattr(self, "_all_pois", []) or [],
+                           getattr(self, "_poi_list", []) or []):
+            for poi in collection:
+                if not isinstance(poi, dict):
+                    continue
+                identity = (
+                    poi.get("source", ""), poi.get("here_id", ""),
+                    poi.get("osm_type", ""), poi.get("osm_id", ""),
+                    round(float(poi.get("lat") or 0), 7),
+                    round(float(poi.get("lon") or 0), 7),
+                    str(poi.get("name") or "").casefold(),
+                )
+                if identity in seen_pois:
+                    continue
+                seen_pois.add(identity)
+                tags = poi.get("tags", {}) if isinstance(poi.get("tags"), dict) else {}
+                number = poi.get("number") or tags.get("addr:housenumber")
+                street = poi.get("street") or tags.get("addr:street")
+                name = poi.get("name") or poi.get("label") or tags.get("name") or ""
+                add_candidate(number, street, poi.get("lat"), poi.get("lon"),
+                              poi.get("source") or "poi", name, poi=poi)
 
         for ap in getattr(self, "_address_points", []):
             if not self._address_point_source_enabled(ap):
@@ -12491,7 +12556,21 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
     def _street_survey_poi_candidates(self, street_name, max_snap_m=45.0):
         out = []
         seen = set()
-        for poi in getattr(self, "_all_pois", []) or []:
+        collections = [
+            getattr(self, "_all_pois", []) or [],
+            getattr(self, "_poi_list", []) or [],
+        ]
+        # HERE Browse is result-capped.  Also include fresh nearby POIs learned
+        # by previous broad/name searches, so a business does not disappear
+        # from street navigation merely because this background fetch omitted
+        # it.  Projection below still limits candidates to the selected road.
+        try:
+            collections.append(self._poi_fetcher.load_cached_nearby_pois(
+                self.lat, self.lon, radius=2000.0))
+        except Exception:
+            pass
+        for collection in collections:
+          for poi in collection:
             if not isinstance(poi, dict):
                 continue
             name = (poi.get("name") or poi.get("label") or "").split(",")[0].strip()
@@ -12653,6 +12732,75 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         y = (lat - lat0) * 111000
         return x * ux + y * uy
 
+    def _street_survey_physical_side(self, street_name, lat, lon, axis):
+        """Return -1/1 for a point's side of the nearest oriented segment."""
+        if not axis:
+            return 0
+        _lat0, _lon0, axis_ux, axis_uy, _axis_scale = axis
+        scale_x = 111000 * math.cos(math.radians(lat))
+        best = None
+        for seg in self._street_survey_segments_for(street_name):
+            coords = seg.get("coords", [])
+            for index in range(len(coords) - 1):
+                a_lat, a_lon = coords[index]
+                b_lat, b_lon = coords[index + 1]
+                p_lat, p_lon = nearest_point_on_segment(
+                    lat, lon, a_lat, a_lon, b_lat, b_lon)
+                distance = dist_metres(lat, lon, p_lat, p_lon)
+                if best is not None and distance >= best[0]:
+                    continue
+                vx = (b_lon - a_lon) * scale_x
+                vy = (b_lat - a_lat) * 111000
+                length = math.hypot(vx, vy)
+                if length < 0.1:
+                    continue
+                vx, vy = vx / length, vy / length
+                # Orient every local segment toward increasing house numbers.
+                if vx * axis_ux + vy * axis_uy < 0:
+                    vx, vy = -vx, -vy
+                px = (lon - p_lon) * scale_x
+                py = (lat - p_lat) * 111000
+                cross = vx * py - vy * px
+                best = (distance, -1 if cross < 0 else 1 if cross > 0 else 0)
+        return best[1] if best else 0
+
+    def _street_survey_infer_unnumbered_parity(
+            self, street_name, poi, numbered_addresses, axis):
+        """Infer odd/even from the locally consistent physical road side."""
+        poi_side = self._street_survey_physical_side(
+            street_name, poi["lat"], poi["lon"], axis)
+        if not poi_side:
+            return None
+        # Identical OSM/HERE/GNAF copies must not inflate confidence.
+        observations = {}
+        for address in numbered_addresses:
+            parity = self._street_survey_number_parity(address.get("number"))
+            if not parity:
+                continue
+            side = self._street_survey_physical_side(
+                street_name, address["lat"], address["lon"], axis)
+            if not side:
+                continue
+            identity = (
+                str(address.get("number")), round(address["lat"], 5),
+                round(address["lon"], 5))
+            observations[identity] = (side, parity)
+        votes = {1: {"odd": 0, "even": 0}, -1: {"odd": 0, "even": 0}}
+        for side, parity in observations.values():
+            votes[side][parity] += 1
+        direct = votes[poi_side]
+        total = direct["odd"] + direct["even"]
+        if total >= 2 and max(direct.values()) / total >= 0.75:
+            return max(direct, key=direct.get)
+        # If one side is strongly established, conventional alternating road
+        # numbering makes the opposite side a useful but still cautious clue.
+        opposite = votes[-poi_side]
+        opposite_total = opposite["odd"] + opposite["even"]
+        if opposite_total >= 3 and max(opposite.values()) / opposite_total >= 0.8:
+            known = max(opposite, key=opposite.get)
+            return "even" if known == "odd" else "odd"
+        return None
+
     def _street_survey_go_address(self, direction):
         if not self.street_mode:
             return False
@@ -12665,67 +12813,136 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             street,
             include_pois_near_street=False,
         )
+        # A business may be accurately positioned beside the road without a
+        # road house number (HumanWare at Bullmatt Business Centre is one real
+        # example).  Keep it in the spatial sequence without pretending that
+        # its unit number is a Northampton Road house number.
+        numbered_poi_ids = {
+            id(addr.get("poi")) for addr in addresses if addr.get("poi")
+        }
+        for poi_item in self._street_survey_poi_candidates(street):
+            if id(poi_item.get("poi")) in numbered_poi_ids:
+                continue
+            poi_item = dict(poi_item)
+            poi_item["number"] = ""
+            poi_item["unnumbered"] = True
+            addresses.append(poi_item)
         if not addresses:
-            self._announce_transient_then_return(f"No known house numbers loaded for {street}.")
+            self._announce_transient_then_return(
+                f"No known addresses or businesses loaded for {street}.")
             return True
-        current_num = self._street_survey_current_number(street)
-        if not current_num:
-            self._announce_transient_then_return(f"No current house number found on {street}.")
-            return True
-        current_key = self._street_survey_number_key(current_num)
         address_groups = {}
         unique = {}
+        numbered_locations = [a for a in addresses if a.get("number")]
         for addr in addresses:
-            key = addr["number"].lower()
+            attached_number = None
+            if addr.get("unnumbered") and numbered_locations:
+                nearest = min(
+                    numbered_locations,
+                    key=lambda item: dist_metres(
+                        addr["lat"], addr["lon"], item["lat"], item["lon"]))
+                if dist_metres(addr["lat"], addr["lon"],
+                               nearest["lat"], nearest["lon"]) <= 20:
+                    attached_number = nearest["number"].lower()
+            key = (addr["number"].lower() if addr.get("number") else
+                   attached_number or
+                   f"location:{round(addr['lat'], 5)}:{round(addr['lon'], 5)}")
+            addr["address_group_key"] = key
             address_groups.setdefault(key, []).append(addr)
-            existing = unique.get(key)
+            # A co-located unnumbered business belongs in Shift+Page Up/Down
+            # at that stop, not as an unreachable second Page Up/Down target
+            # with identical coordinates.
+            if attached_number:
+                continue
+            unique_key = (key if addr.get("number") else
+                          f"{key}:{str(addr.get('name') or '').casefold()}")
+            addr["navigation_key"] = unique_key
+            existing = unique.get(unique_key)
             if existing is None or (addr.get("name") and not existing.get("name")):
-                unique[key] = addr
-        addresses = sorted(unique.values(), key=lambda item: self._street_survey_number_key(item["number"]))
+                unique[unique_key] = addr
+        addresses = list(unique.values())
         number_filter = self._street_survey_number_filter()
         if number_filter != "all":
+            axis = self._street_survey_address_axis(street)
+            numbered_addresses = [a for a in addresses if not a.get("unnumbered")]
             addresses = [
                 a for a in addresses
-                if self._street_survey_number_parity(a["number"]) == number_filter
+                if ((not a.get("unnumbered") and
+                     self._street_survey_number_parity(a["number"]) == number_filter)
+                    or (a.get("unnumbered") and
+                        self._street_survey_infer_unnumbered_parity(
+                            street, a, numbered_addresses, axis) == number_filter))
             ]
             if not addresses:
-                self._announce_transient_then_return(f"No {number_filter} house numbers loaded for {street}.")
+                self._announce_transient_then_return(f"No {number_filter} numbers loaded for {street}.")
                 return True
         if address_mode == "poi_only":
             addresses = [a for a in addresses if a.get("name")]
             if not addresses:
-                self._announce_transient_then_return(f"No POI house numbers loaded for {street}.")
+                self._announce_transient_then_return(f"No POI numbers loaded for {street}.")
                 return True
+        axis = self._street_survey_address_axis(street)
+        if axis:
+            for addr in addresses:
+                addr["spatial_order"] = self._street_survey_axis_value(
+                    axis, addr["lat"], addr["lon"])
+            here_order = self._street_survey_axis_value(axis, self.lat, self.lon)
+        else:
+            for addr in addresses:
+                projection = self._street_survey_project(
+                    street, addr["lat"], addr["lon"])
+                addr["spatial_order"] = projection[1] if projection else 0.0
+            here_projection = self._street_survey_project(street, self.lat, self.lon)
+            here_order = here_projection[1] if here_projection else 0.0
+        addresses.sort(key=lambda item: item["spatial_order"])
+        cursor = getattr(self, "_street_survey_address_cursor", None)
+        cursor_key = (self._street_survey_bare(street),
+                      address_mode, number_filter)
+        cursor_index = None
+        if isinstance(cursor, tuple) and len(cursor) == 2 and cursor[0] == cursor_key:
+            for index, item in enumerate(addresses):
+                if item.get("navigation_key") == cursor[1]:
+                    cursor_index = index
+                    break
         if direction > 0:
-            choices = [a for a in addresses if self._street_survey_number_key(a["number"]) > current_key]
-            target = choices[0] if choices else None
+            if cursor_index is not None:
+                target = (addresses[cursor_index + 1]
+                          if cursor_index + 1 < len(addresses) else None)
+            else:
+                choices = [a for a in addresses if a["spatial_order"] > here_order + 2.0]
+                target = choices[0] if choices else None
             edge_msg = (
-                f"No higher known {number_filter} house number on {street}."
+                f"No higher known {number_filter} number on {street}."
                 if number_filter != "all"
-                else f"No higher POI house number on {street}."
+                else f"No higher POI number on {street}."
                 if address_mode == "poi_only"
-                else f"No higher known house number on {street}."
+                else f"No higher known number on {street}."
             )
         else:
-            choices = [a for a in addresses if self._street_survey_number_key(a["number"]) < current_key]
-            target = choices[-1] if choices else None
+            if cursor_index is not None:
+                target = addresses[cursor_index - 1] if cursor_index > 0 else None
+            else:
+                choices = [a for a in addresses if a["spatial_order"] < here_order - 2.0]
+                target = choices[-1] if choices else None
             edge_msg = (
-                f"No lower known {number_filter} house number on {street}."
+                f"No lower known {number_filter} number on {street}."
                 if number_filter != "all"
-                else f"No lower POI house number on {street}."
+                else f"No lower POI number on {street}."
                 if address_mode == "poi_only"
-                else f"No lower known house number on {street}."
+                else f"No lower known number on {street}."
             )
         if not target:
             self._announce_transient(edge_msg)
             return True
+        self._street_survey_address_cursor = (
+            cursor_key, target.get("navigation_key"))
         self.lat = target["lat"]
         self.lon = target["lon"]
         self.street_label = street
         self._jump_street_label = street
         self._jump_street_pin_lat = self.lat
         self._jump_street_pin_lon = self.lon
-        self._jump_address_number = target["number"]
+        self._jump_address_number = target["number"] or None
         self._jump_address_street = street
         self._street_survey_current_poi = (
             target.get("poi")
@@ -12735,7 +12952,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         same_address_pois = []
         seen_names = set()
         if address_mode in ("poi_names", "poi_only"):
-            for addr in address_groups.get(target["number"].lower(), []):
+            for addr in address_groups.get(target["address_group_key"], []):
                 name = str(addr.get("name") or "").strip()
                 if not name or name.casefold() in seen_names:
                     continue
@@ -12751,18 +12968,20 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._street_survey_last_direction = direction
         wx.CallAfter(self.map_panel.set_position, self.lat, self.lon, True, street)
         name = target.get("name", "") if address_mode in ("poi_names", "poi_only") else ""
+        address_text = (f"{target['number']} {street}"
+                        if target.get("number") else f"on {street}")
         if name:
             if len(same_address_pois) > 1:
                 self.sound.play_shared_address_tone()
                 wx.CallLater(
                     70,
                     self._announce_transient,
-                    f"Multiple POIs. {name}, {target['number']} {street}.",
+                    f"Multiple POIs. {name}, {address_text}.",
                 )
             else:
-                self._announce_transient(f"{name}, {target['number']} {street}.")
+                self._announce_transient(f"{name}, {address_text}.")
         else:
-            self._announce_transient(f"{target['number']} {street}.")
+            self._announce_transient(address_text + ".")
         return True
 
     def _street_survey_cycle_same_address_poi(self, direction):
@@ -12777,7 +12996,9 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         target = pois[index]
         self._street_survey_current_poi = target.get("poi")
         street = self._street_survey_current_street()
-        self._announce_transient(f"{target['name']}, {target['number']} {street}.")
+        location = (f"{target['number']} {street}"
+                    if target.get("number") else f"on {street}")
+        self._announce_transient(f"{target['name']}, {location}.")
         return True
 
     def _street_survey_intersections(self, street_name):
@@ -13119,7 +13340,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             nums = sorted({a["number"] for a in addresses}, key=self._street_survey_number_key)
             parts.append(f"{len(nums)} known numbers, {nums[0]} to {nums[-1]}")
         else:
-            parts.append("no known house numbers loaded")
+            parts.append("no known numbers loaded")
         self._announce_transient(".  ".join(parts) + ".")
 
 
@@ -14666,11 +14887,11 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
                 "Arrow keys: move along the street map.",
                 "Shift+arrows: fine movement.",
                 "Ctrl+arrows: larger movement.",
-                "Page Up: previous known house number.",
-                "Page Down: next known house number.",
+                "Page Up: previous known number.",
+                "Page Down: next known number.",
                 "Shift+Page Up or Shift+Page Down: browse multiple POIs at the current address.",
                 "Ctrl+F12: cycle address mode: POI names, plain numbers, POI numbers only.",
-                "Ctrl+Alt+F12: cycle house-number filter between all, odd only, and even only.",
+                "Ctrl+Alt+F12: cycle number filter between all, odd only, and even only.",
                 "Ctrl+Page Up: previous intersection.",
                 "Ctrl+Page Down: next intersection.",
                 "Ctrl+Shift+Page Down: turn onto the cross street.",

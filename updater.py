@@ -56,9 +56,11 @@ def _pick_asset(assets: list[dict], portable: bool = PORTABLE_MODE,
                 education: bool = EDUCATION_EDITION) -> dict | None:
     """Return the most appropriate release asset for the current platform."""
     if platform == "darwin":
-        # Prefer a file with 'macos' or 'mac' in the name
+        # Keep Pro and Education on their respective update tracks.
         for a in assets:
-            if re.search(r"mac(os)?", a["name"], re.IGNORECASE):
+            name = a["name"].lower()
+            if (re.search(r"mac(os)?", name)
+                    and ("education" in name) == education):
                 return a
     else:
         if portable:
@@ -72,9 +74,11 @@ def _pick_asset(assets: list[dict], portable: bool = PORTABLE_MODE,
                         and is_education == education):
                     return a
             return None
-        # Installed Windows build — prefer the installer.
+        # Installed Windows build — select the matching edition installer.
         for a in assets:
-            if a["name"].lower().endswith(".exe"):
+            name = a["name"].lower()
+            if (name.endswith(".exe")
+                    and ("education" in name) == education):
                 return a
     return None
 

@@ -187,6 +187,130 @@ def add_rome2rio_flights_for_all_routes(
     return added
 
 
+def _transit_legs(detail_text: str) -> list[tuple[str, str, str]]:
+    """Return the public-transport legs described in a route overview."""
+    legs = []
+    for line in (detail_text or "").splitlines():
+        match = re.match(
+            r"^\d+\.\s+(?:Take|Catch)\s+(?:the|a)?\s*"
+            r"(bus|train|ferry|tram)\s+from\s+(.+?)\s+to\s+(.+?)\.\s*$",
+            line, re.IGNORECASE)
+        if match:
+            leg = (match.group(1).lower(), _clean(match.group(2)),
+                   _clean(match.group(3)))
+            if leg not in legs:
+                legs.append(leg)
+    return legs
+
+
+def _schedule_payload(html: bytes | str) -> tuple[str, list[dict]]:
+    """Extract Rome2Rio's hydrated schedule data from a mode landing page."""
+    text = html.decode("utf-8", errors="replace") if isinstance(html, bytes) else html
+    description = ""
+    soup = BeautifulSoup(text, "html.parser")
+    section = soup.find(id="schedules")
+    if section is not None:
+        paragraph = section.find("p")
+        if paragraph is not None:
+            description = _clean(paragraph.get_text(" ", strip=True))
+    marker = '"scheduleGroups":'
+    decoder = json.JSONDecoder()
+    start = 0
+    while True:
+        start = text.find(marker, start)
+        if start < 0:
+            return description, []
+        try:
+            groups, _ = decoder.raw_decode(text, start + len(marker))
+            if isinstance(groups, list) and groups:
+                return description, groups
+        except (ValueError, TypeError):
+            pass
+        start += len(marker)
+
+
+def _spoken_time(value: str) -> str:
+    """Convert Rome2Rio's 24-hour schedule value to concise spoken text."""
+    try:
+        return datetime.time.fromisoformat(value).strftime("%I:%M %p").lstrip("0")
+    except (TypeError, ValueError):
+        return value or "time not specified"
+
+
+def add_rome2rio_transit_schedules(
+        routes: list[dict], request_get,
+        departure_date: datetime.date | None = None) -> int:
+    """Add dated bus, train, ferry and tram departures to route details."""
+    requested_day = departure_date or (datetime.date.today() + datetime.timedelta(days=1))
+    fetched: dict[tuple[str, str, str], tuple[str, list[dict]]] = {}
+    added = 0
+    marker = "\n\nThis is a broad Rome2Rio estimate"
+    for route in routes:
+        additions = []
+        for mode, origin, destination in _transit_legs(route.get("detail_text", "")):
+            key = (mode, origin.lower(), destination.lower())
+            if key not in fetched:
+                url = (f"https://www.rome2rio.com/{mode.title()}/"
+                       f"{_slug(origin)}/{_slug(destination)}")
+                try:
+                    response = request_get(
+                        url, impersonate="edge101", timeout=30,
+                        allow_redirects=True)
+                    response.raise_for_status()
+                    fetched[key] = _schedule_payload(response.content)
+                except Exception:
+                    fetched[key] = ("", [])
+            description, groups = fetched[key]
+            if not groups:
+                continue
+            group = next((item for item in groups
+                          if item.get("date") == requested_day.isoformat()), None)
+            exact_date = group is not None
+            group = group or groups[0]
+            items = group.get("scheduleItems") or []
+            if not items:
+                continue
+            date_text = group.get("title") or group.get("date", "")
+            date_text = re.sub(r"^Departing\s+", "", date_text,
+                               flags=re.IGNORECASE)
+            heading = f"{mode.title()} schedules for {date_text}:"
+            if not exact_date:
+                heading = (f"No {mode} departures were listed for "
+                           f"{requested_day.strftime('%A, %d %B %Y')}. "
+                           f"Next available {mode} schedules for {date_text}:")
+            lines = [heading]
+            if description:
+                lines.append(description)
+            for number, item in enumerate(items, 1):
+                operators = ", ".join(
+                    operator.get("name", "") for operator in item.get("operators", [])
+                    if operator.get("name")) or "Operator not specified"
+                departure = _spoken_time(item.get("departureTime", ""))
+                arrival = _spoken_time(item.get("arrivalTime", ""))
+                duration = int(item.get("durationInMinutes") or 0)
+                duration_text = (f"{duration // 60}h {duration % 60}m"
+                                 if duration >= 60 else f"{duration}m")
+                changes = _clean(item.get("changesMessage", ""))
+                arrival_date = item.get("arrivalDate", "")
+                departure_date_text = item.get("departureDate", "")
+                next_day = (f" on {arrival_date}" if arrival_date and
+                            arrival_date != departure_date_text else "")
+                lines.append(
+                    f"{number}. {operators}. Depart {origin} at {departure}; "
+                    f"arrive {destination} at {arrival}{next_day}. "
+                    f"Duration {duration_text}. "
+                    f"{changes + '.' if changes else ''}".rstrip())
+            additions.append("\n".join(lines))
+        if additions:
+            detail = route.get("detail_text", "")
+            addition = "\n\n".join(additions)
+            route["detail_text"] = detail.replace(
+                marker, f"\n\n{addition}{marker}", 1
+            ) if marker in detail else detail + "\n\n" + addition
+            added += len(additions)
+    return added
+
+
 def parse_routes(html: bytes | str, page_url: str) -> list[dict]:
     """Parse Rome2Rio overview cards into JourneyResultsDialog dictionaries."""
     soup = BeautifulSoup(html, "html.parser")
@@ -420,6 +544,8 @@ class Rome2RioClient:
                     departure_date)
             except Exception:
                 pass
+            add_rome2rio_transit_schedules(
+                routes, browser_requests.get, departure_date)
             return routes
 
         url = route_url(origin, destination)
@@ -448,6 +574,8 @@ class Rome2RioClient:
                 routes, public_api_key, browser_requests.get, departure_date)
         except Exception:
             pass
+        add_rome2rio_transit_schedules(
+            routes, browser_requests.get, departure_date)
         return routes
 
     def _load_cache(self) -> dict:

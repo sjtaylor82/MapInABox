@@ -7,13 +7,13 @@
 ;      iscc MapInABox.iss
 
 #define AppName    "Map in a Box"
-#define AppVersion "2026.8.1"
+#define AppVersion "2026.09.0"
 #define AppExe     "MapInABox.exe"
 #define AppDir     "dist\MapInABox"
 
 [Setup]
 AppName={#AppName}
-AppVersion=2026.8.1
+AppVersion=2026.09.0
 AppVerName={#AppName} {#AppVersion}
 AppPublisher=Sam Taylor
 AppPublisherURL=https://github.com/sjtaylor82/MapInABox
@@ -30,7 +30,7 @@ DefaultGroupName={#AppName}
 
 ; Installer output
 OutputDir=installer
-OutputBaseFilename=MapInABox-2026.8.1-setup
+OutputBaseFilename=MapInABox-2026.09.0-setup
 
 ; Compression — lzma2 ultra gives the smallest exe at the cost of slower build
 Compression=lzma2/ultra64
@@ -58,6 +58,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 
 [InstallDelete]
+; Remove the external edition marker used by older releases. Current builds
+; embed their immutable edition identity inside the executable archive.
+Type: files; Name: "{app}\_internal\_education"
 ; Sounds are release-managed resources. Purge the previous set so files removed
 ; from a release cannot remain behind and override regional fallbacks.
 Type: filesandordirs; Name: "{app}\_internal\sounds"

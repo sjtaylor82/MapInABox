@@ -454,6 +454,7 @@ _KIND_TO_CATEGORY: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 _HERE_BROWSE_URL = "https://browse.search.hereapi.com/v1/browse"
+_HERE_DISCOVER_URL = "https://discover.search.hereapi.com/v1/discover"
 
 # HERE top-level category IDs mapped to our category keys.
 _HERE_CATEGORIES: dict[str, str] = {
@@ -1234,6 +1235,49 @@ class PoiFetcher:
               f"(category={category}, radius={radius}m)", getattr(self, "settings", None))
         return pois
 
+    def fetch_here_name_search(
+        self, lat: float, lon: float, query: str, radius: int = 10000,
+        address_points: list | None = None,
+    ) -> list:
+        """Search HERE by name instead of filtering a capped browse result."""
+        query = (query or "").strip()
+        if not self._here_api_key or not query:
+            return []
+        params = {
+            "at": f"{lat},{lon}",
+            "in": f"circle:{lat},{lon};r={radius}",
+            "q": query,
+            "limit": 100,
+            "apiKey": self._here_api_key,
+            "lang": "en",
+        }
+        url = _HERE_DISCOVER_URL + "?" + urllib.parse.urlencode(params, safe=",")
+        req = urllib.request.Request(url, headers={"User-Agent": "MapInABox/1.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode())
+        except Exception as exc:
+            miab_log("errors", f"[HERE] Name search failed: {exc}",
+                     getattr(self, "settings", None))
+            return []
+        pois = []
+        seen = set()
+        for item in data.get("items", []):
+            poi = _parse_here_item(item, lat, lon, address_points or [])
+            if poi is None:
+                continue
+            identity = poi.get("here_id") or (
+                f"{poi['name'].casefold()}|{poi.get('number', '')}|"
+                f"{poi.get('street', '').casefold()}")
+            if identity in seen:
+                continue
+            seen.add(identity)
+            pois.append(poi)
+        miab_log("api_calls", f"[HERE] Name search {query!r} returned "
+                 f"{len(pois)} places within {radius}m",
+                 getattr(self, "settings", None))
+        return pois
+
     def fetch_google_pois(
         self,
         lat: float,
@@ -1765,6 +1809,46 @@ class PoiFetcher:
         else:
             miab_log("verbose", "[POI] Background cache preload miss.", getattr(self, "settings", None))
         return cached
+
+    def load_cached_nearby_pois(self, lat: float, lon: float,
+                                radius: float = 2000.0) -> list:
+        """Return fresh POIs from every cache entry near a position.
+
+        Background Browse responses can omit a place because each HERE
+        category response is capped.  A place already learned through a
+        broader or named search should nevertheless remain available to
+        street exploration.  This combines fresh cache entries without making
+        a network request.
+        """
+        cache = _load_poi_cache(self._cache_path)
+        out = []
+        seen = set()
+        for key in cache:
+            pois = _get_cached(cache, key)
+            if pois is None:
+                continue
+            for poi in pois:
+                if not isinstance(poi, dict):
+                    continue
+                plat, plon = poi.get("lat"), poi.get("lon")
+                if plat is None or plon is None:
+                    continue
+                try:
+                    if dist_metres(lat, lon, float(plat), float(plon)) > radius:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+                identity = (
+                    poi.get("source", ""), poi.get("here_id", ""),
+                    poi.get("osm_type", ""), poi.get("osm_id", ""),
+                    round(float(plat), 7), round(float(plon), 7),
+                    str(poi.get("name") or "").casefold(),
+                )
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                out.append(poi)
+        return out
 
     def cached_background_age_hours(self, lat: float, lon: float) -> float | None:
         """Return age of the background POI disk cache in hours, or None if absent."""

@@ -1163,7 +1163,7 @@ class NavMixin:
         if result != wx.ID_OK or not street:
             self.listbox.SetFocus(); return
 
-        ndlg = wx.TextEntryDialog(self, f"House number on {street}:", "Navigate — Number")
+        ndlg = wx.TextEntryDialog(self, f"Number on {street}:", "Navigate — Number")
         if ndlg.ShowModal() != wx.ID_OK:
             ndlg.Destroy(); self.listbox.SetFocus(); return
         number = ndlg.GetValue().strip(); ndlg.Destroy()

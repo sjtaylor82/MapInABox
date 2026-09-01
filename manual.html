@@ -24,7 +24,7 @@
 <body>
 
 <h1>Map in a Box — User Manual</h1>
-<p><strong>Version 2026.8.1</strong> &nbsp;|&nbsp; Windows &amp; macOS</p>
+<p><strong>Version 2026.09.0</strong> &nbsp;|&nbsp; Windows &amp; macOS</p>
 
 
 <nav aria-label="Table of contents">
@@ -67,7 +67,7 @@
 <table>
   <tr><th>Mode</th><th>What it does</th></tr>
   <tr><td>Map mode</td><td>Roam the world by country, city, coordinates, and geographic feature. This is where Map in a Box's global reach really shows.</td></tr>
-  <tr><td>Street mode</td><td>Drop to the neighbourhood level and explore streets, intersections, house numbers, and nearby points of interest in detail.</td></tr>
+  <tr><td>Street mode</td><td>Drop to the neighbourhood level and explore streets, intersections, numbers, and nearby points of interest in detail.</td></tr>
   <tr><td>Walking mode</td><td>Move along a real street network with turn choices at intersections, plus optional POI announcements as you go.</td></tr>
   <tr><td>Free mode</td><td>Explore nearby streets and points of interest relative to a heading, without being locked to a road.</td></tr>
   <tr><td>Tools</td><td>Route planning, detour calculation, toll comparison, meeting-place finder, public transport journeys, departure boards, flight search, hotel search, Find Food, and Order an Uber.</td></tr>
@@ -202,14 +202,14 @@
 
 <p>Press <code>F11</code> from map mode to drop into street mode at your current position. Street data comes from OpenStreetMap on demand and gets cached locally, so the first visit to an area can take a few seconds depending on your connection — after that, it's instant.</p>
 
-<p>This is where the app shifts from overview to real-world detail: moving along roads, checking house numbers and intersections, looking up businesses, and getting walking directions.</p>
+<p>This is where the app shifts from overview to real-world detail: moving along roads, checking numbers and intersections, looking up businesses, and getting walking directions.</p>
 
-<p>Movement follows the street network, with finer or larger steps when you need them. You can step through house numbers and intersections, turn onto cross streets, search for a street or address, hear the nearest cross street, open the POI list, and ask for walking directions to a typed address. Press <code>F11</code> again to head back to map mode.</p>
+<p>Movement follows the street network, with finer or larger steps when you need them. You can step through numbers and intersections, turn onto cross streets, search for a street or address, hear the nearest cross street, open the POI list, and ask for walking directions to a typed address. Press <code>F11</code> again to head back to map mode.</p>
 
 <p>Once you've asked for walking directions with <code>Ctrl+G</code>, you can normally step through them one instruction at a time. Press <code>Shift+I</code> instead, and — if you've got a Mistral key set up — the app will ask Mistral to generate an accessible narration for the walk, the way a local might describe it, rather than a list of turns. You then move through that narrative with <code>Up</code> and <code>Down</code>, repeat the current step with <code>I</code>, and press <code>Escape</code> to drop back into the ordinary step-by-step directions, with the route still active. If Mistral isn't configured, or the request fails, you just get the regular turn-by-turn list — nothing is lost by trying it.</p>
 
-<p>MapInABox supports GNAF. GNAF (Geocoded National Address File) is Australia's authoritative address database, maintained by Geoscape. It contains millions of verified addresses, including precise street numbers, street names, suburbs and geographic coordinates. Unlike OpenStreetMap, where house numbers depend on volunteer contributions and may be incomplete, G-NAF is compiled from state and territory government address data and is regarded as the definitive source for valid Australian addresses. For applications that need accurate street numbering, such as address lookup or navigation for blind users, G-NAF can be used to determine the exact location of a numbered property, validate that an address exists, and identify nearby street numbers with a much higher level of completeness and reliability than crowd-sourced mapping alone.</p>
-<p>While browsing within Australia, <code>Ctrl+Shift+F12</code> tells you whether GNAF address data is on or off; press it again within five seconds to flip it. GNAF tends to be better for residential house numbers. On business strips, shopping streets, hotels, pubs, and other named venues, OpenStreetMap can actually do better, since businesses and buildings often carry their own address tags. If address stepping seems to skip past businesses or keeps landing on plain residential numbers, try turning GNAF off — then back on again once you're back among mostly houses.</p>
+<p>MapInABox supports GNAF. GNAF (Geocoded National Address File) is Australia's authoritative address database, maintained by Geoscape. It contains millions of verified addresses, including precise street numbers, street names, suburbs and geographic coordinates. Unlike OpenStreetMap, where numbers depend on volunteer contributions and may be incomplete, G-NAF is compiled from state and territory government address data and is regarded as the definitive source for valid Australian addresses. For applications that need accurate street numbering, such as address lookup or navigation for blind users, G-NAF can be used to determine the exact location of a numbered property, validate that an address exists, and identify nearby street numbers with a much higher level of completeness and reliability than crowd-sourced mapping alone.</p>
+<p>While browsing within Australia, <code>Ctrl+Shift+F12</code> tells you whether GNAF address data is on or off; press it again within five seconds to flip it. GNAF tends to be better for residential numbers. On business strips, shopping streets, hotels, pubs, and other named venues, OpenStreetMap can actually do better, since businesses and buildings often carry their own address tags. If address stepping seems to skip past businesses or keeps landing on plain residential numbers, try turning GNAF off — then back on again once you're back among mostly houses.</p>
 
 
 <h2 id="city-packs">11. Mass Downloading a city's suburbs</h2>
@@ -655,11 +655,11 @@
   <tr><td><code>Arrow keys</code></td><td>Move</td></tr>
   <tr><td><code>Shift+Arrow</code></td><td>Fine movement</td></tr>
   <tr><td><code>Ctrl+Arrow</code></td><td>Larger movement</td></tr>
-  <tr><td><code>Page Up</code></td><td>Previous house number</td></tr>
-  <tr><td><code>Page Down</code></td><td>Next house number</td></tr>
+  <tr><td><code>Page Up</code></td><td>Previous number</td></tr>
+  <tr><td><code>Page Down</code></td><td>Next number</td></tr>
   <tr><td><code>Shift+Page Up/Page Down</code></td><td>Browse multiple POIs sharing the current address</td></tr>
   <tr><td><code>Ctrl+F12</code></td><td>Cycle address mode: POI names, plain numbers, POI numbers only</td></tr>
-  <tr><td><code>Ctrl+Alt+F12</code></td><td>Cycle house-number filter: all, odd only, even only</td></tr>
+  <tr><td><code>Ctrl+Alt+F12</code></td><td>Cycle number filter: all, odd only, even only</td></tr>
   <tr><td><code>Ctrl+Page Up</code></td><td>Previous intersection</td></tr>
   <tr><td><code>Ctrl+Page Down</code></td><td>Next intersection</td></tr>
   <tr><td><code>Ctrl+Shift+Page Down</code></td><td>Turn onto cross street</td></tr>

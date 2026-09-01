@@ -66,11 +66,12 @@ jobs:
       - name: Build Windows portable zip (Education)
         shell: powershell
         run: |
-          # build.py already dropped _education into this fresh dist (PyInstaller
-          # --clean rebuilds it above) - add the portable marker on top of it.
+          # Edition identity is embedded in the executable. Add only the
+          # portable marker, which controls writable-data layout rather than
+          # product functionality.
           New-Item -Path dist\MapInABox\_internal\_portable -ItemType File -Force
-          if (-not (Test-Path -LiteralPath dist\MapInABox\_internal\_education)) {
-            throw "Education marker missing from dist - build.py did not run in education mode."
+          if (Test-Path -LiteralPath dist\MapInABox\_internal\_education) {
+            throw "Obsolete Education marker unexpectedly present in dist."
           }
           $soundFiles = @(Get-ChildItem -LiteralPath dist\MapInABox\_internal\sounds -Recurse -File)
           if ($soundFiles.Count -lt 2 -or -not (Test-Path -LiteralPath dist\MapInABox\_internal\sounds\credits.txt)) {

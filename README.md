@@ -7,7 +7,7 @@ The program combines global geography with street-level navigation. You can expl
 ## Features
 
 - Explore the world map by country, city, coordinates, and geographic features.
-- Explore streets, intersections, house numbers, and nearby points of interest.
+- Explore streets, intersections, numbers, and nearby points of interest.
 - Move along a real street network with controlled turn choices at intersections.
 - Hear optional POI announcements while walking.
 - Plan walking and driving routes, compare toll and toll-free routes, and check public transport.
