@@ -21,13 +21,19 @@ PORTABLE_MODE = (
 )
 
 # PyInstaller runs an edition-specific hook from inside the executable before
-# importing application modules. Source runs deliberately default to Pro.
+# importing application modules. Source runs default to Pro unless the explicit
+# development-only Education switch is set.
 # Unlike the old external ``_education`` marker, this value cannot be changed
 # by deleting or renaming a file in the installation directory.
 APPLICATION_EDITION = (
     getattr(sys, "_miab_embedded_edition", "education")
     if getattr(sys, "frozen", False)
-    else "pro"
+    else (
+        "education"
+        if os.environ.get("MIAB_DEV_EDITION", "").strip().lower()
+        == "education"
+        else "pro"
+    )
 )
 if APPLICATION_EDITION not in {"pro", "education"}:
     # An invalid frozen identity must not accidentally enable Pro features.

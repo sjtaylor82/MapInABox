@@ -16,10 +16,14 @@ StreetSearchDialog    — filterable street/name picker
 import os
 import re
 import math
+import sys
 import wx
 import wx.adv
 
 from app_paths import EDUCATION_EDITION
+from education_policy import (
+    EDUCATION_TOOL_CHOICES, load_education_tools, request_admin_write,
+)
 from i18n import _
 from wx_utils import _log_key_event, _primary_down
 from logging_utils import miab_log
@@ -229,20 +233,63 @@ class SettingsDialog(wx.Dialog):
         self.transit_page = wx.ScrolledWindow(self.notebook, style=wx.VSCROLL)
         self.api_page = wx.ScrolledWindow(self.notebook, style=wx.VSCROLL)
         self.logging_page = wx.ScrolledWindow(self.notebook, style=wx.VSCROLL)
+        self.education_page = None
+        if EDUCATION_EDITION:
+            self.education_page = wx.ScrolledWindow(
+                self.notebook, style=wx.VSCROLL)
         for page in (self.general_page, self.transit_page,
                      self.api_page, self.logging_page):
             page.SetScrollRate(0, 20)
+        if self.education_page is not None:
+            self.education_page.SetScrollRate(0, 20)
 
         self.notebook.AddPage(self.general_page, _("General"))
         self.notebook.AddPage(self.transit_page, _("Transit Feeds"))
         self.notebook.AddPage(self.api_page, _("API Keys"))
         self.notebook.AddPage(self.logging_page, _("Logging"))
+        if self.education_page is not None:
+            self.notebook.AddPage(
+                self.education_page, _("Education Admin"))
         vs.Add(self.notebook, 1, wx.EXPAND | wx.ALL, 8)
 
         general_vs = wx.BoxSizer(wx.VERTICAL)
         transit_vs = wx.BoxSizer(wx.VERTICAL)
         api_vs = wx.BoxSizer(wx.VERTICAL)
         log_vs = wx.BoxSizer(wx.VERTICAL)
+        education_vs = wx.BoxSizer(wx.VERTICAL)
+
+        self.education_tool_checks = {}
+        self.btn_apply_education_tools = None
+        if self.education_page is not None:
+            education_vs.Add(wx.StaticText(
+                self.education_page,
+                label=_(
+                    "Choose which planning tools students can use. "
+                    "Saving these choices requires computer administrator approval.")),
+                0, wx.ALL | wx.EXPAND, 8)
+            enabled_tools = load_education_tools()
+            for label, key in EDUCATION_TOOL_CHOICES:
+                checkbox = wx.CheckBox(
+                    self.education_page, label=_(label))
+                checkbox.SetValue(key in enabled_tools)
+                education_vs.Add(
+                    checkbox, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+                self.education_tool_checks[key] = checkbox
+            education_vs.Add(wx.StaticText(
+                self.education_page,
+                label=_(
+                    "Hotel Search, Virgin Australia Booking, and Order an Uber "
+                    "are never available in Education.")),
+                0, wx.ALL | wx.EXPAND, 8)
+            self.btn_apply_education_tools = wx.Button(
+                self.education_page,
+                label=_("Apply Education Tool Choices..."))
+            education_vs.Add(
+                self.btn_apply_education_tools, 0,
+                wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+            self.btn_apply_education_tools.Bind(
+                wx.EVT_BUTTON, self._on_apply_education_tools)
+            self.education_page.SetSizer(education_vs)
 
         general_vs.Add(wx.StaticText(self.general_page, label=_("Walking mode POI announcements:")), 0, wx.ALL, 8)
         self.cb_walk = wx.CheckBox(self.general_page, label=_("Announce nearby POIs while walking"))
@@ -502,14 +549,25 @@ class SettingsDialog(wx.Dialog):
             0, wx.LEFT | wx.BOTTOM, 8)
 
         api_vs.Add(wx.StaticLine(self.api_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        api_vs.Add(wx.StaticText(self.api_page, label=_("RapidAPI key - optional flight search and hotel search (F12 tools):")), 0, wx.LEFT, 8)
+        rapidapi_purpose = (
+            "optional flight search (F12 tools)"
+            if EDUCATION_EDITION
+            else "optional flight search and hotel search (F12 tools)"
+        )
+        api_vs.Add(wx.StaticText(
+            self.api_page,
+            label=_(f"RapidAPI key - {rapidapi_purpose}:")),
+            0, wx.LEFT, 8)
         self.txt_rapidapi_key = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
         api_vs.Add(self.txt_rapidapi_key, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
         hs_rapid = wx.BoxSizer(wx.HORIZONTAL)
         hs_rapid.Add(wx.adv.HyperlinkCtrl(self.api_page, label=_("Sign up for RapidAPI"),
             url="https://rapidapi.com/auth/sign-up"), 0, wx.RIGHT, 16)
-        hs_rapid.Add(wx.adv.HyperlinkCtrl(self.api_page, label=_("Subscribe: Priceline API"),
-            url="https://rapidapi.com/tipsters/api/priceline-com-provider"), 0, wx.RIGHT, 16)
+        if not EDUCATION_EDITION:
+            hs_rapid.Add(wx.adv.HyperlinkCtrl(
+                self.api_page, label=_("Subscribe: Priceline API"),
+                url="https://rapidapi.com/tipsters/api/priceline-com-provider"),
+                0, wx.RIGHT, 16)
         hs_rapid.Add(wx.adv.HyperlinkCtrl(self.api_page, label=_("Subscribe: Timetable Lookup API"),
             url="https://rapidapi.com/obryan.sw/api/timetable-lookup"), 0)
         api_vs.Add(hs_rapid, 0, wx.LEFT | wx.BOTTOM, 8)
@@ -649,6 +707,34 @@ class SettingsDialog(wx.Dialog):
         if dlg.ShowModal() == wx.ID_OK:
             self._key_bindings = dict(dlg.bindings)
         dlg.Destroy()
+
+    def _on_apply_education_tools(self, event=None) -> None:
+        enabled = {
+            key for key, checkbox in self.education_tool_checks.items()
+            if checkbox.GetValue()
+        }
+        try:
+            started = request_admin_write(
+                enabled,
+                executable=sys.executable,
+                core_script=os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)), "core.py"),
+                frozen=bool(getattr(sys, "frozen", False)),
+            )
+        except Exception as exc:
+            wx.MessageBox(
+                f"The Education tool choices could not be changed.\n\n{exc}",
+                "Education Admin", wx.OK | wx.ICON_ERROR, parent=self)
+            return
+        if started:
+            wx.MessageBox(
+                "Approve the administrator request to save these choices. "
+                "They will be used the next time the Tools menu opens.",
+                "Education Admin", wx.OK | wx.ICON_INFORMATION, parent=self)
+        else:
+            wx.MessageBox(
+                "The Education tool choices were not changed.",
+                "Education Admin", wx.OK | wx.ICON_INFORMATION, parent=self)
 
     def _on_google_key_changed(self, event) -> None:
         """Google imagery can only be selected while a key is present."""
@@ -1069,7 +1155,7 @@ class ToolsMenuDialog(wx.Dialog):
     TOOLS = [
         ("Detour Calculator",  "detour_calculator"),
         ("Suburb Lister",      "route_explorer"),
-        ("Rendezvous Point",   "rendezvous_point"),
+        ("Shared Journey",     "rendezvous_point"),
         ("Toll Compare",       "toll_compare"),
         ("Journey Planner",    "journey_planner"),
         ("Airport Amenity Guide", "airport_amenity_guide"),
@@ -1081,8 +1167,9 @@ class ToolsMenuDialog(wx.Dialog):
         ("Order an Uber",      "order_uber"),
     ]
 
-    def __init__(self, parent) -> None:
+    def __init__(self, parent, tools=None) -> None:
         super().__init__(parent, title="Tools", style=wx.DEFAULT_DIALOG_STYLE)
+        self.tools = list(self.TOOLS if tools is None else tools)
         panel = wx.Panel(self)
         vs = wx.BoxSizer(wx.VERTICAL)
 
@@ -1090,10 +1177,11 @@ class ToolsMenuDialog(wx.Dialog):
                wx.LEFT | wx.TOP, 10)
 
         self.listbox = wx.ListBox(
-            panel, choices=[t[0] for t in self.TOOLS],
+            panel, choices=[t[0] for t in self.tools],
             style=wx.LB_SINGLE,
         )
-        self.listbox.SetSelection(0)
+        if self.tools:
+            self.listbox.SetSelection(0)
         vs.Add(self.listbox, 1, wx.ALL | wx.EXPAND, 10)
 
         panel.SetSizer(vs)
@@ -1108,7 +1196,7 @@ class ToolsMenuDialog(wx.Dialog):
     def _on_choose(self, event=None):
         sel = self.listbox.GetSelection()
         if sel != wx.NOT_FOUND:
-            self.selected_tool = self.TOOLS[sel][1]
+            self.selected_tool = self.tools[sel][1]
             self.EndModal(wx.ID_OK)
 
     def _on_key(self, event):
@@ -1158,10 +1246,10 @@ class StopEntryDialog(wx.Dialog):
 
 
 class MeetPointDialog(wx.Dialog):
-    """Prompt for rendezvous inputs and match mode."""
+    """Ask where two people start or finish a shared journey."""
 
     def __init__(self, parent) -> None:
-        super().__init__(parent, title="Rendezvous Point",
+        super().__init__(parent, title="Shared Journey",
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         panel = wx.Panel(self)
         vs = wx.BoxSizer(wx.VERTICAL)
@@ -1169,9 +1257,8 @@ class MeetPointDialog(wx.Dialog):
         self.mode = wx.RadioBox(
             panel,
             choices=[
-                "Find a pick-up point",
-                "Get dropped off on the way",
-                "Meet in the middle",
+                "Meet before an event",
+                "Drop off after an event",
             ],
             majorDimension=1,
             style=wx.RA_SPECIFY_ROWS,
@@ -1215,28 +1302,21 @@ class MeetPointDialog(wx.Dialog):
             self.origin.GetValue().strip(),
             self.dest_a.GetValue().strip(),
             self.dest_b.GetValue().strip(),
-            ["pickup", "dropoff", "meeting"][self.mode.GetSelection()],
+            ["meet_before", "dropoff_after"][self.mode.GetSelection()],
         )
 
     def _apply_mode_labels(self):
         sel = self.mode.GetSelection()
-        if sel == 0:  # pickup
-            self.origin_label.SetLabel("Your address:")
-            self.dest_a_label.SetLabel("Friend's address:")
-            self.dest_b_label.SetLabel("Shared destination:")
-            self.dest_b_label.Show(True)
-            self.dest_b.Show(True)
-        elif sel == 1:  # dropoff
-            self.origin_label.SetLabel("Shared starting point:")
+        if sel == 0:
+            self.origin_label.SetLabel("Your starting place:")
+            self.dest_a_label.SetLabel("Friend's starting place:")
+            self.dest_b_label.SetLabel("Event location:")
+        else:
+            self.origin_label.SetLabel("Event location:")
             self.dest_a_label.SetLabel("Your destination:")
             self.dest_b_label.SetLabel("Friend's destination:")
-            self.dest_b_label.Show(True)
-            self.dest_b.Show(True)
-        else:  # meeting
-            self.origin_label.SetLabel("Friend's suburb/address:")
-            self.dest_a_label.SetLabel("Your suburb/address:")
-            self.dest_b_label.Show(False)
-            self.dest_b.Show(False)
+        self.dest_b_label.Show(True)
+        self.dest_b.Show(True)
         self.Layout()
         self.Fit()
 
@@ -1248,16 +1328,16 @@ class MeetPointDialog(wx.Dialog):
         del event
         origin, dest_a, dest_b, mode = self.GetValues()
         if not origin:
-            wx.MessageBox("Please enter the first address.", "Rendezvous Point", parent=self)
+            wx.MessageBox("Please enter the first place.", "Shared Journey", parent=self)
             self.origin.SetFocus()
             return
         if not dest_a:
-            wx.MessageBox("Please enter the second address.", "Rendezvous Point", parent=self)
+            wx.MessageBox("Please enter the second place.", "Shared Journey", parent=self)
             self.dest_a.SetFocus()
             return
-        if mode in ("pickup", "dropoff") and not dest_b:
-            label = "shared destination" if mode == "pickup" else "friend's destination"
-            wx.MessageBox(f"Please enter the {label}.", "Rendezvous Point", parent=self)
+        if not dest_b:
+            label = "event location" if mode == "meet_before" else "friend's destination"
+            wx.MessageBox(f"Please enter the {label}.", "Shared Journey", parent=self)
             self.dest_b.SetFocus()
             return
         self.EndModal(wx.ID_OK)
@@ -1366,7 +1446,7 @@ class RouteResultsDialog(wx.Dialog):
 
 
 class RendezvousResultsDialog(wx.Dialog):
-    """Browsable list of rendezvous candidates ranked from best to worst."""
+    """Browsable list of shared-journey choices ranked from best to worst."""
 
     def __init__(self, parent, title, intro, candidates):
         super().__init__(parent, title=title,
@@ -1375,8 +1455,6 @@ class RendezvousResultsDialog(wx.Dialog):
 
         panel = wx.Panel(self)
         vs = wx.BoxSizer(wx.VERTICAL)
-
-        vs.Add(wx.StaticText(panel, label=intro), 0, wx.ALL | wx.EXPAND, 10)
 
         self.listbox = wx.ListBox(
             panel,
@@ -1394,11 +1472,23 @@ class RendezvousResultsDialog(wx.Dialog):
         )
         vs.Add(self.detail, 1, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
 
+        vs.Add(wx.StaticText(panel, label="Why these choices:"),
+               0, wx.LEFT | wx.RIGHT, 10)
+        self.reason = wx.TextCtrl(
+            panel,
+            value=intro,
+            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP,
+        )
+        _set_explicit_accessible_name(
+            self, self.reason, "Why these choices")
+        vs.Add(self.reason, 1,
+               wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
+
         close_btn = wx.Button(panel, wx.ID_CLOSE, "Close")
         vs.Add(close_btn, 0, wx.LEFT | wx.BOTTOM, 10)
 
         panel.SetSizer(vs)
-        self.SetSize(700, 480)
+        self.SetSize(700, 600)
 
         close_btn.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CLOSE))
         self.listbox.Bind(wx.EVT_LISTBOX, self._on_select)
@@ -3241,7 +3331,8 @@ class FindFoodDialog(wx.Dialog):
     def _handle_selected_place_key(self, event) -> bool:
         code = event.GetKeyCode()
         if _primary_down(event) and code in (ord("W"), ord("w")):
-            self._open_selected_website()
+            if not EDUCATION_EDITION:
+                self._open_selected_website()
             return True
         if _primary_down(event) and not event.AltDown() and code in (ord("1"), ord("2"), ord("3")):
             parent = self.GetParent()
@@ -3300,6 +3391,10 @@ class FindFoodDialog(wx.Dialog):
             return True
 
         if key_num == 5:
+            if EDUCATION_EDITION:
+                self._detail_announce(
+                    "Opening reviews is not available in Education.")
+                return True
             suburb = getattr(parent, "_current_suburb", "") or place.get("address", "")
             if parent and hasattr(parent, "_open_place_reviews"):
                 parent._open_place_reviews(name, suburb)
@@ -3311,6 +3406,10 @@ class FindFoodDialog(wx.Dialog):
             return True
 
         if key_num == 6:
+            if EDUCATION_EDITION:
+                self._detail_announce(
+                    "Menu links are not available in Education.")
+                return True
             if parent and hasattr(parent, "_lookup_menu_links_for_poi"):
                 parent._lookup_menu_links_for_poi(place, name)
             else:
@@ -3323,6 +3422,10 @@ class FindFoodDialog(wx.Dialog):
         return [self._fmt_summary(p) for p in self._places]
 
     def _open_selected_website(self):
+        if EDUCATION_EDITION:
+            self._detail_announce(
+                "Opening websites is not available in Education.")
+            return
         place = self._selected_place()
         if not place or self._fetching:
             return

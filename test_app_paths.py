@@ -14,9 +14,25 @@ class EmbeddedEditionTests(unittest.TestCase):
                 delattr(sys, name)
         importlib.reload(app_paths)
 
-    def test_source_run_is_pro_even_if_environment_is_tampered_with(self):
-        with mock.patch.dict(os.environ, {"MIAB_EDITION": "education"}):
+    def test_packaging_variable_cannot_change_a_source_run(self):
+        with mock.patch.dict(os.environ, {
+                "MIAB_EDITION": "education", "MIAB_DEV_EDITION": ""}):
             sys._miab_embedded_edition = "education"
+            self.assertEqual(importlib.reload(app_paths).APPLICATION_EDITION,
+                             "pro")
+
+    def test_source_can_explicitly_run_education_workflow(self):
+        with mock.patch.dict(os.environ, {
+                "MIAB_DEV_EDITION": "education"}):
+            self.assertEqual(importlib.reload(app_paths).APPLICATION_EDITION,
+                             "education")
+            self.assertTrue(app_paths.EDUCATION_EDITION)
+
+    def test_frozen_build_ignores_source_development_switch(self):
+        with mock.patch.dict(os.environ, {
+                "MIAB_DEV_EDITION": "education"}):
+            sys.frozen = True
+            sys._miab_embedded_edition = "pro"
             self.assertEqual(importlib.reload(app_paths).APPLICATION_EDITION,
                              "pro")
 

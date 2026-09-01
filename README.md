@@ -73,7 +73,7 @@ Optional features are only contacted when the user supplies the relevant key or 
 
 - Google Maps, Routes, Places, Static Maps, and Street View.
 - HERE search, routing, geocoding, transit, and POI services.
-- Mistral AI for image descriptions, POI summaries, transit questions, and narrative walking briefings.
+- Mistral AI for image descriptions, transit questions, narrative walking briefings, and extra shopping-centre information.
 - AviationStack for airport arrival and departure boards.
 - OpenRouteService for distance calculations.
 - RapidAPI-hosted services including Priceline, TripAdvisor, and timetable lookup.
@@ -98,5 +98,15 @@ Project roles:
 - Approvers: Sam Taylor and any future repository maintainer explicitly granted release/signing approval responsibility.
 
 ## Development and releases
+
+To test the Education workflow directly from source in Windows PowerShell:
+
+```powershell
+$env:MIAB_DEV_EDITION = "education"
+python core.py
+```
+
+Remove the variable or set it to an empty string to return to the normal Pro
+source workflow. Packaged applications ignore this development switch.
 
 The release workflow builds Windows and macOS artifacts from GitHub Actions. Windows packaging uses PyInstaller and Inno Setup; macOS packaging creates a zipped app bundle with the install helper script.

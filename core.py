@@ -82,7 +82,7 @@ from distance_units import (
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '2026.09.0'
+APP_VERSION   = '2026.09.1'
 
 POI_LIVE_COOLDOWN_SECS = 3.0
 POI_BACKGROUND_WAIT_SECS = 2.0
@@ -16250,6 +16250,35 @@ if __name__ == "__main__":
     # the same name so they cannot run over one another.
     app = wx.App(False)
     _wx_ready_at = time.perf_counter()
+    _policy_prefix = "--write-education-policy="
+    _policy_argument = next(
+        (arg for arg in sys.argv[1:] if arg.startswith(_policy_prefix)), None)
+    if _policy_argument is not None:
+        if not EDUCATION_EDITION:
+            wx.MessageBox(
+                "Education tool choices can only be changed from the "
+                "Education edition.",
+                "Education Admin", wx.OK | wx.ICON_ERROR)
+            sys.exit(1)
+        try:
+            from education_policy import write_education_tools
+            _enabled_policy_tools = {
+                value for value in
+                _policy_argument[len(_policy_prefix):].split(",") if value
+            }
+            _written_policy_path = write_education_tools(
+                _enabled_policy_tools)
+            wx.MessageBox(
+                "Education tool choices were saved for everyone who uses "
+                "this computer.",
+                "Education Admin", wx.OK | wx.ICON_INFORMATION)
+            sys.exit(0)
+        except Exception as _policy_error:
+            wx.MessageBox(
+                "The Education tool choices could not be saved.\n\n" +
+                str(_policy_error),
+                "Education Admin", wx.OK | wx.ICON_ERROR)
+            sys.exit(1)
     _portable_update_lock = os.path.join(APP_DIR, ".update-in-progress")
     if PORTABLE_MODE and os.path.isfile(_portable_update_lock):
         try:

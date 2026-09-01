@@ -24,7 +24,7 @@
 <body>
 
 <h1>Map in a Box — User Manual</h1>
-<p><strong>Version 2026.09.0</strong> &nbsp;|&nbsp; Windows &amp; macOS</p>
+<p><strong>Version 2026.09.1</strong> &nbsp;|&nbsp; Windows &amp; macOS</p>
 
 
 <nav aria-label="Table of contents">
@@ -70,7 +70,7 @@
   <tr><td>Street mode</td><td>Drop to the neighbourhood level and explore streets, intersections, numbers, and nearby points of interest in detail.</td></tr>
   <tr><td>Walking mode</td><td>Move along a real street network with turn choices at intersections, plus optional POI announcements as you go.</td></tr>
   <tr><td>Free mode</td><td>Explore nearby streets and points of interest relative to a heading, without being locked to a road.</td></tr>
-  <tr><td>Tools</td><td>Route planning, detour calculation, toll comparison, meeting-place finder, public transport journeys, departure boards, flight search, hotel search, Find Food, and Order an Uber.</td></tr>
+  <tr><td>Tools</td><td>Route planning, detour calculation, toll comparison, shared-journey help, public transport journeys, departure boards, flight search, hotel search, Find Food, and Order an Uber.</td></tr>
   <tr><td>Challenge game</td><td>A geography game where you locate a named country on the world map by ear.</td></tr>
 </table>
 
@@ -247,6 +247,8 @@
 
 <p>Press <code>F12</code> in map mode to open the Tools menu — this is where the longer route and travel tools live. Some need marks, a destination, or an API key, and if a required key is missing, the app will let you know. If you're trying to plan, compare, or discover something, there's a good chance the answer is in this menu.</p>
 
+<p>In Education, a computer administrator chooses which planning tools appear. Hotel Search, Virgin Australia Booking, and Order an Uber are never available in Education. Opening food websites, reviews, and menu links also remains unavailable.</p>
+
 <h3 id="tool-detour">14.1 Detour Calculator</h3>
 
 <p>Got time to drop off that parcel on the way to work? This tool Compares a direct trip against one with stop-offs added, showing the extra distance and time each diversion costs you.</p>
@@ -268,17 +270,27 @@
   <li>Enter your destination.</li>
 </ol>
 
-<h3 id="tool-rendezvous">14.3 Rendezvous Point</h3>
+<h3 id="tool-rendezvous">14.3 Shared Journey</h3>
 
-<p>How convenient is it for your friend to pick you up? Who gets dropped off first? Works out a pickup, dropoff, or meeting point between two people. Pick a mode in the dialog.</p>
+<p>Shared Journey helps two people decide where to meet before an event or where to part after it. The best choices are shown first.</p>
 
-<p><strong>Pickup</strong> — a driver collects you on the way to a shared destination. Enter the driver's start, the shared destination, and your location. Candidates are scored by minimising the driver's detour plus your travel to the pickup point. Each result shows your distance to the point, the driver's distance from their start, and the remaining shared journey.</p>
+<p><strong>Meet before an event</strong></p>
+<ol>
+  <li>Enter your starting place.</li>
+  <li>Enter your friend's starting place.</li>
+  <li>Enter the event location.</li>
+</ol>
+<p>Map in a Box follows both journeys toward the event and looks for fair places where the routes come together. Each choice tells you roughly how long each person travels before meeting and how long remains to the event. Tab to <strong>Why these choices</strong> to read which side of the event each person approaches from and why the choices were made.</p>
 
-<p><strong>Dropoff</strong> — a driver drops you off on the way to their own destination. Enter the driver's start, their destination, and your destination. Scoring favours points where the driver carries you further, and penalises detours from the driver's route at 4× weight — a 5 km detour counts the same as 20 km of remaining travel for you. Each result shows how far the driver carries you, your remaining distance, and whether the point is on the driver's route or off it.</p>
+<p><strong>Drop off after an event</strong></p>
+<ol>
+  <li>Enter the event location.</li>
+  <li>Enter your destination.</li>
+  <li>Enter your friend's destination.</li>
+</ol>
+<p>Map in a Box looks for places where your friend can drop you off without going far out of their way. Each choice tells you how far you travel together, how far each person has left, and whether the stop is already on your friend's way.</p>
 
-<p><strong>Meeting place</strong> — two people travelling toward each other. Enter both starting locations. Candidates are ranked by road distance from the true midpoint, with each result showing distance from each person and the offset from the exact halfway point.</p>
-
-<p>All three modes return up to six candidates, best first.</p>
+<p>Sometimes both routes stay apart until close to the event. In that case, Map in a Box keeps the event as the simplest choice. It may also offer a few nearby alternatives when the routes are not far apart and there is still a useful journey to share. These alternatives clearly say that one person needs to make a short detour.</p>
 
 <h3 id="tool-toll">14.4 Toll Compare</h3>
 
@@ -371,7 +383,7 @@
 
 <h2 id="settings">16. Settings</h2>
 
-<p>Press <code>Ctrl+,</code> to open Settings. There are three tabs: General, API Keys, and Logging.</p>
+<p>Press <code>Ctrl+,</code> to open Settings. The tabs cover general choices, transit feeds, API keys, and logging. Education also has an Education Admin tab.</p>
 
 <h3>16.1 General tab</h3>
 <table>
@@ -407,6 +419,10 @@
   <tr><td>Open Settings Folder</td><td>Open the settings folder in your file manager. Contains <code>settings.json</code>, <code>miab.log</code>, saved POI data, and other user files.</td></tr>
 </table>
 
+<h3>16.5 Education Admin tab</h3>
+<p>This tab appears only in Education. It shows the planning tools available to students. A computer administrator can turn each permitted tool on or off. Windows or macOS asks for administrator approval before saving the choices for everyone who uses that computer.</p>
+<p>Hotel Search, Virgin Australia Booking, and Order an Uber cannot be enabled. If the school policy is missing or damaged, Map in a Box returns to a smaller safe set of tools.</p>
+
 
 <h2 id="api-keys">17. Internet and API keys</h2>
 
@@ -430,7 +446,7 @@
 <table>
   <tr><th>Key</th><th>Where to get it</th><th>What it enables</th></tr>
   <tr><td>Google</td><td><a href="https://developers.google.com/maps/get-started">Google Cloud Console</a></td><td>Satellite imagery, Street View, Google Maps walking navigation, and proximity-aware address search</td></tr>
-  <tr><td>Mistral</td><td><a href="https://console.mistral.ai/">Mistral console</a> (free, no credit card)</td><td>Spoken descriptions of satellite and Street View images, POI summaries, narrative walking briefings, and transit questions</td></tr>
+  <tr><td>Mistral</td><td><a href="https://console.mistral.ai/">Mistral console</a> (free, no credit card)</td><td>Spoken descriptions of satellite and Street View images, narrative walking briefings, transit questions, and extra shopping-centre information</td></tr>
   <tr><td>HERE</td><td><a href="https://developer.here.com/sign-up">HERE Developer</a></td><td>Live POI details including phone number, website, opening hours, and ratings; category-filtered POI browsing with better commercial coverage than OpenStreetMap; turn-by-turn walking navigation; real-time departure boards showing next services, platform, and transport mode (rather than scheduled timetable only)</td></tr>
   <tr><td>OpenRouteService</td><td><a href="https://openrouteservice.org/sign-up/">openrouteservice.org</a></td><td>Walking and driving distance calculation between marks</td></tr>
   <tr><td>AviationStack</td><td><a href="https://aviationstack.com/signup/free">aviationstack.com</a></td><td>Airport arrival and departure boards, live flight information</td></tr>
@@ -449,7 +465,7 @@
 <table>
   <tr><th>Missing key</th><th>Effect</th></tr>
   <tr><td>Google</td><td>Satellite imagery is unavailable. Street View falls back to Mapillary in a browser. Google Maps navigation is unavailable; walking routes use OpenStreetMap instead.</td></tr>
-  <tr><td>Mistral</td><td>No spoken descriptions for satellite or Street View images, POI summaries, narrative walking briefings, or transit questions.</td></tr>
+  <tr><td>Mistral</td><td>No spoken descriptions for satellite or Street View images, narrative walking briefings, transit questions, or extra shopping-centre information.</td></tr>
   <tr><td>HERE</td><td>POI details use OpenStreetMap only. Walking navigation uses OpenStreetMap routing. The departure board uses GTFS scheduled timetables.</td></tr>
   <tr><td>OpenRouteService</td><td>Distance calculations between marks are unavailable.</td></tr>
   <tr><td>AviationStack</td><td>Airport arrival and departure boards are unavailable.</td></tr>
