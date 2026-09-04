@@ -38,6 +38,24 @@ DEFAULT_EDUCATION_TOOLS = frozenset({
 })
 
 
+def load_education_policy(path: os.PathLike | str | None = None) -> dict:
+    destination = Path(path) if path is not None else policy_path()
+    try:
+        data = json.loads(destination.read_text(encoding="utf-8"))
+        if data.get("format") != 1:
+            raise ValueError("unsupported policy format")
+        return {
+            "enabled_tools": normalise_tools(data.get("enabled_tools")),
+            "allow_portable_plaintext_credentials": bool(
+                data.get("allow_portable_plaintext_credentials", False)),
+        }
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return {
+            "enabled_tools": set(DEFAULT_EDUCATION_TOOLS),
+            "allow_portable_plaintext_credentials": False,
+        }
+
+
 def policy_path(platform: str = sys.platform,
                 environ: dict | None = None) -> Path:
     env = os.environ if environ is None else environ
@@ -56,18 +74,13 @@ def normalise_tools(values) -> set[str]:
 
 
 def load_education_tools(path: os.PathLike | str | None = None) -> set[str]:
-    destination = Path(path) if path is not None else policy_path()
-    try:
-        data = json.loads(destination.read_text(encoding="utf-8"))
-        if data.get("format") != 1:
-            raise ValueError("unsupported policy format")
-        return normalise_tools(data.get("enabled_tools"))
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return set(DEFAULT_EDUCATION_TOOLS)
+    return set(load_education_policy(path)["enabled_tools"])
 
 
 def write_education_tools(values,
-                          path: os.PathLike | str | None = None) -> Path:
+                          path: os.PathLike | str | None = None,
+                          allow_portable_plaintext_credentials: bool = False,
+                          ) -> Path:
     destination = Path(path) if path is not None else policy_path()
     enabled = sorted(normalise_tools(values))
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -75,25 +88,34 @@ def write_education_tools(values,
     temporary.write_text(json.dumps({
         "format": 1,
         "enabled_tools": enabled,
+        "allow_portable_plaintext_credentials": bool(
+            allow_portable_plaintext_credentials),
     }, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary, destination)
     return destination
 
 
 def admin_writer_arguments(values, executable: str, core_script: str,
-                           frozen: bool) -> tuple[str, list[str]]:
+                           frozen: bool,
+                           allow_portable_plaintext_credentials: bool = False,
+                           ) -> tuple[str, list[str]]:
     enabled = ",".join(sorted(normalise_tools(values)))
     arguments = [f"--write-education-policy={enabled}"]
+    if allow_portable_plaintext_credentials:
+        arguments.append("--allow-portable-plaintext-credentials")
     if not frozen:
         arguments.insert(0, core_script)
     return executable, arguments
 
 
 def request_admin_write(values, executable: str, core_script: str,
-                        frozen: bool, platform: str = sys.platform) -> bool:
+                        frozen: bool, platform: str = sys.platform,
+                        allow_portable_plaintext_credentials: bool = False,
+                        ) -> bool:
     """Ask the operating system to run the small policy writer as admin."""
     program, arguments = admin_writer_arguments(
-        values, executable, core_script, frozen)
+        values, executable, core_script, frozen,
+        allow_portable_plaintext_credentials)
     if platform == "win32":
         import ctypes
         params = subprocess.list2cmdline(arguments)

@@ -13,6 +13,7 @@ accessible-output2
 certifi
 beautifulsoup4
 curl_cffi
+keyring
 
 # ── Build-only (needed to produce release binaries, not to run from source) ──
 pyinstaller

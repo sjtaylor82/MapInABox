@@ -76,6 +76,12 @@ from app_paths import (
     APP_DIR, CACHE_DIR, EDUCATION_EDITION, PORTABLE_MODE, RESOURCE_DIR,
     USER_DIR,
 )
+from secret_store import (
+    CREDENTIAL_KEYS, PORTABLE_PLAINTEXT, SECURE, SecretStoreError,
+    clear_secure_credentials, load_secure_credentials,
+    remove_credentials_from_dict,
+    save_secure_credentials,
+)
 from distance_units import (
     format_distance, format_distance_label, format_height, set_unit_system,
 )
@@ -871,6 +877,14 @@ DEFAULT_SETTINGS = {
     "poi_browse_radius_km":    1,
     "suppress_warn_google":    False,
     "mistral_api_key":         "",
+    "google_service_enabled":  True,
+    "mistral_service_enabled": True,
+    "here_service_enabled":    True,
+    "ors_service_enabled":     True,
+    "aviationstack_service_enabled": True,
+    "opensky_service_enabled": True,
+    "rapidapi_service_enabled": True,
+    "credential_storage":      SECURE,
     "nav_provider":           "osm",   # "osm" or "google" or "here"
     "departure_board_source": "gtfs",  # "gtfs" or "google"
     "here_api_key":           "",
@@ -899,28 +913,139 @@ DEFAULT_SETTINGS = {
     },
 }
 
+_SERVICE_FLAGS_BY_CREDENTIAL = {
+    "google_api_key": "google_service_enabled",
+    "mistral_api_key": "mistral_service_enabled",
+    "here_api_key": "here_service_enabled",
+    "ors_api_key": "ors_service_enabled",
+    "aviationstack_api_key": "aviationstack_service_enabled",
+    "opensky_client_id": "opensky_service_enabled",
+    "opensky_client_secret": "opensky_service_enabled",
+    "rapidapi_key": "rapidapi_service_enabled",
+}
+
+
+class ServiceSettings(dict):
+    """Keep credentials stored while hiding disabled services at runtime."""
+
+    def get(self, key, default=None):
+        flag = _SERVICE_FLAGS_BY_CREDENTIAL.get(key)
+        if flag and not bool(dict.get(self, flag, True)):
+            return default
+        return dict.get(self, key, default)
+
 def load_settings():
     s = dict(DEFAULT_SETTINGS)
     if os.path.exists(SETTINGS_PATH):
         try:
             with open(SETTINGS_PATH, encoding="utf-8") as f:
                 saved = json.load(f)
+            # Credentials from retired integrations are migrated by the
+            # secure store.  This public but unused Custom Search identifier
+            # is obsolete and should not linger in the settings file.
             saved.pop("serper_api_key", None)
+            saved.pop("google_cse_id", None)
             s.update(saved)
         except Exception:
-            pass
-    return s
+            saved = {}
+    else:
+        saved = {}
+    plaintext_credentials = any(
+        str(saved.get(name, "") or "").strip() for name in CREDENTIAL_KEYS)
+    explicitly_chosen = "credential_storage" in saved
+    if not PORTABLE_MODE:
+        s["credential_storage"] = SECURE
+    elif (EDUCATION_EDITION
+          and s.get("credential_storage") == PORTABLE_PLAINTEXT):
+        from education_policy import load_education_policy
+        if not load_education_policy()[
+                "allow_portable_plaintext_credentials"]:
+            # Revoking the machine-wide permission also moves any existing
+            # portable plaintext credentials back into secure storage.
+            s["credential_storage"] = SECURE
+    if plaintext_credentials and (
+            not explicitly_chosen or s.get("credential_storage") == SECURE):
+        # Keep legacy values in memory until the user has chosen and a secure
+        # write has been verified.  The original JSON remains recoverable.
+        s["_credential_migration_pending"] = True
+    elif s.get("credential_storage") == SECURE:
+        try:
+            load_secure_credentials(s)
+        except SecretStoreError as exc:
+            s["_credential_store_error"] = str(exc)
+    return ServiceSettings(s)
 
 def save_settings(s):
     data = {
         k: v for k, v in dict(s).items()
-        if not str(k).startswith("_") and k != "serper_api_key"
+        if (not str(k).startswith("_")
+            and k not in {"serper_api_key", "google_cse_id"})
     }
+    storage = (
+        s.get("credential_storage", SECURE)
+        if PORTABLE_MODE else SECURE
+    )
+    data["credential_storage"] = storage
     try:
+        if storage == SECURE:
+            save_secure_credentials(data)
+            remove_credentials_from_dict(data)
+        elif storage == PORTABLE_PLAINTEXT:
+            # Prevent an older secure value reappearing if the user later
+            # changes storage mode after editing or clearing the portable key.
+            try:
+                clear_secure_credentials()
+            except SecretStoreError:
+                pass
         with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+        return True
+    except Exception as exc:
+        miab_log(
+            "errors", f"Settings could not be saved: {exc}",
+            getattr(s, "settings", s))
+        return False
+
+
+def migrate_legacy_credentials(parent, settings) -> bool:
+    """Move existing JSON credentials after an explicit portable choice."""
+    if not settings.get("_credential_migration_pending", False):
+        return True
+    storage = SECURE
+    if PORTABLE_MODE:
+        allow_plaintext = True
+        if EDUCATION_EDITION:
+            from education_policy import load_education_policy
+            allow_plaintext = load_education_policy()[
+                "allow_portable_plaintext_credentials"]
+        if allow_plaintext:
+            answer = wx.MessageBox(
+                "Existing API keys are stored as plain text in portable "
+                "MIAB.\n\nChoose Yes to move them to secure storage on "
+                "this computer. Choose No to keep them with portable MIAB "
+                "as plain text (not recommended).",
+                "Protect API Keys",
+                wx.YES_NO | wx.YES_DEFAULT | wx.ICON_WARNING,
+                parent=parent,
+            )
+            storage = SECURE if answer == wx.YES else PORTABLE_PLAINTEXT
+        else:
+            wx.MessageBox(
+                "Existing API keys will be moved to secure storage. "
+                "Plain-text storage has not been allowed by the computer "
+                "administrator.",
+                "Protect API Keys", wx.OK | wx.ICON_INFORMATION,
+                parent=parent,
+            )
+    settings["credential_storage"] = storage
+    if not save_settings(settings):
+        wx.MessageBox(
+            "The API keys could not be moved. The existing settings file "
+            "has been left unchanged.",
+            "API Key Storage", wx.OK | wx.ICON_ERROR, parent=parent)
+        return False
+    settings.pop("_credential_migration_pending", None)
+    return True
 
 
 
@@ -3018,6 +3143,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         self._geo_features_prefetched = set()
         self._geo_features_prefetching = set()
         self.settings = load_settings()
+        migrate_legacy_credentials(self, self.settings)
         set_unit_system(self.settings.get("distance_unit", "metric"))
         # Source-test launcher support: allow diagnostics to be enabled before
         # Settings is usable.  This is intentionally opt-in and does not alter
@@ -12230,11 +12356,18 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         # and again when the dialog is eventually destroyed.
         dlg.Destroy()
         if saved:
-            self.settings = saved_settings
+            candidate_settings = ServiceSettings(saved_settings)
+            if not save_settings(candidate_settings):
+                wx.MessageBox(
+                    "Settings could not be saved. Existing settings and API "
+                    "keys were left unchanged.",
+                    "Settings", wx.OK | wx.ICON_ERROR, parent=self)
+                self._focus_map_window_silently()
+                return
+            self.settings = candidate_settings
             set_unit_system(self.settings.get("distance_unit", "metric"))
             self.settings["_log_path"] = os.path.join(USER_DIR, "miab.log")
             self._free_engine.log_settings = self.settings
-            save_settings(self.settings)
             self._mistral.init(self.settings.get("mistral_api_key", ""))
             self._poi_fetcher.set_here_key(self.settings.get("here_api_key", ""))
             self._nav.update_settings(self.settings)
@@ -16267,7 +16400,9 @@ if __name__ == "__main__":
                 _policy_argument[len(_policy_prefix):].split(",") if value
             }
             _written_policy_path = write_education_tools(
-                _enabled_policy_tools)
+                _enabled_policy_tools,
+                allow_portable_plaintext_credentials=(
+                    "--allow-portable-plaintext-credentials" in sys.argv[1:])),
             wx.MessageBox(
                 "Education tool choices were saved for everyone who uses "
                 "this computer.",

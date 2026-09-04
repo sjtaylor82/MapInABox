@@ -172,6 +172,7 @@ class RouteTools:
     _NOMINATIM_SEARCH_URL  = "https://nominatim.openstreetmap.org/search"
     _NOMINATIM_REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"
     _PHOTON_URL            = "https://photon.komoot.io/api/"
+    _PHOTON_REVERSE_URL    = "https://photon.komoot.io/reverse"
     _OSRM_URL              = "https://router.project-osrm.org/route/v1/driving"
 
     def __init__(self, api_key: str) -> None:
@@ -302,7 +303,7 @@ class RouteTools:
             "lang": "en",
         }
         if country_code:
-            params["country"] = country_code
+            params["countrycode"] = country_code
         url = f"{self._PHOTON_URL}?{urllib.parse.urlencode(params)}"
         data = self._request_json(
             url,
@@ -434,10 +435,31 @@ class RouteTools:
                 },
             )
         except Exception:
-            return ""
+            data = {}
         addr = data.get("address", {})
         for key in ("suburb", "city_district", "quarter", "neighbourhood", "town", "city", "county"):
             value = addr.get(key, "")
+            if value:
+                return value
+
+        photon_params = {"lat": lat, "lon": lon, "lang": "en"}
+        photon_url = (
+            f"{self._PHOTON_REVERSE_URL}?"
+            f"{urllib.parse.urlencode(photon_params)}")
+        try:
+            photon_data = self._request_json(
+                photon_url,
+                timeout=8,
+                headers={"User-Agent": "MapInABox/1.0"},
+            )
+        except Exception:
+            return ""
+        features = photon_data.get("features", [])
+        if not features:
+            return ""
+        props = features[0].get("properties", {})
+        for key in ("district", "locality", "city", "county", "state"):
+            value = props.get(key, "")
             if value:
                 return value
         return ""

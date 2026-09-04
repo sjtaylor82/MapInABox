@@ -21,10 +21,11 @@ shapely_d,   shapely_b,   shapely_h   = collect_all('shapely')
 ao2_d,       ao2_b,       ao2_h       = collect_all('accessible_output2')
 pygame_d,    pygame_b,    pygame_h    = collect_all('pygame')
 certifi_d,   certifi_b,   certifi_h   = collect_all('certifi')
+keyring_d,   keyring_b,   keyring_h   = collect_all('keyring')
 
-all_datas    = shapely_d  + ao2_d + pygame_d + certifi_d
-all_binaries = shapely_b  + ao2_b + pygame_b + certifi_b
-all_hidden   = shapely_h  + ao2_h + pygame_h + certifi_h
+all_datas    = shapely_d  + ao2_d + pygame_d + certifi_d + keyring_d
+all_binaries = shapely_b  + ao2_b + pygame_b + certifi_b + keyring_b
+all_hidden   = shapely_h  + ao2_h + pygame_h + certifi_h + keyring_h
 build_edition = os.environ.get('MIAB_EDITION', 'pro').lower()
 if build_edition not in {'pro', 'education'}:
     raise ValueError(f'Unsupported MIAB_EDITION: {build_edition!r}')

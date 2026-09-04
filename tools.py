@@ -56,6 +56,25 @@ def _key_required(parent, title, message, link_label, link_url):
     show_api_key_required(parent, title, message, link_label, link_url)
 
 
+def _taxi_order_extras(taxi_orders: list[dict]) -> list[tuple[float, float]]:
+    """Compare every taxi order with the single shortest-distance order."""
+    if not taxi_orders:
+        return []
+    baseline = min(
+        taxi_orders,
+        key=lambda choice: choice["route"].get("distance_m", float("inf")),
+    )["route"]
+    baseline_m = baseline.get("distance_m", 0)
+    baseline_s = baseline.get("duration_s", 0)
+    return [
+        (
+            max(0, choice["route"].get("distance_m", 0) - baseline_m),
+            max(0, choice["route"].get("duration_s", 0) - baseline_s),
+        )
+        for choice in taxi_orders
+    ]
+
+
 def _osm_walk_features(
     pts: list,
     overpass_client,
@@ -772,9 +791,72 @@ class ToolsMixin:
         dlg.Destroy()
         return self._country_name_to_code(country_name)
 
+    def _local_geocode_candidates(self, value: str) -> list[tuple]:
+        """Resolve an exact bundled suburb/city name without a web request."""
+        city_data = getattr(self, "df", None)
+        if city_data is None or city_data.empty:
+            return []
+
+        def normalise(text):
+            return " ".join(re.findall(r"[a-z0-9]+", str(text).lower()))
+
+        query = normalise(value)
+        if not query:
+            return []
+        current_country = str(
+            getattr(self, "last_country_found", "") or "").strip()
+        rows = city_data
+        if current_country:
+            country_rows = rows[
+                rows["country"].fillna("").astype(str).str.casefold()
+                == current_country.casefold()
+            ]
+            if not country_rows.empty:
+                rows = country_rows
+
+        australian_abbreviations = {
+            "queensland": "qld", "new south wales": "nsw",
+            "victoria": "vic", "tasmania": "tas",
+            "south australia": "sa", "western australia": "wa",
+            "northern territory": "nt",
+            "australian capital territory": "act",
+        }
+        matches = []
+        seen = set()
+        for row in rows.itertuples(index=False):
+            city = str(getattr(row, "city", "")).strip()
+            admin = str(getattr(row, "admin_name", "")).strip()
+            country = str(getattr(row, "country", "")).strip()
+            if not city or city.lower() == "nan":
+                continue
+            city_key = normalise(city)
+            admin_key = normalise(admin)
+            country_key = normalise(country)
+            accepted = {
+                city_key,
+                normalise(f"{city} {admin}"),
+                normalise(f"{city} {admin} {country}"),
+                normalise(f"{city} {country}"),
+            }
+            abbreviation = australian_abbreviations.get(admin_key)
+            if abbreviation:
+                accepted.add(normalise(f"{city} {abbreviation}"))
+            if query not in accepted:
+                continue
+            key = (round(float(row.lat), 5), round(float(row.lng), 5), city_key)
+            if key in seen:
+                continue
+            seen.add(key)
+            label = ", ".join(part for part in (city, admin, country) if part)
+            matches.append((float(row.lat), float(row.lng), label))
+            if len(matches) >= 8:
+                break
+        return matches
+
     def _resolve_geocode(self, rt, value: str, country_code: str, purpose: str = "location",
                           require_confirmation: bool = True,
-                          preferred_country_code: str = ""):
+                          preferred_country_code: str = "",
+                          local_first: bool = False):
         """Resolve an address and require the user to confirm the match —
         same pattern as the "Online Jump Results" dialog: geocoding can
         return a loose/best-guess match even for nonsense input, so the
@@ -787,16 +869,19 @@ class ToolsMixin:
         user prompt to confirm against and showing a dialog would be
         either a threading violation or an unwanted interruption."""
         try:
-            candidates = []
-            # Worldwide tools should still make places in the currently open
-            # map's country easy to find.  Ask for local matches first, then
-            # append worldwide matches so an unqualified name such as
-            # "Cleveland" offers both Queensland and Ohio.
+            candidates = (
+                self._local_geocode_candidates(value)
+                if local_first else [])
+            if candidates:
+                self._tool_trace(
+                    f"Geocode for {value!r}: using bundled locality data.")
             preferred = (preferred_country_code or "").strip()
-            if preferred and not country_code:
+            if not candidates and preferred and not country_code:
                 candidates.extend(
                     rt.geocode_candidates(value, preferred, limit=8))
-            candidates.extend(rt.geocode_candidates(value, country_code, limit=8))
+            if not candidates:
+                candidates.extend(
+                    rt.geocode_candidates(value, country_code, limit=8))
 
             unique = []
             seen_candidates = set()
@@ -809,7 +894,8 @@ class ToolsMixin:
                     unique.append(candidate)
             candidates = unique[:8]
         except Exception as exc:
-            self._tool_trace(f"Geocode candidate lookup failed for {value!r}: {exc}")
+            self._tool_trace(
+                f"Geocode candidate lookup failed for {value!r}: {exc}")
             candidates = []
 
         if not candidates:
@@ -842,7 +928,13 @@ class ToolsMixin:
         dlg.Destroy()
         if sel == wx.NOT_FOUND or sel >= len(candidates):
             return None
-        return candidates[sel]
+        lat, lon, formatted = candidates[sel]
+        if "airport" in value.casefold() and "airport" in formatted.casefold():
+            # Open geocoders can attach an airport point to a long address on
+            # the opposite edge of its grounds. Keep the recognised airport
+            # name without presenting that boundary address as the terminal.
+            formatted = formatted.split(",", 1)[0].strip()
+        return lat, lon, formatted
 
     def _tool_detour_calculator(self):
         if not self._education_tool_allowed("detour_calculator"):
@@ -1009,7 +1101,7 @@ class ToolsMixin:
             self._finish_thinking()
             return
 
-        origin_text, dest_a_text, dest_b_text, mode = dlg.GetValues()
+        origin_text, dest_a_text, dest_b_text, mode, optional_text = dlg.GetValues()
         dlg.Destroy()
 
         if not origin_text or not dest_a_text:
@@ -1025,9 +1117,21 @@ class ToolsMixin:
 
         self._tool_trace(f"Shared Journey: {mode} started.")
 
+        if mode == "meet_halfway":
+            first_purpose = "your location"
+            second_purpose = "friend's location"
+        elif mode == "meet_before":
+            first_purpose = "your starting place"
+            second_purpose = "friend's starting place"
+        else:
+            first_purpose = "event location"
+            second_purpose = "your destination"
+
         self._tool_trace(f"Shared Journey: finding first place {origin_text!r}.")
         try:
-            resolved = self._resolve_geocode(rt, origin_text, country_code, "starting point")
+            resolved = self._resolve_geocode(
+                rt, origin_text, country_code, first_purpose,
+                local_first=True)
             if resolved is None:
                 self._status_update("Shared journey cancelled.", force=True)
                 self._finish_thinking()
@@ -1040,7 +1144,9 @@ class ToolsMixin:
 
         self._tool_trace(f"Shared Journey: finding second place {dest_a_text!r}.")
         try:
-            resolved = self._resolve_geocode(rt, dest_a_text, country_code, "destination")
+            resolved = self._resolve_geocode(
+                rt, dest_a_text, country_code, second_purpose,
+                local_first=True)
             if resolved is None:
                 self._status_update("Shared journey cancelled.", force=True)
                 self._finish_thinking()
@@ -1056,7 +1162,9 @@ class ToolsMixin:
             self._tool_trace(f"Shared Journey: finding third place {dest_b_text!r}.")
             try:
                 purpose = "event location" if mode == "meet_before" else "friend's destination"
-                resolved = self._resolve_geocode(rt, dest_b_text, country_code, purpose)
+                resolved = self._resolve_geocode(
+                    rt, dest_b_text, country_code, purpose,
+                    local_first=True)
                 if resolved is None:
                     self._status_update("Shared journey cancelled.", force=True)
                     self._finish_thinking()
@@ -1068,15 +1176,36 @@ class ToolsMixin:
                 self._finish_thinking()
                 return
 
-        if not b_info:
+        if mode != "meet_halfway" and not b_info:
             msg = "Please enter the event location." if mode == "meet_before" else "Please enter your friend's destination."
             self._status_update(msg, force=True)
             self._finish_thinking()
             return
 
+        optional_info = None
+        if optional_text and mode in ("friend_dropoff", "taxi_dropoff"):
+            self._tool_trace(
+                f"Shared Journey: finding optional drop-off {optional_text!r}.")
+            try:
+                resolved = self._resolve_geocode(
+                    rt, optional_text, country_code, "optional drop-off",
+                    local_first=True)
+                if resolved is None:
+                    self._status_update(
+                        "Shared journey cancelled.", force=True)
+                    self._finish_thinking()
+                    return
+                optional_info = resolved
+            except Exception as e:
+                self._status_update(
+                    f"Could not find '{optional_text}': {e}", force=True)
+                self._finish_thinking()
+                return
+
+        self._status_update("Building list...", force=True)
         self._thinking(play_busy_sound=False)
 
-        def _route_candidates(points):
+        def _route_candidates(points, interval_override=None):
             if len(points) < 2:
                 return []
             total_m = 0.0
@@ -1092,7 +1221,9 @@ class ToolsMixin:
             if total_m <= 0:
                 return [(0.0, points[0][0], points[0][1])]
 
-            if total_m < 10_000:
+            if interval_override is not None:
+                interval_m = float(interval_override)
+            elif total_m < 10_000:
                 interval_m = 250.0
             elif total_m < 50_000:
                 interval_m = 500.0
@@ -1126,19 +1257,124 @@ class ToolsMixin:
                 for sample in samples
             )
 
-        def _label_point(lat, lon):
+        suburb_label_cache = {}
+
+        def _label_point(lat, lon, allow_coordinates=True):
+            cache_key = (round(lat, 3), round(lon, 3))
+            if cache_key in suburb_label_cache:
+                suburb = suburb_label_cache[cache_key]
+                if suburb:
+                    return suburb
+                return f"{lat:.5f}, {lon:.5f}" if allow_coordinates else ""
             suburb = ""
+            city_data = getattr(self, "df", None)
+            if city_data is not None and not city_data.empty:
+                nearby = city_data[
+                    (city_data["lat"].sub(lat).abs() <= 0.08)
+                    & (city_data["lng"].sub(lon).abs() <= 0.08)
+                ]
+                if not nearby.empty:
+                    nearest_row = min(
+                        nearby.itertuples(index=False),
+                        key=lambda row: _haversine_m(
+                            lat, lon, float(row.lat), float(row.lng)),
+                    )
+                    local_distance_m = _haversine_m(
+                        lat, lon,
+                        float(nearest_row.lat), float(nearest_row.lng))
+                    if local_distance_m <= 5000:
+                        local_name = str(nearest_row.city).strip()
+                        if local_name and local_name.lower() != "nan":
+                            suburb = local_name
             try:
-                suburb = rt._reverse_geocode_suburb(lat, lon) or ""
+                if not suburb:
+                    suburb = rt._reverse_geocode_suburb(lat, lon) or ""
             except Exception:
                 suburb = ""
+            suburb_label_cache[cache_key] = suburb
             if suburb:
                 return suburb
-            return f"{lat:.5f}, {lon:.5f}"
+            return f"{lat:.5f}, {lon:.5f}" if allow_coordinates else ""
 
         def _calc():
             try:
-                if mode == "meet_before":
+                if mode == "meet_halfway":
+                    route = rt._compute_route(
+                        (o_lat, o_lon), (a_lat, a_lon),
+                        request_polyline=True)
+                    polyline = route.get("polyline", "")
+                    if not polyline:
+                        raise RuntimeError("No route found between the two places.")
+                    halfway_samples = [
+                        {"source": "halfway", "progress_m": p,
+                         "lat": lat, "lon": lon}
+                        for p, lat, lon in _route_candidates(
+                            _decode_polyline(polyline), interval_override=250)
+                    ]
+                    if not halfway_samples:
+                        raise RuntimeError("No halfway places were found.")
+                    total_m = max(
+                        route.get("distance_m", 0.0),
+                        halfway_samples[-1]["progress_m"])
+                    total_s = max(int(route.get("duration_s", 0) or 0), 1)
+                    midpoint_m = total_m / 2
+                    candidate_sets = halfway_samples
+                    # Use MIAB's bundled suburb/locality catalogue rather than
+                    # making one reverse-geocoding request per route sample.
+                    # Keep localities near both the route and its midpoint.
+                    city_data = getattr(self, "df", None)
+                    if city_data is not None and not city_data.empty:
+                        midpoint_sample = min(
+                            halfway_samples,
+                            key=lambda sample: abs(
+                                sample["progress_m"] - midpoint_m),
+                        )
+                        nearby = city_data[
+                            (city_data["lat"].sub(midpoint_sample["lat"]).abs()
+                             <= 0.12)
+                            & (city_data["lng"].sub(midpoint_sample["lon"]).abs()
+                               <= 0.12)
+                        ]
+                        locality_candidates = []
+                        seen_localities = set()
+                        for _row_index, row in nearby.iterrows():
+                            name = str(row.get("city", "")).strip()
+                            if not name or name.lower() == "nan":
+                                continue
+                            key = name.casefold()
+                            if key in seen_localities:
+                                continue
+                            lat = float(row["lat"])
+                            lon = float(row["lng"])
+                            nearest_route = min(
+                                halfway_samples,
+                                key=lambda sample: _haversine_m(
+                                    lat, lon,
+                                    sample["lat"], sample["lon"]),
+                            )
+                            route_offset_m = _haversine_m(
+                                lat, lon,
+                                nearest_route["lat"], nearest_route["lon"])
+                            if route_offset_m > 5000:
+                                continue
+                            if abs(nearest_route["progress_m"] - midpoint_m) > 15000:
+                                continue
+                            seen_localities.add(key)
+                            locality_candidates.append({
+                                "source": "halfway",
+                                "progress_m": nearest_route["progress_m"],
+                                "lat": lat,
+                                "lon": lon,
+                                "route_offset_m": route_offset_m,
+                                "custom_label": name,
+                            })
+                        if locality_candidates:
+                            candidate_sets = locality_candidates
+                            self._tool_trace(
+                                "Shared Journey: using bundled locality data "
+                                f"for {len(locality_candidates)} halfway candidates."
+                            )
+                elif mode == "meet_before":
                     # Follow both journeys toward the event and look for places
                     # where the routes come together without favouring either person.
                     user_route = rt._compute_route(
@@ -1174,7 +1410,7 @@ class ToolsMixin:
                     route = user_route
                     candidate_sets = user_samples + friend_samples
                     total_m = max(user_total_m, friend_total_m)
-                elif mode == "dropoff_after":
+                elif mode in ("friend_dropoff", "taxi_dropoff"):
                     # Both leave the event together. Compare the route to each
                     # person's destination and find an easy place to part.
                     user_route = rt._compute_route(
@@ -1187,6 +1423,31 @@ class ToolsMixin:
                         (b_info[0], b_info[1]),
                         request_polyline=True,
                     )
+                    taxi_orders = []
+                    if mode == "taxi_dropoff":
+                        taxi_orders = [
+                            {
+                                "first": f"You first at {a_name}",
+                                "second": "your friend",
+                                "route": rt._compute_route(
+                                    (o_lat, o_lon),
+                                    (b_info[0], b_info[1]),
+                                    intermediates=[(a_lat, a_lon)],
+                                ),
+                            },
+                            {
+                                "first": f"Your friend first at {b_info[2]}",
+                                "second": "you",
+                                "route": rt._compute_route(
+                                    (o_lat, o_lon),
+                                    (a_lat, a_lon),
+                                    intermediates=[(b_info[0], b_info[1])],
+                                ),
+                            },
+                        ]
+                        taxi_orders.sort(
+                            key=lambda choice: choice["route"].get(
+                                "distance_m", float("inf")))
                     user_polyline = user_route.get("polyline", "")
                     friend_polyline = friend_route.get("polyline", "")
                     if not user_polyline or not friend_polyline:
@@ -1214,6 +1475,12 @@ class ToolsMixin:
                     progress_m = candidate["progress_m"]
                     lat = candidate["lat"]
                     lon = candidate["lon"]
+                    if mode == "meet_halfway":
+                        return (
+                            abs(progress_m - midpoint_m)
+                            + candidate.get("route_offset_m", 0),
+                            progress_m,
+                        )
                     if mode == "meet_before":
                         if candidate.get("source") == "you":
                             user_progress_m = progress_m
@@ -1236,7 +1503,7 @@ class ToolsMixin:
                         # favour similar arrival times and an earlier meeting.
                         return (gap_m + abs(user_time_s - friend_time_s) * 12,
                                 user_time_s + friend_time_s, gap_m)
-                    if mode == "dropoff_after":
+                    if mode in ("friend_dropoff", "taxi_dropoff"):
                         # minimise: user's remaining journey + heavily weighted friend detour.
                         # friend detour is weighted 4x — a 5 km detour for the friend costs as
                         # much as 20 km of remaining journey for the user.
@@ -1244,14 +1511,30 @@ class ToolsMixin:
                             user_samples,
                             key=lambda s: _haversine_m(lat, lon, s["lat"], s["lon"]),
                         )
+                        nearest_friend = min(
+                            friend_samples,
+                            key=lambda s: _haversine_m(
+                                lat, lon, s["lat"], s["lon"]),
+                        )
                         remaining_user_m = max(user_total_m - nearest_user["progress_m"], 0.0)
                         friend_detour_m = _nearest_sample_distance(lat, lon, friend_samples)
-                        return (remaining_user_m + 4 * friend_detour_m, remaining_user_m, friend_detour_m, progress_m)
+                        shared_m = nearest_friend["progress_m"]
+                        return (
+                            remaining_user_m + 4 * friend_detour_m,
+                            remaining_user_m,
+                            friend_detour_m,
+                            -shared_m,
+                        )
                     return (progress_m,)
 
                 ranked = sorted(candidate_sets, key=_score)
                 selected = []
-                min_spacing_m = max(250.0, total_m * 0.03)
+                halfway_labels = set()
+                selection_limit = 7 if mode == "meet_halfway" else 6
+                min_spacing_m = (
+                    500.0 if mode == "meet_halfway"
+                    else max(250.0, total_m * 0.03)
+                )
                 for candidate in ranked:
                     progress_m = candidate["progress_m"]
                     lat = candidate["lat"]
@@ -1263,29 +1546,54 @@ class ToolsMixin:
                             continue
                     # Avoid recommending a drop-off when the passenger is
                     # already almost at their destination.
-                    if mode == "dropoff_after":
+                    if mode in ("friend_dropoff", "taxi_dropoff"):
                         nu = min(user_samples, key=lambda s: _haversine_m(lat, lon, s["lat"], s["lon"]))
                         if max(user_total_m - nu["progress_m"], 0.0) < 2000:
                             continue
+                        nf = min(friend_samples, key=lambda s: _haversine_m(
+                            lat, lon, s["lat"], s["lon"]))
+                        if nf["progress_m"] < 2000:
+                            continue
                     # Both choices pool two routes, so remove nearby repeats.
-                    if mode in ("meet_before", "dropoff_after"):
+                    if mode in ("meet_before", "friend_dropoff", "taxi_dropoff"):
                         if any(_haversine_m(lat, lon, item["lat"], item["lon"]) < min_spacing_m for item in selected):
                             continue
                     elif any(abs(progress_m - item["progress_m"]) < min_spacing_m for item in selected):
                         continue
-                    selected.append({
+                    selected_item = {
                         "progress_m": progress_m,
                         "lat": lat,
                         "lon": lon,
                         "source": candidate.get("source", "shared"),
-                    })
-                    if len(selected) >= 6:
+                    }
+                    if mode == "meet_halfway":
+                        halfway_label = (
+                            candidate.get("custom_label")
+                            or _label_point(
+                                lat, lon, allow_coordinates=False)
+                        )
+                        if not halfway_label:
+                            continue
+                        halfway_key = halfway_label.lower().strip()
+                        if halfway_key in halfway_labels:
+                            continue
+                        halfway_labels.add(halfway_key)
+                        selected_item["custom_label"] = halfway_label
+                    selected.append(selected_item)
+                    if len(selected) >= selection_limit:
                         break
+                if mode == "meet_halfway":
+                    self._tool_trace(
+                        "Shared Journey: halfway suburbs selected: "
+                        + ", ".join(
+                            item.get("custom_label", "unknown")
+                            for item in selected)
+                        + "."
+                    )
 
                 # If the routes only meet at the event, retain that simplest
-                # answer but also offer a few nearby compromises. A compromise
-                # must leave a useful shared journey and keep the routes close
-                # enough that the extra effort remains modest.
+                # answer but also offer a few nearby compromises. Keep the
+                # routes close enough that the extra effort remains modest.
                 natural_only_at_event = (
                     mode == "meet_before" and bool(selected)
                     and all(_haversine_m(
@@ -1294,6 +1602,7 @@ class ToolsMixin:
                             for item in selected)
                 )
                 if natural_only_at_event:
+                    compromise_count = 0
                     for candidate in ranked:
                         lat = candidate["lat"]
                         lon = candidate["lon"]
@@ -1302,27 +1611,48 @@ class ToolsMixin:
                             if candidate.get("source") == "you"
                             else user_samples
                         )
-                        route_gap_m = _nearest_sample_distance(
-                            lat, lon, other_route)
-                        shared_remaining_m = _haversine_m(
-                            lat, lon, b_info[0], b_info[1])
-                        if not (1500 < route_gap_m <= 5000):
-                            continue
-                        if shared_remaining_m < 5000:
+                        nearest_other = min(
+                            other_route,
+                            key=lambda sample: _haversine_m(
+                                lat, lon, sample["lat"], sample["lon"]),
+                        )
+                        route_gap_m = _haversine_m(
+                            lat, lon,
+                            nearest_other["lat"], nearest_other["lon"])
+                        meeting_lat = (lat + nearest_other["lat"]) / 2
+                        meeting_lon = (lon + nearest_other["lon"]) / 2
+                        # The meeting place is halfway across this gap, so
+                        # neither person is asked to move more than 4 km.
+                        if not (1500 < route_gap_m <= 8000):
                             continue
                         if any(_haversine_m(
-                                lat, lon, item["lat"], item["lon"])
+                                meeting_lat, meeting_lon,
+                                item["lat"], item["lon"])
                                < min_spacing_m for item in selected):
                             continue
+                        if candidate.get("source") == "you":
+                            user_progress_m = candidate["progress_m"]
+                            friend_progress_m = nearest_other["progress_m"]
+                        else:
+                            friend_progress_m = candidate["progress_m"]
+                            user_progress_m = nearest_other["progress_m"]
                         selected.append({
                             "progress_m": candidate["progress_m"],
-                            "lat": lat,
-                            "lon": lon,
-                            "source": candidate.get("source", "shared"),
+                            "lat": meeting_lat,
+                            "lon": meeting_lon,
+                            "source": "compromise",
                             "route_gap_m": route_gap_m,
+                            "user_progress_m": user_progress_m,
+                            "friend_progress_m": friend_progress_m,
                         })
+                        compromise_count += 1
                         if len(selected) >= 4:
                             break
+                    self._tool_trace(
+                        "Shared Journey: added "
+                        f"{compromise_count} shared-detour choice(s), with "
+                        "up to 4 kilometres travel from each natural route."
+                    )
                 if not selected:
                     if mode == "meet_before":
                         candidate = user_samples[-1]
@@ -1335,18 +1665,52 @@ class ToolsMixin:
                                 "lon": candidate["lon"],
                                 "source": candidate.get("source", "shared"),
                             })
+                if (mode in ("friend_dropoff", "taxi_dropoff")
+                        and optional_info is not None):
+                    custom_lat, custom_lon, custom_name = optional_info
+                    nearest_friend = min(
+                        friend_samples,
+                        key=lambda s: _haversine_m(
+                            custom_lat, custom_lon, s["lat"], s["lon"]),
+                    )
+                    if not any(_haversine_m(
+                            custom_lat, custom_lon, item["lat"], item["lon"])
+                               < 250 for item in selected):
+                        selected.append({
+                            "progress_m": nearest_friend["progress_m"],
+                            "lat": custom_lat,
+                            "lon": custom_lon,
+                            "source": "custom",
+                            "custom_label": custom_name,
+                        })
 
                 result_rows = []
                 for idx, item in enumerate(selected, start=1):
                     progress_m = item["progress_m"]
                     lat = item["lat"]
                     lon = item["lon"]
-                    label = _label_point(lat, lon)
+                    label = item.get("custom_label") or _label_point(lat, lon)
                     if label == f"{lat:.5f}, {lon:.5f}":
                         label = f"{label} on the route"
                     summary = f"{idx}. {label}"
-                    if mode == "meet_before":
-                        if item.get("source") == "you":
+                    if mode == "meet_halfway":
+                        your_m = progress_m
+                        friend_m = max(total_m - progress_m, 0.0)
+                        your_s = int(total_s * min(
+                            your_m / max(total_m, 1), 1.0))
+                        friend_s = int(total_s * min(
+                            friend_m / max(total_m, 1), 1.0))
+                        detail = "\n".join([
+                            f"About {_fmt_distance(int(round(your_m)))} for you, "
+                            f"roughly {_fmt_duration(your_s)}.",
+                            f"About {_fmt_distance(int(round(friend_m)))} for your friend, "
+                            f"roughly {_fmt_duration(friend_s)}.",
+                        ])
+                    elif mode == "meet_before":
+                        if "user_progress_m" in item:
+                            user_progress_m = item["user_progress_m"]
+                            friend_progress_m = item["friend_progress_m"]
+                        elif item.get("source") == "you":
                             user_progress_m = progress_m
                             other = min(friend_samples, key=lambda s: _haversine_m(lat, lon, s["lat"], s["lon"]))
                             friend_progress_m = other["progress_m"]
@@ -1370,33 +1734,52 @@ class ToolsMixin:
                             detail += (
                                 "\nThis is an alternative: the two natural routes "
                                 f"are about {_fmt_distance(int(round(route_gap_m)))} "
-                                "apart here, so one person needs to make a short detour."
+                                "apart here. Each person moves about "
+                                f"{_fmt_distance(int(round(route_gap_m / 2)))} "
+                                "toward the meeting place."
                             )
-                    elif mode == "dropoff_after":
+                    elif mode in ("friend_dropoff", "taxi_dropoff"):
                         nearest_user = min(
                             user_samples,
                             key=lambda s: _haversine_m(lat, lon, s["lat"], s["lon"]),
                         )
                         remaining_user_m = max(user_total_m - nearest_user["progress_m"], 0.0)
-                        carried_m = user_total_m - remaining_user_m
                         friend_detour_m = _nearest_sample_distance(lat, lon, friend_samples)
                         nearest_friend = min(
                             friend_samples,
                             key=lambda s: _haversine_m(lat, lon, s["lat"], s["lon"]),
                         )
                         friend_progress_m = nearest_friend["progress_m"]
+                        carried_m = friend_progress_m
                         friend_total_m = max(total_m, friend_samples[-1]["progress_m"])
                         friend_remaining_m = max(friend_total_m - friend_progress_m, 0.0)
                         on_friend_route = friend_detour_m < 500
-                        detour_line = (
-                            "This is already on your friend's way home."
-                            if on_friend_route
-                            else f"Your friend travels about {_fmt_distance(int(round(friend_detour_m)))} out of their way."
-                        )
+                        if mode == "taxi_dropoff":
+                            detour_line = (
+                                "This is already on the taxi route."
+                                if on_friend_route
+                                else "The taxi leaves its direct route by about "
+                                     f"{_fmt_distance(int(round(friend_detour_m)))}."
+                            )
+                            remaining_line = (
+                                "The taxi then has about "
+                                f"{_fmt_distance(int(round(friend_remaining_m)))} "
+                                "to your friend's destination."
+                            )
+                        else:
+                            detour_line = (
+                                "This is already on your friend's way home."
+                                if on_friend_route
+                                else f"Your friend travels about {_fmt_distance(int(round(friend_detour_m)))} out of their way."
+                            )
+                            remaining_line = (
+                                "Your friend has about "
+                                f"{_fmt_distance(int(round(friend_remaining_m)))} left."
+                            )
                         detail = "\n".join([
                             f"You travel together for about {_fmt_distance(int(round(carried_m)))}.",
                             f"You have about {_fmt_distance(int(round(remaining_user_m)))} left after the drop-off.",
-                            f"Your friend has about {_fmt_distance(int(round(friend_remaining_m)))} left.",
+                            remaining_line,
                             detour_line,
                         ])
                     else:
@@ -1405,20 +1788,70 @@ class ToolsMixin:
                         "summary": summary,
                         "detail_text": detail,
                         "_label_key": label.lower().strip(),
+                        "_user_choice": item.get("source") == "custom",
                     })
+
+                if mode == "taxi_dropoff":
+                    # Generic sampled road points are useful when a friend is
+                    # driving, but they are noise in a taxi comparison. Keep
+                    # only an alternative the user deliberately asked to test.
+                    result_rows = [
+                        row for row in result_rows if row.get("_user_choice")
+                    ]
+                    taxi_rows = []
+                    taxi_extras = _taxi_order_extras(taxi_orders)
+                    for choice, (extra_m, extra_s) in zip(
+                            taxi_orders, taxi_extras):
+                        taxi_route = choice["route"]
+                        legs = taxi_route.get("legs") or []
+                        second_leg = legs[-1] if len(legs) > 1 else {}
+                        detail_lines = [
+                            "Taxi total: "
+                            f"{taxi_route.get('distance_text', 'unknown distance')}, "
+                            f"{taxi_route.get('duration_text', 'unknown time')}.",
+                        ]
+                        if second_leg:
+                            remaining_for = (
+                                "you" if choice["second"] == "you"
+                                else "your friend")
+                            detail_lines.append(
+                                f"Remaining taxi journey for {remaining_for}: "
+                                f"{second_leg.get('distance_text', 'an unknown distance')}, "
+                                f"{second_leg.get('duration_text', 'an unknown time')}."
+                            )
+                        if extra_m >= 1000 or extra_s >= 300:
+                            detail_lines.append(
+                                "Compared with the shorter order, this adds "
+                                f"about {_fmt_distance(int(round(extra_m)))}"
+                                + (f" and {_fmt_duration(int(round(extra_s)))}."
+                                   if extra_s else ".")
+                            )
+                        taxi_rows.append({
+                            "summary": choice["first"],
+                            "detail_text": "\n".join(detail_lines),
+                            "_label_key": "taxi:" + choice["first"].lower(),
+                        })
+                    result_rows = taxi_rows + result_rows
 
                 if selected:
                     best = selected[0]
-                    if mode == "meet_before":
+                    if mode == "meet_halfway":
+                        trace_bits = ["closest to halfway by road"]
+                    elif mode == "meet_before":
                         trace_bits = ["balanced meeting place before the event"]
-                    elif mode == "dropoff_after":
+                    elif mode in ("friend_dropoff", "taxi_dropoff"):
                         best_nearest_user = min(
                             user_samples,
                             key=lambda s: _haversine_m(best["lat"], best["lon"], s["lat"], s["lon"]),
                         )
                         best_remaining_user = max(user_total_m - best_nearest_user["progress_m"], 0.0)
                         best_friend_detour = _nearest_sample_distance(best["lat"], best["lon"], friend_samples)
-                        best_carried = user_total_m - best_remaining_user
+                        best_nearest_friend = min(
+                            friend_samples,
+                            key=lambda s: _haversine_m(
+                                best["lat"], best["lon"], s["lat"], s["lon"]),
+                        )
+                        best_carried = best_nearest_friend["progress_m"]
                         trace_bits = [
                             f"carries you ~{_fmt_distance(int(round(best_carried)))}",
                             f"~{_fmt_distance(int(round(best_remaining_user)))} still to your destination",
@@ -1441,11 +1874,13 @@ class ToolsMixin:
                         continue
                     seen_labels.add(key)
                     row.pop("_label_key", None)
+                    row.pop("_user_choice", None)
                     deduped_rows.append(row)
                 result_rows = deduped_rows
 
                 for idx, row in enumerate(result_rows, start=1):
-                    row["summary"] = re.sub(r"^\d+\.\s+", f"{idx}. ", row["summary"])
+                    summary_text = re.sub(r"^\d+\.\s+", "", row["summary"])
+                    row["summary"] = f"{idx}. {summary_text}"
                     row["detail_text"] = re.sub(
                         r"^Option\s+\d+\s+of\s+\d+",
                         f"Option {idx} of {len(result_rows)}",
@@ -1453,7 +1888,14 @@ class ToolsMixin:
                         count=1,
                     )
 
-                if mode == "meet_before":
+                if mode == "meet_halfway":
+                    direction = compass_name(bearing_deg(
+                        o_lat, o_lon, a_lat, a_lon))
+                    intro = (
+                        f"Your friend is {direction} of you. "
+                        "The choices closest to halfway by road are first."
+                    )
+                elif mode == "meet_before":
                     your_side = compass_name(bearing_deg(
                         b_info[0], b_info[1], o_lat, o_lon))
                     friend_side = compass_name(bearing_deg(
@@ -1481,15 +1923,20 @@ class ToolsMixin:
                             + "The fairest meeting places are first. "
                             "Browse down for more choices."
                         )
-                elif mode == "dropoff_after":
+                elif mode == "friend_dropoff":
                     intro = (
                         "The easiest drop-off places are first. Browse down for more choices."
+                    )
+                elif mode == "taxi_dropoff":
+                    intro = (
+                        "The shortest taxi choices are first. Earlier drop-offs remain "
+                        "available when they leave a sensible onward journey."
                     )
                 else:
                     intro = "Browse down for more choices."
 
                 wx.CallAfter(
-                    self._show_rendezvous_results,
+                    _show_built_list,
                     o_name,
                     a_name,
                     b_info[2] if b_info else "",
@@ -1505,10 +1952,32 @@ class ToolsMixin:
                 self._thinking_beep_active = False
             except Exception as e:
                 self._tool_trace(f"Shared Journey failed: {e}")
-                wx.CallAfter(self._status_update, f"Shared journey failed: {e}", True)
-                wx.CallAfter(self._finish_thinking)
+                wx.CallAfter(_show_build_error, str(e))
 
         from route_tools import _decode_polyline, _fmt_distance, _fmt_duration, _haversine_m
+
+        building_dialog = wx.ProgressDialog(
+            "Shared Journey",
+            "Building list...",
+            maximum=100,
+            parent=self,
+            style=wx.PD_APP_MODAL,
+        )
+        building_dialog.Pulse("Building list...")
+
+        def _close_building_dialog():
+            if building_dialog:
+                building_dialog.Destroy()
+
+        def _show_built_list(*args):
+            _close_building_dialog()
+            self._show_rendezvous_results(*args)
+
+        def _show_build_error(message):
+            _close_building_dialog()
+            self._status_update(
+                f"Shared journey failed: {message}", force=True)
+            self._finish_thinking()
 
         threading.Thread(target=_calc, daemon=True).start()
 
@@ -3878,12 +4347,19 @@ class ToolsMixin:
             self._finish_thinking()
             return
 
-        if mode == "meet_before":
+        if mode == "meet_halfway":
+            header = f"Your starting place: {origin_name}."
+            header += f" Friend's starting place: {dest_a_name}."
+            header += (
+                f" Route between you: {route_duration_text}, "
+                f"{route_distance_text}."
+            )
+        elif mode == "meet_before":
             header = f"Your starting place: {origin_name}."
             header += f" Friend's starting place: {dest_a_name}."
             header += f" Event: {dest_b_name}."
             header += " Meet before the event."
-        elif mode == "dropoff_after":
+        elif mode in ("friend_dropoff", "taxi_dropoff"):
             header = f"Event: {origin_name}."
             header += f" Your destination: {dest_a_name}."
             header += f" Friend's destination: {dest_b_name}."

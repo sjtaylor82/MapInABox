@@ -274,15 +274,21 @@
 
 <p>Shared Journey helps two people decide where to meet before an event or where to part after it. The best choices are shown first.</p>
 
+<p>Shared Journey displays <strong>Building list...</strong> until the choices are ready. Open-data services can take longer than Google.</p>
+
+<p>Known suburb and city names, along with the names shown in result lists, come from MIAB's bundled locality data where possible. Full street addresses and road calculations still use the selected online routing service.</p>
+
+<p><strong>Meet halfway</strong> asks where you and your friend are starting. It lists meeting areas closest to halfway by road and shows the approximate travel for each person. This is useful when crossing town for lunch or another casual meeting.</p>
+
 <p><strong>Meet before an event</strong></p>
 <ol>
   <li>Enter your starting place.</li>
   <li>Enter your friend's starting place.</li>
   <li>Enter the event location.</li>
 </ol>
-<p>Map in a Box follows both journeys toward the event and looks for fair places where the routes come together. Each choice tells you roughly how long each person travels before meeting and how long remains to the event. Tab to <strong>Why these choices</strong> to read which side of the event each person approaches from and why the choices were made.</p>
+<p>Map in a Box follows both journeys toward the event and looks for fair places where the routes come together. Places within 1.5 kilometres are treated as natural meeting choices. When the routes are farther apart, MIAB may suggest a place between them, with each person moving no more than 4 kilometres toward it. These choices are clearly marked as detours. Each choice tells you roughly how long each person travels before meeting and how long remains to the event. Tab to <strong>Why these choices</strong> to read which side of the event each person approaches from and why the choices were made.</p>
 
-<p><strong>Drop off after an event</strong></p>
+<p><strong>Friend is driving after an event</strong></p>
 <ol>
   <li>Enter the event location.</li>
   <li>Enter your destination.</li>
@@ -290,7 +296,9 @@
 </ol>
 <p>Map in a Box looks for places where your friend can drop you off without going far out of their way. Each choice tells you how far you travel together, how far each person has left, and whether the stop is already on your friend's way.</p>
 
-<p>Sometimes both routes stay apart until close to the event. In that case, Map in a Box keeps the event as the simplest choice. It may also offer a few nearby alternatives when the routes are not far apart and there is still a useful journey to share. These alternatives clearly say that one person needs to make a short detour.</p>
+<p><strong>Sharing a taxi after an event</strong> uses the same three places. It compares both destination orders to find the shorter taxi trip. When the longer order adds at least 1 kilometre or 5 minutes, the result says how much extra it adds. For either driving choice, you can optionally enter a station, interchange, or other drop-off that you want included in the comparison.</p>
+
+<p>Sometimes both routes stay apart until close to the event. In that case, Map in a Box keeps the event as the simplest choice and may also offer nearby alternatives when each person can reach the meeting area with a modest detour.</p>
 
 <h3 id="tool-toll">14.4 Toll Compare</h3>
 
@@ -442,6 +450,10 @@
 </ul>
 
 <h3>17.1 API keys and what they unlock</h3>
+
+<p>Each saved API service has a <strong>Use</strong> checkbox in Settings. Clear it to stop MIAB using that service without deleting its key or sign-in details. Turn it on again whenever you want to resume the service.</p>
+
+<p>Installed versions keep API keys in the computer's secure credential storage. Portable MIAB normally does the same, so the keys stay on that computer when the portable folder is moved. Portable users may instead choose to store keys as plain text in the portable Data folder. This makes the keys portable, but anyone who can access or copy that folder can read them. MIAB warns before enabling this choice. In Education, a computer administrator must allow plain-text storage before it can be selected.</p>
 
 <table>
   <tr><th>Key</th><th>Where to get it</th><th>What it enables</th></tr>

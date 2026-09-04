@@ -20,10 +20,12 @@ import sys
 import wx
 import wx.adv
 
-from app_paths import EDUCATION_EDITION
+from app_paths import EDUCATION_EDITION, PORTABLE_MODE
 from education_policy import (
-    EDUCATION_TOOL_CHOICES, load_education_tools, request_admin_write,
+    EDUCATION_TOOL_CHOICES, load_education_policy, load_education_tools,
+    request_admin_write,
 )
+from secret_store import PORTABLE_PLAINTEXT, SECURE
 from i18n import _
 from wx_utils import _log_key_event, _primary_down
 from logging_utils import miab_log
@@ -224,6 +226,9 @@ class SettingsDialog(wx.Dialog):
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
         )
         self.settings = dict(settings)
+        # Work with the stored values. Runtime settings may deliberately hide
+        # credentials for services that are switched off.
+        settings = self.settings
         self._user_dir = user_dir
         panel = wx.Panel(self)
         vs = wx.BoxSizer(wx.VERTICAL)
@@ -260,6 +265,7 @@ class SettingsDialog(wx.Dialog):
 
         self.education_tool_checks = {}
         self.btn_apply_education_tools = None
+        self.cb_allow_plaintext_credentials = None
         if self.education_page is not None:
             education_vs.Add(wx.StaticText(
                 self.education_page,
@@ -267,7 +273,8 @@ class SettingsDialog(wx.Dialog):
                     "Choose which planning tools students can use. "
                     "Saving these choices requires computer administrator approval.")),
                 0, wx.ALL | wx.EXPAND, 8)
-            enabled_tools = load_education_tools()
+            education_policy = load_education_policy()
+            enabled_tools = education_policy["enabled_tools"]
             for label, key in EDUCATION_TOOL_CHOICES:
                 checkbox = wx.CheckBox(
                     self.education_page, label=_(label))
@@ -281,6 +288,18 @@ class SettingsDialog(wx.Dialog):
                     "Hotel Search, Virgin Australia Booking, and Order an Uber "
                     "are never available in Education.")),
                 0, wx.ALL | wx.EXPAND, 8)
+            if PORTABLE_MODE:
+                self.cb_allow_plaintext_credentials = wx.CheckBox(
+                    self.education_page,
+                    label=_(
+                        "Allow API keys to be stored with portable MIAB as "
+                        "plain text"))
+                self.cb_allow_plaintext_credentials.SetValue(
+                    education_policy[
+                        "allow_portable_plaintext_credentials"])
+                education_vs.Add(
+                    self.cb_allow_plaintext_credentials, 0,
+                    wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
             self.btn_apply_education_tools = wx.Button(
                 self.education_page,
                 label=_("Apply Education Tool Choices..."))
@@ -503,9 +522,47 @@ class SettingsDialog(wx.Dialog):
             0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
         self.transit_page.SetSizer(transit_vs)
 
+        self.credential_storage = None
+        if PORTABLE_MODE:
+            self.credential_storage = wx.RadioBox(
+                self.api_page,
+                label=_("API key storage"),
+                choices=[
+                    _("Secure on this computer (recommended)"),
+                    _("Store with portable MIAB as plain text (not recommended)"),
+                ],
+                majorDimension=1,
+                style=wx.RA_SPECIFY_ROWS,
+            )
+            stored_mode = settings.get("credential_storage", SECURE)
+            self.credential_storage.SetSelection(
+                1 if stored_mode == PORTABLE_PLAINTEXT else 0)
+            if (EDUCATION_EDITION
+                    and not load_education_policy()[
+                        "allow_portable_plaintext_credentials"]):
+                self.credential_storage.EnableItem(1, False)
+            api_vs.Add(
+                self.credential_storage, 0,
+                wx.ALL | wx.EXPAND, 8)
+            api_vs.Add(wx.StaticText(
+                self.api_page,
+                label=_(
+                    "Secure keys stay with this computer. Plain-text keys "
+                    "travel with the portable folder and can be read by "
+                    "anyone who can access it.")),
+                0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+        else:
+            api_vs.Add(wx.StaticText(
+                self.api_page,
+                label=_("API keys are kept in secure storage.")),
+                0, wx.ALL | wx.EXPAND, 8)
+
         api_vs.Add(wx.StaticText(self.api_page, label=_("Google API key - enhanced geocoding/routing, satellite/street view, Google navigation:")), 0, wx.ALL, 8)
         self.txt_google_key = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
         api_vs.Add(self.txt_google_key, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+        self.cb_google_service = wx.CheckBox(
+            self.api_page, label=_("Use Google API services"))
+        api_vs.Add(self.cb_google_service, 0, wx.LEFT | wx.BOTTOM, 8)
         api_vs.Add(wx.adv.HyperlinkCtrl(self.api_page, label=_("Get a Google API key"),
             url="https://developers.google.com/maps/get-started"), 0, wx.LEFT | wx.BOTTOM, 8)
 
@@ -513,6 +570,9 @@ class SettingsDialog(wx.Dialog):
         api_vs.Add(wx.StaticText(self.api_page, label=_("Mistral API key - optional descriptions for satellite/street view and transit:")), 0, wx.LEFT, 8)
         self.txt_mistral_key = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
         api_vs.Add(self.txt_mistral_key, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+        self.cb_mistral_service = wx.CheckBox(
+            self.api_page, label=_("Use Mistral API services"))
+        api_vs.Add(self.cb_mistral_service, 0, wx.LEFT | wx.BOTTOM, 8)
         api_vs.Add(wx.adv.HyperlinkCtrl(self.api_page, label=_("Get a Mistral API key (free mode, no credit card)"),
             url="https://console.mistral.ai/"), 0, wx.LEFT | wx.BOTTOM, 8)
 
@@ -520,6 +580,9 @@ class SettingsDialog(wx.Dialog):
         api_vs.Add(wx.StaticText(self.api_page, label=_("HERE API key - optional POI details, HERE navigation, and departure board:")), 0, wx.LEFT, 8)
         self.txt_here_key = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
         api_vs.Add(self.txt_here_key, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+        self.cb_here_service = wx.CheckBox(
+            self.api_page, label=_("Use HERE API services"))
+        api_vs.Add(self.cb_here_service, 0, wx.LEFT | wx.BOTTOM, 8)
         api_vs.Add(wx.adv.HyperlinkCtrl(self.api_page, label=_("Get a HERE API key"),
             url="https://developer.here.com/sign-up"), 0, wx.LEFT | wx.BOTTOM, 8)
 
@@ -527,6 +590,9 @@ class SettingsDialog(wx.Dialog):
         api_vs.Add(wx.StaticText(self.api_page, label=_("OpenRouteService API key - optional walking/driving distance between marks:")), 0, wx.LEFT, 8)
         self.txt_ors_key = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
         api_vs.Add(self.txt_ors_key, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+        self.cb_ors_service = wx.CheckBox(
+            self.api_page, label=_("Use OpenRouteService"))
+        api_vs.Add(self.cb_ors_service, 0, wx.LEFT | wx.BOTTOM, 8)
         api_vs.Add(wx.adv.HyperlinkCtrl(self.api_page, label=_("Get an OpenRouteService API key"),
             url="https://openrouteservice.org/sign-up/"), 0, wx.LEFT | wx.BOTTOM, 8)
 
@@ -534,6 +600,9 @@ class SettingsDialog(wx.Dialog):
         api_vs.Add(wx.StaticText(self.api_page, label=_("AviationStack API key - optional airport departure/arrival boards:")), 0, wx.LEFT, 8)
         self.txt_aviationstack_key = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
         api_vs.Add(self.txt_aviationstack_key, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+        self.cb_aviationstack_service = wx.CheckBox(
+            self.api_page, label=_("Use AviationStack"))
+        api_vs.Add(self.cb_aviationstack_service, 0, wx.LEFT | wx.BOTTOM, 8)
         api_vs.Add(wx.adv.HyperlinkCtrl(self.api_page, label=_("Get an AviationStack API key"),
             url="https://aviationstack.com/signup/free"), 0, wx.LEFT | wx.BOTTOM, 8)
 
@@ -544,6 +613,9 @@ class SettingsDialog(wx.Dialog):
         api_vs.Add(wx.StaticText(self.api_page, label=_("OpenSky client secret:")), 0, wx.LEFT, 8)
         self.txt_opensky_secret = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
         api_vs.Add(self.txt_opensky_secret, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+        self.cb_opensky_service = wx.CheckBox(
+            self.api_page, label=_("Use OpenSky"))
+        api_vs.Add(self.cb_opensky_service, 0, wx.LEFT | wx.BOTTOM, 8)
         api_vs.Add(wx.adv.HyperlinkCtrl(self.api_page, label=_("Register a free OpenSky account"),
             url="https://opensky-network.org/index.php?option=com_users&view=registration"),
             0, wx.LEFT | wx.BOTTOM, 8)
@@ -560,6 +632,9 @@ class SettingsDialog(wx.Dialog):
             0, wx.LEFT, 8)
         self.txt_rapidapi_key = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
         api_vs.Add(self.txt_rapidapi_key, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+        self.cb_rapidapi_service = wx.CheckBox(
+            self.api_page, label=_("Use RapidAPI services"))
+        api_vs.Add(self.cb_rapidapi_service, 0, wx.LEFT | wx.BOTTOM, 8)
         hs_rapid = wx.BoxSizer(wx.HORIZONTAL)
         hs_rapid.Add(wx.adv.HyperlinkCtrl(self.api_page, label=_("Sign up for RapidAPI"),
             url="https://rapidapi.com/auth/sign-up"), 0, wx.RIGHT, 16)
@@ -650,7 +725,11 @@ class SettingsDialog(wx.Dialog):
         postcode_lookup = settings.get("postcode_lookup", "included")
         self.combo_postcode_lookup.SetSelection(1 if postcode_lookup == "online" else 0)
         self.txt_google_key.SetValue(settings.get("google_api_key", ""))
-        google_available = bool(self.txt_google_key.GetValue().strip())
+        self.cb_google_service.SetValue(
+            settings.get("google_service_enabled", True))
+        google_available = bool(
+            self.txt_google_key.GetValue().strip()
+            and self.cb_google_service.GetValue())
         visual_source = settings.get("visual_mapping_source", "auto")
         if visual_source == "auto":
             visual_source = "google" if google_available else "mapillary"
@@ -664,13 +743,27 @@ class SettingsDialog(wx.Dialog):
             1 if journey_source == "google" else 0)
         self._update_google_dependent_controls(google_available)
         self.txt_google_key.Bind(wx.EVT_TEXT, self._on_google_key_changed)
+        self.cb_google_service.Bind(
+            wx.EVT_CHECKBOX, self._on_google_key_changed)
         self.txt_mistral_key.SetValue(settings.get("mistral_api_key", ""))
+        self.cb_mistral_service.SetValue(
+            settings.get("mistral_service_enabled", True))
         self.txt_here_key.SetValue(settings.get("here_api_key", ""))
+        self.cb_here_service.SetValue(
+            settings.get("here_service_enabled", True))
         self.txt_ors_key.SetValue(settings.get("ors_api_key", ""))
+        self.cb_ors_service.SetValue(
+            settings.get("ors_service_enabled", True))
         self.txt_aviationstack_key.SetValue(settings.get("aviationstack_api_key", ""))
+        self.cb_aviationstack_service.SetValue(
+            settings.get("aviationstack_service_enabled", True))
         self.txt_rapidapi_key.SetValue(settings.get("rapidapi_key", ""))
+        self.cb_rapidapi_service.SetValue(
+            settings.get("rapidapi_service_enabled", True))
         self.txt_opensky_id.SetValue(settings.get("opensky_client_id", ""))
         self.txt_opensky_secret.SetValue(settings.get("opensky_client_secret", ""))
+        self.cb_opensky_service.SetValue(
+            settings.get("opensky_service_enabled", True))
 
         ok_btn.Bind(wx.EVT_BUTTON, self._on_ok)
         self.Bind(wx.EVT_CHAR_HOOK, self._on_settings_char_hook)
@@ -714,12 +807,16 @@ class SettingsDialog(wx.Dialog):
             if checkbox.GetValue()
         }
         try:
+            allow_plaintext = bool(
+                self.cb_allow_plaintext_credentials
+                and self.cb_allow_plaintext_credentials.GetValue())
             started = request_admin_write(
                 enabled,
                 executable=sys.executable,
                 core_script=os.path.join(
                     os.path.dirname(os.path.abspath(__file__)), "core.py"),
                 frozen=bool(getattr(sys, "frozen", False)),
+                allow_portable_plaintext_credentials=allow_plaintext,
             )
         except Exception as exc:
             wx.MessageBox(
@@ -738,7 +835,9 @@ class SettingsDialog(wx.Dialog):
 
     def _on_google_key_changed(self, event) -> None:
         """Google imagery can only be selected while a key is present."""
-        available = bool(self.txt_google_key.GetValue().strip())
+        available = bool(
+            self.txt_google_key.GetValue().strip()
+            and self.cb_google_service.GetValue())
         if not available:
             if self.combo_visual_source.GetSelection() == 0:
                 self.combo_visual_source.SetSelection(1)
@@ -759,6 +858,30 @@ class SettingsDialog(wx.Dialog):
 
 
     def _on_ok(self, event) -> None:
+        credential_storage = SECURE
+        if self.credential_storage is not None:
+            credential_storage = (
+                PORTABLE_PLAINTEXT
+                if self.credential_storage.GetSelection() == 1 else SECURE)
+        if credential_storage == PORTABLE_PLAINTEXT:
+            if (EDUCATION_EDITION
+                    and not load_education_policy()[
+                        "allow_portable_plaintext_credentials"]):
+                wx.MessageBox(
+                    "A computer administrator must allow plain-text API key "
+                    "storage in Education Admin.",
+                    "API Key Storage", wx.OK | wx.ICON_ERROR, parent=self)
+                return
+            if self.settings.get("credential_storage") != PORTABLE_PLAINTEXT:
+                answer = wx.MessageBox(
+                    "API keys stored with portable MIAB can be read by anyone "
+                    "who can access or copy its Data folder. Continue?",
+                    "Plain-text API Key Storage",
+                    wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING,
+                    parent=self,
+                )
+                if answer != wx.YES:
+                    return
         cat_keys = [k for k, _ in POI_CATEGORY_CHOICES]
         nav_provider = {0: "osm", 1: "google", 2: "here"}.get(
             self.combo_nav.GetSelection(), "osm")
@@ -787,9 +910,11 @@ class SettingsDialog(wx.Dialog):
             "poi_source":             "here" if self.combo_poi_source.GetSelection() == 1 else "osm",
             "visual_mapping_source":  "google" if (
                 self.txt_google_key.GetValue().strip()
+                and self.cb_google_service.GetValue()
                 and self.combo_visual_source.GetSelection() == 0) else "mapillary",
             "driving_route_source":   "google" if (
                 self.txt_google_key.GetValue().strip()
+                and self.cb_google_service.GetValue()
                 and self.combo_drive_source.GetSelection() == 1) else "osrm",
             "journey_transport_source": "google" if (
                 self.combo_journey_transport_source.GetSelection() == 1) else "rome2rio",
@@ -803,6 +928,14 @@ class SettingsDialog(wx.Dialog):
             "rapidapi_key":             self.txt_rapidapi_key.GetValue().strip(),
             "opensky_client_id":        self.txt_opensky_id.GetValue().strip(),
             "opensky_client_secret":    self.txt_opensky_secret.GetValue().strip(),
+            "google_service_enabled": self.cb_google_service.GetValue(),
+            "mistral_service_enabled": self.cb_mistral_service.GetValue(),
+            "here_service_enabled": self.cb_here_service.GetValue(),
+            "ors_service_enabled": self.cb_ors_service.GetValue(),
+            "aviationstack_service_enabled": self.cb_aviationstack_service.GetValue(),
+            "opensky_service_enabled": self.cb_opensky_service.GetValue(),
+            "rapidapi_service_enabled": self.cb_rapidapi_service.GetValue(),
+            "credential_storage": credential_storage,
             "logging": {
                 "errors":        self.cb_log_errors.GetValue(),
                 "street":        self.cb_log_street.GetValue(),
@@ -1257,8 +1390,10 @@ class MeetPointDialog(wx.Dialog):
         self.mode = wx.RadioBox(
             panel,
             choices=[
+                "Meet halfway",
                 "Meet before an event",
-                "Drop off after an event",
+                "Friend is driving after an event",
+                "Sharing a taxi after an event",
             ],
             majorDimension=1,
             style=wx.RA_SPECIFY_ROWS,
@@ -1281,6 +1416,12 @@ class MeetPointDialog(wx.Dialog):
         self.dest_b = wx.TextCtrl(panel)
         vs.Add(self.dest_b, 0, wx.ALL | wx.EXPAND, 8)
 
+        self.optional_label = wx.StaticText(
+            panel, label="Station or other drop-off to compare (optional):")
+        vs.Add(self.optional_label, 0, wx.LEFT | wx.TOP, 8)
+        self.optional_dropoff = wx.TextCtrl(panel)
+        vs.Add(self.optional_dropoff, 0, wx.ALL | wx.EXPAND, 8)
+
         hs = wx.BoxSizer(wx.HORIZONTAL)
         ok_btn = wx.Button(panel, wx.ID_OK, "OK")
         cancel_btn = wx.Button(panel, wx.ID_CANCEL, "Cancel")
@@ -1289,7 +1430,7 @@ class MeetPointDialog(wx.Dialog):
         vs.Add(hs, 0, wx.LEFT | wx.BOTTOM, 8)
 
         panel.SetSizer(vs)
-        self.SetSize(420, 400)
+        self.SetSize(460, 480)
 
         ok_btn.Bind(wx.EVT_BUTTON, self._on_submit)
         self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
@@ -1302,12 +1443,14 @@ class MeetPointDialog(wx.Dialog):
             self.origin.GetValue().strip(),
             self.dest_a.GetValue().strip(),
             self.dest_b.GetValue().strip(),
-            ["meet_before", "dropoff_after"][self.mode.GetSelection()],
+            ["meet_halfway", "meet_before", "friend_dropoff", "taxi_dropoff"][
+                self.mode.GetSelection()],
+            self.optional_dropoff.GetValue().strip(),
         )
 
     def _apply_mode_labels(self):
         sel = self.mode.GetSelection()
-        if sel == 0:
+        if sel in (0, 1):
             self.origin_label.SetLabel("Your starting place:")
             self.dest_a_label.SetLabel("Friend's starting place:")
             self.dest_b_label.SetLabel("Event location:")
@@ -1315,8 +1458,10 @@ class MeetPointDialog(wx.Dialog):
             self.origin_label.SetLabel("Event location:")
             self.dest_a_label.SetLabel("Your destination:")
             self.dest_b_label.SetLabel("Friend's destination:")
-        self.dest_b_label.Show(True)
-        self.dest_b.Show(True)
+        self.dest_b_label.Show(sel != 0)
+        self.dest_b.Show(sel != 0)
+        self.optional_label.Show(sel >= 2)
+        self.optional_dropoff.Show(sel >= 2)
         self.Layout()
         self.Fit()
 
@@ -1326,7 +1471,7 @@ class MeetPointDialog(wx.Dialog):
 
     def _on_submit(self, event=None):
         del event
-        origin, dest_a, dest_b, mode = self.GetValues()
+        origin, dest_a, dest_b, mode, _optional_dropoff = self.GetValues()
         if not origin:
             wx.MessageBox("Please enter the first place.", "Shared Journey", parent=self)
             self.origin.SetFocus()
@@ -1335,7 +1480,7 @@ class MeetPointDialog(wx.Dialog):
             wx.MessageBox("Please enter the second place.", "Shared Journey", parent=self)
             self.dest_a.SetFocus()
             return
-        if not dest_b:
+        if mode != "meet_halfway" and not dest_b:
             label = "event location" if mode == "meet_before" else "friend's destination"
             wx.MessageBox(f"Please enter the {label}.", "Shared Journey", parent=self)
             self.dest_b.SetFocus()

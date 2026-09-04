@@ -6,14 +6,14 @@
 ;   2. Open this file in the Inno Setup IDE and click Build, or:
 ;      iscc MapInABox.iss
 
-#define AppName    "Map in a Box"
-#define AppVersion "2026.09.0"
+#define AppName    "Map in a Box Education"
+#define AppVersion "2026.09.1"
 #define AppExe     "MapInABox.exe"
 #define AppDir     "dist\MapInABox"
 
 [Setup]
 AppName={#AppName}
-AppVersion=2026.09.0
+AppVersion=2026.09.1
 AppVerName={#AppName} {#AppVersion}
 AppPublisher=Sam Taylor
 AppPublisherURL=https://github.com/sjtaylor82/MapInABox
@@ -30,7 +30,7 @@ DefaultGroupName={#AppName}
 
 ; Installer output
 OutputDir=installer
-OutputBaseFilename=MapInABox-2026.09.0-setup
+OutputBaseFilename=MapInABox-Education-2026.09.1-setup
 
 ; Compression — lzma2 ultra gives the smallest exe at the cost of slower build
 Compression=lzma2/ultra64

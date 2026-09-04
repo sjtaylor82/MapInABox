@@ -7,6 +7,7 @@ from education_policy import (
     DEFAULT_EDUCATION_TOOLS,
     EDUCATION_NEVER_AVAILABLE,
     admin_writer_arguments, load_education_tools,
+    load_education_policy,
     normalise_tools,
     policy_path,
     write_education_tools,
@@ -40,6 +41,16 @@ class EducationPolicyTests(unittest.TestCase):
             data = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(data["enabled_tools"],
                              ["departure_board", "find_food"])
+            self.assertFalse(data["allow_portable_plaintext_credentials"])
+
+    def test_plaintext_credentials_require_explicit_policy(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "policy.json"
+            write_education_tools(
+                {"departure_board"}, path,
+                allow_portable_plaintext_credentials=True)
+            self.assertTrue(load_education_policy(path)[
+                "allow_portable_plaintext_credentials"])
 
     def test_windows_policy_is_machine_wide(self):
         path = policy_path("win32", {"PROGRAMDATA": r"D:\SchoolData"})
