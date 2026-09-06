@@ -54,7 +54,9 @@ jobs:
           if ($soundFiles.Count -lt 2 -or -not (Test-Path -LiteralPath dist\MapInABox\_internal\sounds\credits.txt)) {
             throw "Portable sound library is empty or incomplete."
           }
-          Compress-Archive -Path dist\MapInABox -DestinationPath MapInABox-Windows-portable.zip -Force
+          # bsdtar writes portable forward-slash ZIP entry names. This keeps
+          # releases compatible with the updater bundled in version 2026.7.0.
+          tar.exe -a -c -f MapInABox-Windows-portable.zip -C dist MapInABox
 
       - name: Build Windows installer (Education)
         shell: powershell
@@ -77,7 +79,7 @@ jobs:
           if ($soundFiles.Count -lt 2 -or -not (Test-Path -LiteralPath dist\MapInABox\_internal\sounds\credits.txt)) {
             throw "Portable sound library is empty or incomplete."
           }
-          Compress-Archive -Path dist\MapInABox -DestinationPath MapInABox-Windows-Education-portable.zip -Force
+          tar.exe -a -c -f MapInABox-Windows-Education-portable.zip -C dist MapInABox
 
       - name: Upload Windows installer artifact
         uses: actions/upload-artifact@v4

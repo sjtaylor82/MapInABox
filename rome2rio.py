@@ -56,6 +56,117 @@ def route_url(origin: str, destination: str) -> str:
     return f"https://www.rome2rio.com/s/{_slug(origin)}/{_slug(destination)}"
 
 
+def parse_api_routes(payload: dict, page_url: str) -> list[dict]:
+    """Convert Rome2Rio's public Search response to accessible route results."""
+    places = payload.get("places") or []
+    segments = payload.get("segments") or []
+    options = payload.get("options") or []
+    hops = payload.get("hops") or []
+    lines = payload.get("lines") or []
+    carriers = payload.get("carriers") or []
+    vehicles = payload.get("vehicles") or []
+
+    def item_at(items: list, index) -> dict:
+        return (items[index] if isinstance(index, int)
+                and 0 <= index < len(items) else {})
+
+    def place_name(index) -> str:
+        place = item_at(places, index)
+        return _clean(
+            place.get("shortName") or place.get("canonicalName") or "")
+
+    def duration_text(seconds) -> str:
+        minutes = max(1, round(int(seconds or 0) / 60)) if seconds else 0
+        if not minutes:
+            return ""
+        hours, remainder = divmod(minutes, 60)
+        return (f"{hours}h {remainder}m" if hours and remainder
+                else f"{hours}h" if hours else f"{remainder}m")
+
+    parsed = []
+    for number, route in enumerate(payload.get("routes") or [], 1):
+        name = _clean(route.get("name", "")) or f"Route {number}"
+        duration = duration_text(route.get("duration"))
+
+        price_text = ""
+        prices = route.get("indicativePrices") or []
+        if prices:
+            price = prices[0]
+            currency = price.get("currencyCode") or ""
+            low, high = price.get("priceLow"), price.get("priceHigh")
+            value = price.get("price")
+            if low is not None and high is not None:
+                price_text = f"{currency} ${low}–${high}"
+            elif value is not None:
+                price_text = f"{currency} ${value}"
+
+        route_places = []
+        for index in route.get("places") or []:
+            if isinstance(index, int) and 0 <= index < len(places):
+                label = place_name(index)
+                if label and (not route_places or route_places[-1] != label):
+                    route_places.append(label)
+
+        steps = []
+        for segment_index in route.get("segments") or []:
+            segment = item_at(segments, segment_index)
+            option_indexes = segment.get("options") or []
+            option = item_at(options, option_indexes[0]) if option_indexes else {}
+            for hop_index in option.get("hops") or []:
+                hop = item_at(hops, hop_index)
+                line = item_at(lines, hop.get("line"))
+                vehicle = item_at(vehicles, hop.get("vehicle"))
+                carrier = item_at(carriers, hop.get("marketingCarrier"))
+                mode = _clean(vehicle.get("name") or vehicle.get("kind") or "Travel")
+                line_names = [
+                    _clean(value) for value in (line.get("names") or [])
+                    if _clean(value)
+                ]
+                service = "/".join(line_names)
+                operator = _clean(carrier.get("name", ""))
+                line_places = line.get("places") or []
+                origin = place_name(line_places[0]) if line_places else ""
+                destination = place_name(line_places[-1]) if line_places else ""
+                heading = (f"{operator} {mode.lower()}" if operator
+                           else mode.title())
+                if service:
+                    heading += f", service {service}"
+                if origin and destination:
+                    heading += f": {origin} to {destination}"
+                hop_duration = duration_text(hop.get("duration"))
+                if hop_duration:
+                    heading += f"; about {hop_duration}"
+                if heading:
+                    steps.append(heading + ".")
+
+        summary_parts = [f"Option {number}: {name}."]
+        if duration:
+            summary_parts.append(f"About {duration}.")
+        if price_text:
+            summary_parts.append(f"Estimated {price_text}.")
+        detail = [name]
+        if steps:
+            detail.append("Journey legs:")
+            detail.extend(
+                f"{step_number}. {step}"
+                for step_number, step in enumerate(steps, 1))
+        if route_places:
+            detail.append("Places: " + ", then ".join(route_places) + ".")
+        if duration:
+            detail.append(f"Estimated journey time: {duration}.")
+        if price_text:
+            detail.append(f"Indicative price: {price_text}.")
+        parsed.append({
+            "summary": " ".join(summary_parts),
+            "detail_text": "\n".join(detail),
+            "travel_mode": "multimodal",
+            "source": "rome2rio",
+            "source_url": page_url,
+            "legs": [],
+        })
+    return parsed
+
+
 def add_rome2rio_upcoming_flight(
         routes: list[dict], api_key: str, request_get,
         departure_date: datetime.date | None = None) -> bool:
@@ -498,12 +609,6 @@ def parse_routes(html: bytes | str, page_url: str) -> list[dict]:
             # structured flight records above whenever available; retain this
             # prose fallback for routes (especially buses) with no such data.
             detail.extend(["", "Service information: " + service_info])
-        detail.extend([
-            "",
-            "This is a broad Rome2Rio estimate, not a confirmed live timetable. "
-            "Open the route in Rome2Rio to check current details.",
-        ])
-
         href = card.get("href") or page_url
         parsed.append({
             "summary": " ".join(summary_parts),
@@ -530,7 +635,7 @@ class Rome2RioClient:
                departure_date: datetime.date | None = None) -> list[dict]:
         # Version the key when presentation/parsing changes so cached route
         # dictionaries do not retain obsolete spoken wording.
-        key = f"v9|{_clean(origin).lower()}|{_clean(destination).lower()}"
+        key = f"v10|{_clean(origin).lower()}|{_clean(destination).lower()}"
         entry = self._cache.get(key, {})
         if (isinstance(entry, dict)
                 and time.time() - float(entry.get("timestamp", 0)) < _CACHE_TTL_SECONDS
@@ -549,19 +654,37 @@ class Rome2RioClient:
             return routes
 
         url = route_url(origin, destination)
-        # Rome2Rio protects its public pages with a Cloudflare browser check.
-        # Use the known-working Edge TLS/browser fingerprint directly: trying
-        # a plain HTTP request first only creates a rejected request and delay.
         from curl_cffi import requests as browser_requests
-        response = browser_requests.get(
-            url, impersonate="edge101", timeout=30, allow_redirects=True)
-        response.raise_for_status()
-        final_url = str(response.url)
-        page = response.content
-        routes = parse_routes(page, final_url)
-        key_match = re.search(rb'"API_KEY":"([^"]+)"', page)
-        public_api_key = (
-            key_match.group(1).decode() if key_match else _PUBLIC_API_KEY)
+        # The public route page is protected by an interactive Cloudflare
+        # challenge. Use Rome2Rio's public JSON Search endpoint for application
+        # data instead of attempting to imitate a browser through that check.
+        try:
+            response = browser_requests.get(
+                "https://www.rome2rio.com/api/1.5/json/Search",
+                params={
+                    "key": _PUBLIC_API_KEY,
+                    "oName": origin,
+                    "dName": destination,
+                    "languageCode": "en",
+                    "currencyCode": "AUD",
+                },
+                impersonate="edge101", timeout=30)
+            response.raise_for_status()
+            routes = parse_api_routes(response.json(), url)
+            public_api_key = _PUBLIC_API_KEY
+        except Exception:
+            # Retain the page parser for compatibility if the JSON endpoint is
+            # temporarily unavailable but the public route page is reachable.
+            response = browser_requests.get(
+                url, impersonate="edge101", timeout=30,
+                allow_redirects=True)
+            response.raise_for_status()
+            final_url = str(response.url)
+            page = response.content
+            routes = parse_routes(page, final_url)
+            key_match = re.search(rb'"API_KEY":"([^"]+)"', page)
+            public_api_key = (
+                key_match.group(1).decode() if key_match else _PUBLIC_API_KEY)
         if routes:
             self._cache[key] = {
                 "timestamp": time.time(), "routes": routes,

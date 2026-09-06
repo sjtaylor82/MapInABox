@@ -5,6 +5,7 @@ from rome2rio import (
     add_rome2rio_flights_for_all_routes,
     add_rome2rio_upcoming_flight,
     add_rome2rio_transit_schedules,
+    parse_api_routes,
     parse_routes,
     route_url,
 )
@@ -57,6 +58,44 @@ HTML = """
 
 
 class Rome2RioTests(unittest.TestCase):
+    def test_public_search_response_becomes_accessible_journey_results(self):
+        payload = {
+            "places": [
+                {"shortName": "Brisbane"},
+                {"shortName": "Dubbo"},
+            ],
+            "segments": [{"options": [0], "duration": 63900}],
+            "options": [{"hops": [0]}],
+            "hops": [{
+                "line": 0, "vehicle": 0, "marketingCarrier": 0,
+                "duration": 63900,
+            }],
+            "lines": [{"places": [0, 1], "names": ["NX123"]}],
+            "vehicles": [{"name": "bus", "kind": "bus"}],
+            "carriers": [{"name": "Example Coaches"}],
+            "routes": [{
+                "name": "Bus",
+                "duration": 63900,
+                "segments": [0],
+                "places": [0, 1],
+                "indicativePrices": [{
+                    "currencyCode": "AUD", "priceLow": 180,
+                    "priceHigh": 248,
+                }],
+            }],
+        }
+        routes = parse_api_routes(
+            payload, "https://www.rome2rio.com/s/Brisbane/Dubbo")
+        self.assertEqual(len(routes), 1)
+        self.assertIn("Option 1: Bus", routes[0]["summary"])
+        self.assertIn("17h 45m", routes[0]["summary"])
+        self.assertIn("AUD $180–$248", routes[0]["summary"])
+        self.assertIn("Brisbane, then Dubbo", routes[0]["detail_text"])
+        self.assertIn(
+            "Example Coaches bus, service NX123: Brisbane to Dubbo; about 17h 45m",
+            routes[0]["detail_text"])
+        self.assertEqual(routes[0]["source"], "rome2rio")
+
     def test_dated_bus_departures_are_added_with_full_details(self):
         class Response:
             content = BUS_SCHEDULE_HTML.encode()

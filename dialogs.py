@@ -499,7 +499,7 @@ class SettingsDialog(wx.Dialog):
             wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
         self.btn_gtfs = wx.Button(
-            self.transit_page, label=_("Refresh Feed Catalogue"))
+            self.transit_page, label=_("Update Feed Index"))
         self.btn_update_timetables = wx.Button(
             self.transit_page, label=_("Update All Cached Timetables..."))
         transit_vs.Add(self.btn_gtfs, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
@@ -516,8 +516,9 @@ class SettingsDialog(wx.Dialog):
         transit_vs.Add(wx.StaticText(
             self.transit_page,
             label=_(
-                "Catalogue refresh updates the directory of available feeds. "
-                "Timetable update downloads fresh data for every installed feed "
+                "Update Feed Index downloads the latest directory of available "
+                "feeds. Update All Cached Timetables downloads fresh timetable "
+                "data for every installed feed "
                 "and retains the previous data if an update fails.")),
             0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
         self.transit_page.SetSizer(transit_vs)
@@ -557,7 +558,21 @@ class SettingsDialog(wx.Dialog):
                 label=_("API keys are kept in secure storage.")),
                 0, wx.ALL | wx.EXPAND, 8)
 
-        api_vs.Add(wx.StaticText(self.api_page, label=_("Google API key - enhanced geocoding/routing, satellite/street view, Google navigation:")), 0, wx.ALL, 8)
+        credential_error = settings.get("_credential_store_error", "")
+        if credential_error:
+            api_vs.Add(wx.StaticText(
+                self.api_page,
+                label=_(
+                    "Saved API keys could not be read from secure storage. "
+                    "Key status may be unavailable.")),
+                0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+
+        def credential_label(text: str, key: str) -> str:
+            """Include an accessible indication without revealing the value."""
+            status = _("saved") if str(settings.get(key, "") or "").strip() else _("not set")
+            return f"{_(text)} ({status})"
+
+        api_vs.Add(wx.StaticText(self.api_page, label=credential_label("Google API key - enhanced geocoding/routing, satellite/street view, Google navigation:", "google_api_key")), 0, wx.ALL, 8)
         self.txt_google_key = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
         api_vs.Add(self.txt_google_key, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
         self.cb_google_service = wx.CheckBox(
@@ -567,7 +582,7 @@ class SettingsDialog(wx.Dialog):
             url="https://developers.google.com/maps/get-started"), 0, wx.LEFT | wx.BOTTOM, 8)
 
         api_vs.Add(wx.StaticLine(self.api_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        api_vs.Add(wx.StaticText(self.api_page, label=_("Mistral API key - optional descriptions for satellite/street view and transit:")), 0, wx.LEFT, 8)
+        api_vs.Add(wx.StaticText(self.api_page, label=credential_label("Mistral API key - optional descriptions for satellite/street view and transit:", "mistral_api_key")), 0, wx.LEFT, 8)
         self.txt_mistral_key = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
         api_vs.Add(self.txt_mistral_key, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
         self.cb_mistral_service = wx.CheckBox(
@@ -577,7 +592,7 @@ class SettingsDialog(wx.Dialog):
             url="https://console.mistral.ai/"), 0, wx.LEFT | wx.BOTTOM, 8)
 
         api_vs.Add(wx.StaticLine(self.api_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        api_vs.Add(wx.StaticText(self.api_page, label=_("HERE API key - optional POI details, HERE navigation, and departure board:")), 0, wx.LEFT, 8)
+        api_vs.Add(wx.StaticText(self.api_page, label=credential_label("HERE API key - optional POI details and HERE navigation:", "here_api_key")), 0, wx.LEFT, 8)
         self.txt_here_key = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
         api_vs.Add(self.txt_here_key, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
         self.cb_here_service = wx.CheckBox(
@@ -587,7 +602,7 @@ class SettingsDialog(wx.Dialog):
             url="https://developer.here.com/sign-up"), 0, wx.LEFT | wx.BOTTOM, 8)
 
         api_vs.Add(wx.StaticLine(self.api_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        api_vs.Add(wx.StaticText(self.api_page, label=_("OpenRouteService API key - optional walking/driving distance between marks:")), 0, wx.LEFT, 8)
+        api_vs.Add(wx.StaticText(self.api_page, label=credential_label("OpenRouteService API key - optional walking/driving distance between marks:", "ors_api_key")), 0, wx.LEFT, 8)
         self.txt_ors_key = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
         api_vs.Add(self.txt_ors_key, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
         self.cb_ors_service = wx.CheckBox(
@@ -597,7 +612,7 @@ class SettingsDialog(wx.Dialog):
             url="https://openrouteservice.org/sign-up/"), 0, wx.LEFT | wx.BOTTOM, 8)
 
         api_vs.Add(wx.StaticLine(self.api_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        api_vs.Add(wx.StaticText(self.api_page, label=_("AviationStack API key - optional airport departure/arrival boards:")), 0, wx.LEFT, 8)
+        api_vs.Add(wx.StaticText(self.api_page, label=credential_label("AviationStack API key - optional airport departure/arrival boards:", "aviationstack_api_key")), 0, wx.LEFT, 8)
         self.txt_aviationstack_key = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
         api_vs.Add(self.txt_aviationstack_key, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
         self.cb_aviationstack_service = wx.CheckBox(
@@ -607,10 +622,10 @@ class SettingsDialog(wx.Dialog):
             url="https://aviationstack.com/signup/free"), 0, wx.LEFT | wx.BOTTOM, 8)
 
         api_vs.Add(wx.StaticLine(self.api_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        api_vs.Add(wx.StaticText(self.api_page, label=_("OpenSky client ID - optional overhead flight destination lookup (free):")), 0, wx.LEFT, 8)
+        api_vs.Add(wx.StaticText(self.api_page, label=credential_label("OpenSky client ID - optional overhead flight destination lookup (free):", "opensky_client_id")), 0, wx.LEFT, 8)
         self.txt_opensky_id = wx.TextCtrl(self.api_page)
         api_vs.Add(self.txt_opensky_id, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
-        api_vs.Add(wx.StaticText(self.api_page, label=_("OpenSky client secret:")), 0, wx.LEFT, 8)
+        api_vs.Add(wx.StaticText(self.api_page, label=credential_label("OpenSky client secret:", "opensky_client_secret")), 0, wx.LEFT, 8)
         self.txt_opensky_secret = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
         api_vs.Add(self.txt_opensky_secret, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
         self.cb_opensky_service = wx.CheckBox(
@@ -628,7 +643,8 @@ class SettingsDialog(wx.Dialog):
         )
         api_vs.Add(wx.StaticText(
             self.api_page,
-            label=_(f"RapidAPI key - {rapidapi_purpose}:")),
+            label=credential_label(
+                f"RapidAPI key - {rapidapi_purpose}:", "rapidapi_key")),
             0, wx.LEFT, 8)
         self.txt_rapidapi_key = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
         api_vs.Add(self.txt_rapidapi_key, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)

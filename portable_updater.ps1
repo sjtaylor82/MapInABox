@@ -106,8 +106,13 @@ try {
             throw "The portable package manifest contains no application files."
         }
 
-        $archivePrefix = $manifestEntry.FullName.Substring(
-            0, $manifestEntry.FullName.Length - $manifestRelativePath.Length)
+        # Compress-Archive can store Windows path separators in entry names.
+        # Normalize the manifest entry before deriving the prefix, just as we
+        # normalize every other entry below. Otherwise a prefix such as
+        # "MapInABox\" can never match "MapInABox/_internal/...".
+        $manifestEntryName = $manifestEntry.FullName.Replace("\", "/")
+        $archivePrefix = $manifestEntryName.Substring(
+            0, $manifestEntryName.Length - $manifestRelativePath.Length)
         $entryTable = @{}
         foreach ($entry in $archive.Entries) {
             $entryName = $entry.FullName.Replace("\", "/")

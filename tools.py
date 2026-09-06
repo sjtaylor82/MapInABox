@@ -3621,8 +3621,7 @@ class ToolsMixin:
     def _tool_departure_board(self):
         if not self._education_tool_allowed("departure_board"):
             return
-        """Departure Board — find stops and departure boards via HERE, GTFS, or Google Places."""
-        here_key = self.settings.get("here_api_key", "").strip()
+        """Departure Board — find stops via GTFS or Google Places."""
         google_key = self.settings.get("google_api_key", "").strip()
         source_pref = (self.settings.get("departure_board_source", "gtfs") or "gtfs").strip().lower()
         rt = self._get_route_tools()
@@ -3634,11 +3633,8 @@ class ToolsMixin:
                 "Departure Board",
                 "Google",
                 "Google Places station discovery is unavailable, so the board will fall "
-                "back to HERE or GTFS data when possible.",
+                "back to GTFS data when possible.",
             )
-        elif source_pref != "google" and not here_key and not google_key:
-            # No warning needed: GTFS-only mode is already the default fallback.
-            pass
 
         country_code = self._ask_country_code()
         if not country_code:
@@ -3668,9 +3664,6 @@ class ToolsMixin:
                             lat, lon, radius=250, status_cb=lambda msg: wx.CallAfter(self._status_update, msg))
                         stations = self._gtfs_station_rows(nearby)
                         source = "gtfs"
-                elif here_key:
-                    stations = rt.here_station_search(lat, lon, here_key)
-                    source = "here"
                 else:
                     _primary, nearby = self._transit.nearby_stops(
                         lat, lon, radius=250, status_cb=lambda msg: wx.CallAfter(self._status_update, msg))
@@ -3682,7 +3675,7 @@ class ToolsMixin:
                                  True)
                     wx.CallAfter(self._finish_thinking)
                     return
-                wx.CallAfter(self._show_departure_board, stations, here_key, rt, source)
+                wx.CallAfter(self._show_departure_board, stations, "", rt, source)
             except Exception as e:
                 wx.CallAfter(self._status_update, f"Departure board failed: {e}", True)
                 wx.CallAfter(self._finish_thinking)
@@ -3763,7 +3756,7 @@ class ToolsMixin:
         """Show the three-level departure board dialog."""
         self._status_update(f"Found {len(stations)} stop{'s' if len(stations) != 1 else ''}.", force=True)
 
-        if source == "gtfs":
+        if source in {"gtfs", "google"}:
             def _fetch_departures(station):
                 feed_id = station.get("_feed_id", "")
                 stop_id = station.get("_stop_id", "")

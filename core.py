@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 
 from logging_utils import miab_log
-from i18n import _, set_language
+from i18n import set_language
 from speech_dispatch import SpeechDispatch, braille as _braille, speak as _speak
 from wx_utils import IS_MAC, MSAAListBox, _log_key_event, _primary_down
 from keystrokes import action_for_event, disabled_default_for_event
@@ -83,12 +83,12 @@ from secret_store import (
     save_secure_credentials,
 )
 from distance_units import (
-    format_distance, format_distance_label, format_height, set_unit_system,
+    format_distance, format_distance_label, set_unit_system,
 )
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '2026.09.1'
+APP_VERSION   = '2026.9.2'
 
 POI_LIVE_COOLDOWN_SECS = 3.0
 POI_BACKGROUND_WAIT_SECS = 2.0
@@ -11009,10 +11009,6 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
         if announce:
             self._status_update(f"Destination set to {name}.", force=True)
 
-    def _set_route_destination_from_coords(self, coords, name, announce=True):
-        self._find_food_destination = {"coords": (float(coords[0]), float(coords[1])), "name": name}
-        self._set_map_destination_from_coords(coords, name, announce=announce)
-
     def _confirm_exit_street_mode(self, prompt, repeat_location=False):
         """Ask to leave street mode before doing something that only makes
         sense on the world map (jumping, starting the challenge game).
@@ -11174,11 +11170,12 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
 
         place_name = re.split(r"\.\s{2,}|[,;]", str(name or f"mark {slot}"), 1)[0].strip()
         current_name = self._last_landed_object_label()
-        dist_str, _direction = self._format_mark_distance(origin, (lat, lon))
+        dist_str, direction = self._format_mark_distance(origin, (lat, lon))
+        direction = direction.replace("-", " ")
         if current_name:
-            msg = f"{place_name} is {dist_str} from {current_name}."
+            msg = f"{place_name} is {dist_str} {direction} from {current_name}."
         else:
-            msg = f"{place_name} is {dist_str} from here."
+            msg = f"{place_name} is {dist_str} {direction} from here."
         _say(msg)
 
     def _format_mark_distance(self, origin, target):
@@ -14945,7 +14942,7 @@ class MapNavigator(NavMixin, WalkMixin, ToolsMixin, FreeMixin, LookupsMixin, wx.
             "Ctrl+M: save current position as mark (then press 1, 2, or 3 to choose a slot).",
             "Ctrl+Shift+P: save current position as a personal POI.",
             "Ctrl+Shift+M: clear a mark (then press 1, 2, or 3).",
-            "Ctrl+1, Ctrl+2, Ctrl+3: read a mark's distance from here.",
+            "Ctrl+1, Ctrl+2, Ctrl+3: read a mark's distance and direction from here.",
             "Shift+Alt+M: compare distances and directions between all saved marks.",
             "G: nearby geographic features.",
             "P: POI search.",
