@@ -1311,6 +1311,10 @@ class ToolsMenuDialog(wx.Dialog):
         ("Departure Board",    "departure_board"),
         ("Flight Search",      "flight_search"),
         ("Virgin Australia Booking", "virgin_booking"),
+        ("Accor Booking",      "accor_booking"),
+        ("Expedia Booking",    "expedia_booking"),
+        ("Booking.com Booking", "booking_com_booking"),
+        ("Greyhound Australia Booking", "greyhound_booking"),
         ("Hotel Search",       "hotel_search"),
         ("Find Food",          "find_food"),
         ("Order an Uber",      "order_uber"),
@@ -1864,6 +1868,661 @@ class VirginAustraliaBookingDialog(wx.Dialog):
             self.EndModal(wx.ID_CANCEL)
             return
         event.Skip()
+
+
+class AccorBookingDialog(wx.Dialog):
+    """Short, screen-reader-friendly Accor hotel search form."""
+
+    def __init__(self, parent):
+        super().__init__(parent, title="Accor Booking",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        _set_explicit_accessible_name(self, self, "Accor Booking")
+        import datetime as _dt
+
+        panel = wx.Panel(self)
+        outer = wx.BoxSizer(wx.VERTICAL)
+        grid = wx.FlexGridSizer(cols=2, vgap=8, hgap=10)
+        grid.AddGrowableCol(1, 1)
+
+        today = _dt.date.today()
+        check_in = today + _dt.timedelta(days=7)
+        check_out = check_in + _dt.timedelta(days=1)
+        self.destination = wx.TextCtrl(panel)
+        self.check_in = wx.TextCtrl(panel, value=check_in.strftime("%d%m%Y"))
+        self.check_out = wx.TextCtrl(panel, value=check_out.strftime("%d%m%Y"))
+        self.rooms = wx.Choice(panel, choices=[str(i) for i in range(1, 10)])
+        self.adults = wx.Choice(panel, choices=[str(i) for i in range(1, 10)])
+        self.children = wx.Choice(panel, choices=[str(i) for i in range(0, 9)])
+        self.accessible = wx.CheckBox(panel, label="Accessible room")
+        self.rooms.SetSelection(0)
+        self.adults.SetSelection(0)
+        self.children.SetSelection(0)
+
+        named = [
+            (self.destination, "Destination or hotel"),
+            (self.check_in, "Check-in date, DDMMYYYY"),
+            (self.check_out, "Check-out date, DDMMYYYY"),
+            (self.rooms, "Rooms"),
+            (self.adults, "Adults"),
+            (self.children, "Children"),
+            (self.accessible, "Accessible room"),
+        ]
+        for control, name in named:
+            _set_explicit_accessible_name(self, control, name)
+
+        fields = [
+            ("Destination or hotel:", self.destination),
+            ("Check-in date, DDMMYYYY:", self.check_in),
+            ("Check-out date, DDMMYYYY:", self.check_out),
+            ("Rooms:", self.rooms),
+            ("Adults:", self.adults),
+            ("Children:", self.children),
+            ("", self.accessible),
+        ]
+        for label, control in fields:
+            grid.Add(wx.StaticText(panel, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
+            grid.Add(control, 1, wx.EXPAND)
+        outer.Add(grid, 1, wx.ALL | wx.EXPAND, 10)
+
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        open_btn = wx.Button(panel, wx.ID_OK, "Open Accor")
+        cancel_btn = wx.Button(panel, wx.ID_CANCEL, "Cancel")
+        buttons.Add(open_btn, 0, wx.RIGHT, 8)
+        buttons.Add(cancel_btn, 0)
+        outer.Add(buttons, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        panel.SetSizer(outer)
+        self.SetSize(510, 360)
+
+        open_btn.Bind(wx.EVT_BUTTON, self._on_submit)
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+        self.destination.SetFocus()
+        wx.CallAfter(self.destination.SetFocus)
+
+    def values(self):
+        from tools import _parse_ddmmyyyy
+        return {
+            "destination": self.destination.GetValue().strip(),
+            "check_in": _parse_ddmmyyyy(self.check_in.GetValue()),
+            "check_out": _parse_ddmmyyyy(self.check_out.GetValue()),
+            "rooms": int(self.rooms.GetStringSelection()),
+            "adults": int(self.adults.GetStringSelection()),
+            "children": int(self.children.GetStringSelection()),
+            "accessible": self.accessible.GetValue(),
+        }
+
+    def _on_submit(self, event=None):
+        import datetime as _dt
+        try:
+            values = self.values()
+        except ValueError:
+            wx.MessageBox("Enter each date as eight digits in DDMMYYYY format.",
+                          "Invalid date", wx.OK | wx.ICON_WARNING)
+            self.check_in.SetFocus()
+            return
+        if not values["destination"]:
+            wx.MessageBox("Enter a destination or hotel name.",
+                          "Missing destination", wx.OK | wx.ICON_WARNING)
+            self.destination.SetFocus()
+            return
+        if values["check_in"] < _dt.date.today():
+            wx.MessageBox("Check-in cannot be in the past.",
+                          "Invalid date", wx.OK | wx.ICON_WARNING)
+            self.check_in.SetFocus()
+            return
+        if values["check_out"] <= values["check_in"]:
+            wx.MessageBox("Check-out must be after check-in.",
+                          "Invalid date", wx.OK | wx.ICON_WARNING)
+            self.check_out.SetFocus()
+            return
+        self.EndModal(wx.ID_OK)
+
+    def _on_char_hook(self, event):
+        if event.GetKeyCode() == wx.WXK_ESCAPE:
+            self.EndModal(wx.ID_CANCEL)
+            return
+        event.Skip()
+
+
+class ExpediaBookingDialog(wx.Dialog):
+    """Short, screen-reader-friendly Expedia travel search form."""
+
+    def __init__(self, parent):
+        super().__init__(parent, title="Expedia Booking",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        _set_explicit_accessible_name(self, self, "Expedia Booking")
+        import datetime as _dt
+
+        panel = wx.Panel(self)
+        outer = wx.BoxSizer(wx.VERTICAL)
+        grid = wx.FlexGridSizer(cols=2, vgap=8, hgap=10)
+        grid.AddGrowableCol(1, 1)
+
+        check_in = _dt.date.today() + _dt.timedelta(days=7)
+        check_out = check_in + _dt.timedelta(days=1)
+        self.search_type = wx.RadioBox(
+            panel, label="Search for", choices=["Hotels", "Flights", "Package"],
+            majorDimension=1, style=wx.RA_SPECIFY_ROWS)
+        self.origin = wx.TextCtrl(panel)
+        self.destination = wx.TextCtrl(panel)
+        self.check_in = wx.TextCtrl(panel, value=check_in.strftime("%d%m%Y"))
+        self.check_out = wx.TextCtrl(panel, value=check_out.strftime("%d%m%Y"))
+        self.rooms = wx.Choice(panel, choices=[str(i) for i in range(1, 10)])
+        self.adults = wx.Choice(panel, choices=[str(i) for i in range(1, 10)])
+        self.rooms.SetSelection(0)
+        self.adults.SetSelection(1)
+
+        named = [
+            (self.search_type, "Search for hotels, flights, or package"),
+            (self.origin, "Leaving from"),
+            (self.destination, "Going to or hotel destination"),
+            (self.check_in, "Start or departure date, DDMMYYYY"),
+            (self.check_out, "End or return date, DDMMYYYY"),
+            (self.rooms, "Rooms"),
+            (self.adults, "Adults"),
+        ]
+        for control, name in named:
+            _set_explicit_accessible_name(self, control, name)
+
+        for label, control in [
+                ("Search for:", self.search_type),
+                ("Leaving from:", self.origin),
+                ("Going to or hotel destination:", self.destination),
+                ("Start or departure date, DDMMYYYY:", self.check_in),
+                ("End or return date, DDMMYYYY:", self.check_out),
+                ("Rooms:", self.rooms),
+                ("Adults:", self.adults)]:
+            grid.Add(wx.StaticText(panel, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
+            grid.Add(control, 1, wx.EXPAND)
+        outer.Add(grid, 1, wx.ALL | wx.EXPAND, 10)
+
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        open_btn = wx.Button(panel, wx.ID_OK, "Open Expedia")
+        cancel_btn = wx.Button(panel, wx.ID_CANCEL, "Cancel")
+        buttons.Add(open_btn, 0, wx.RIGHT, 8)
+        buttons.Add(cancel_btn, 0)
+        outer.Add(buttons, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        panel.SetSizer(outer)
+        self.SetSize(560, 440)
+
+        open_btn.Bind(wx.EVT_BUTTON, self._on_submit)
+        self.search_type.Bind(wx.EVT_RADIOBOX, self._on_search_type)
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+        self._on_search_type()
+        self.search_type.SetFocus()
+        wx.CallAfter(self.search_type.SetFocus)
+
+    def _on_search_type(self, event=None):
+        search_type = ("hotels", "flights", "package")[self.search_type.GetSelection()]
+        self.origin.Enable(search_type != "hotels")
+        self.rooms.Enable(search_type != "flights")
+
+    def values(self):
+        from tools import _parse_ddmmyyyy
+        return {
+            "search_type": ("hotels", "flights", "package")[
+                self.search_type.GetSelection()],
+            "origin": self.origin.GetValue().strip(),
+            "destination": self.destination.GetValue().strip(),
+            "check_in": _parse_ddmmyyyy(self.check_in.GetValue()),
+            "check_out": _parse_ddmmyyyy(self.check_out.GetValue()),
+            "rooms": int(self.rooms.GetStringSelection()),
+            "adults": int(self.adults.GetStringSelection()),
+        }
+
+    def _on_submit(self, event=None):
+        import datetime as _dt
+        try:
+            values = self.values()
+        except ValueError:
+            wx.MessageBox("Enter each date as eight digits in DDMMYYYY format.",
+                          "Invalid date", wx.OK | wx.ICON_WARNING)
+            self.check_in.SetFocus()
+            return
+        if not values["destination"]:
+            wx.MessageBox("Enter where you are going or a hotel destination.",
+                          "Missing destination", wx.OK | wx.ICON_WARNING)
+            self.destination.SetFocus()
+            return
+        if values["search_type"] != "hotels" and not values["origin"]:
+            wx.MessageBox("Enter where you are leaving from.",
+                          "Missing origin", wx.OK | wx.ICON_WARNING)
+            self.origin.SetFocus()
+            return
+        if values["check_in"] < _dt.date.today():
+            wx.MessageBox("Check-in cannot be in the past.",
+                          "Invalid date", wx.OK | wx.ICON_WARNING)
+            self.check_in.SetFocus()
+            return
+        if values["check_out"] <= values["check_in"]:
+            wx.MessageBox("Check-out must be after check-in.",
+                          "Invalid date", wx.OK | wx.ICON_WARNING)
+            self.check_out.SetFocus()
+            return
+        self.EndModal(wx.ID_OK)
+
+    def _on_char_hook(self, event):
+        if event.GetKeyCode() == wx.WXK_ESCAPE:
+            self.EndModal(wx.ID_CANCEL)
+            return
+        event.Skip()
+
+
+class BookingComBookingDialog(ExpediaBookingDialog):
+    """Booking.com variant of the accessible travel search form."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.SetTitle("Booking.com Booking")
+        _set_explicit_accessible_name(self, self, "Booking.com Booking")
+        open_btn = self.FindWindow(wx.ID_OK)
+        if open_btn:
+            open_btn.SetLabel("Open Booking.com")
+
+
+class GreyhoundStopPickerDialog(wx.Dialog):
+    """Filterable, keyboard-friendly chooser for Greyhound stops."""
+
+    def __init__(self, parent, stops, title):
+        super().__init__(parent, title=title,
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        from greyhound import stop_label
+        self._all_stops = list(stops)
+        self._visible_stops = list(stops)
+        self.selected_stop = None
+        panel = wx.Panel(self)
+        outer = wx.BoxSizer(wx.VERTICAL)
+        outer.Add(wx.StaticText(panel, label="Search:"),
+                  0, wx.LEFT | wx.TOP, 10)
+        self.search = wx.SearchCtrl(panel)
+        self.search.ShowCancelButton(True)
+        _set_explicit_accessible_name(self, self.search, "Search Greyhound destinations")
+        outer.Add(self.search, 0, wx.ALL | wx.EXPAND, 10)
+        self.results = wx.ListBox(panel,
+            choices=[stop_label(stop) for stop in self._visible_stops])
+        if self._visible_stops:
+            self.results.SetSelection(0)
+        outer.Add(self.results, 1, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        choose_btn = wx.Button(panel, wx.ID_OK, "Choose")
+        cancel_btn = wx.Button(panel, wx.ID_CANCEL, "Cancel")
+        buttons.Add(choose_btn, 0, wx.RIGHT, 8)
+        buttons.Add(cancel_btn, 0)
+        outer.Add(buttons, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        panel.SetSizer(outer)
+        self.SetSize(650, 480)
+        self.search.Bind(wx.EVT_TEXT, self._on_filter)
+        self.search.Bind(wx.EVT_KEY_DOWN, self._on_search_key)
+        self.results.Bind(wx.EVT_LISTBOX_DCLICK, self._on_choose)
+        self.Bind(wx.EVT_BUTTON, self._on_choose, id=wx.ID_OK)
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+        self.search.SetFocus()
+
+    def _on_filter(self, event=None):
+        from greyhound import filter_stops, stop_label
+        self._visible_stops = filter_stops(self._all_stops, self.search.GetValue())
+        labels = [stop_label(stop) for stop in self._visible_stops]
+        self.results.Set(labels or ["No matches"])
+        if self._visible_stops:
+            self.results.SetSelection(0)
+        else:
+            self.results.SetSelection(0)
+
+    def _on_search_key(self, event):
+        if event.GetKeyCode() in (wx.WXK_DOWN, wx.WXK_UP):
+            self.results.SetFocus()
+            if self.results.GetSelection() == wx.NOT_FOUND:
+                self.results.SetSelection(0)
+            return
+        event.Skip()
+
+    def _on_choose(self, event=None):
+        index = self.results.GetSelection()
+        if index == wx.NOT_FOUND or not self._visible_stops:
+            wx.Bell()
+            return
+        self.selected_stop = self._visible_stops[index]
+        self.EndModal(wx.ID_OK)
+
+    def _on_char_hook(self, event):
+        if event.GetKeyCode() == wx.WXK_ESCAPE:
+            self.EndModal(wx.ID_CANCEL)
+        elif (event.GetKeyCode() in (wx.WXK_DOWN, wx.WXK_UP)
+              and self.FindFocus() is self.search):
+            self.results.SetFocus()
+            if self.results.GetSelection() == wx.NOT_FOUND:
+                self.results.SetSelection(0)
+        elif event.GetKeyCode() in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
+            self._on_choose()
+        else:
+            event.Skip()
+
+
+class GreyhoundBookingDialog(wx.Dialog):
+    """Accessible Greyhound route and date form backed by its stop directory."""
+
+    def __init__(self, parent, stops):
+        super().__init__(parent, title="Greyhound Australia Booking",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        _set_explicit_accessible_name(self, self, "Greyhound Australia Booking")
+        import datetime as _dt
+        self._stops, self._origin, self._destination = stops, None, None
+        self.availability = None
+        panel = wx.Panel(self)
+        outer = wx.BoxSizer(wx.VERTICAL)
+        grid = wx.FlexGridSizer(cols=2, vgap=8, hgap=10)
+        grid.AddGrowableCol(1, 1)
+        depart = _dt.date.today() + _dt.timedelta(days=7)
+        self.trip_type = wx.RadioBox(panel, label="Trip type",
+                                    choices=["One way", "Return"],
+                                    majorDimension=1, style=wx.RA_SPECIFY_ROWS)
+        self.origin = wx.Button(panel, label="Choose origin")
+        self.destination = wx.Button(panel, label="Choose destination")
+        self.depart = wx.TextCtrl(panel, value=depart.strftime("%d%m%Y"))
+        self.return_date = wx.TextCtrl(
+            panel, value=(depart + _dt.timedelta(days=1)).strftime("%d%m%Y"))
+        self.adults = wx.TextCtrl(panel, value="1", style=wx.TE_READONLY)
+        self.promo_code = wx.TextCtrl(panel)
+        for control, name in [
+                (self.trip_type, "Trip type"),
+                (self.origin, "Origin"),
+                (self.destination, "Destination"),
+                (self.depart, "Departure date, DDMMYYYY"),
+                (self.return_date, "Return date, DDMMYYYY"),
+                (self.adults, "Adults"),
+                (self.promo_code, "Promo code, optional")]:
+            _set_explicit_accessible_name(self, control, name)
+        for label, control in [
+                ("Trip type:", self.trip_type), ("Origin:", self.origin),
+                ("Destination:", self.destination),
+                ("Departure date, DDMMYYYY:", self.depart),
+                ("Return date, DDMMYYYY:", self.return_date),
+                ("Adults:", self.adults),
+                ("Promo code, optional:", self.promo_code)]:
+            grid.Add(wx.StaticText(panel, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
+            grid.Add(control, 1, wx.EXPAND)
+        outer.Add(grid, 1, wx.ALL | wx.EXPAND, 10)
+        open_btn = wx.Button(panel, wx.ID_OK, "Search Greyhound")
+        self.search_button = open_btn
+        cancel_btn = wx.Button(panel, wx.ID_CANCEL, "Cancel")
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        buttons.Add(open_btn, 0, wx.RIGHT, 8)
+        buttons.Add(cancel_btn, 0)
+        outer.Add(buttons, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        panel.SetSizer(outer)
+        self.SetSize(620, 440)
+        self.origin.Bind(wx.EVT_BUTTON, lambda event: self._choose_stop(True))
+        self.destination.Bind(wx.EVT_BUTTON, lambda event: self._choose_stop(False))
+        self.trip_type.Bind(wx.EVT_RADIOBOX, self._on_trip_type)
+        open_btn.Bind(wx.EVT_BUTTON, self._on_submit)
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+        self._on_trip_type()
+        self.trip_type.SetFocus()
+
+    def _choose_stop(self, origin):
+        from greyhound import stop_label
+        dlg = GreyhoundStopPickerDialog(
+            self, self._stops, "Choose origin" if origin else "Choose destination")
+        if dlg.ShowModal() == wx.ID_OK:
+            stop = dlg.selected_stop
+            if origin:
+                self._origin = stop
+                self.origin.SetLabel(stop_label(stop))
+                _set_explicit_accessible_name(
+                    self, self.origin, f"Origin, {stop_label(stop)}")
+            else:
+                self._destination = stop
+                self.destination.SetLabel(stop_label(stop))
+                _set_explicit_accessible_name(
+                    self, self.destination, f"Destination, {stop_label(stop)}")
+        dlg.Destroy()
+
+    def _on_trip_type(self, event=None):
+        self.return_date.Enable(self.trip_type.GetSelection() == 1)
+
+    def values(self):
+        from tools import _parse_ddmmyyyy
+        return {"origin": self._origin, "destination": self._destination,
+                "depart": _parse_ddmmyyyy(self.depart.GetValue()),
+                "return": _parse_ddmmyyyy(self.return_date.GetValue()),
+                "is_return": self.trip_type.GetSelection() == 1,
+                "promo_code": self.promo_code.GetValue().strip()}
+
+    def _on_submit(self, event=None):
+        import datetime as _dt
+        if self._origin is None or self._destination is None:
+            missing = "origin" if self._origin is None else "destination"
+            wx.MessageBox(f"Choose a {missing}.", f"Missing {missing}",
+                          wx.OK | wx.ICON_WARNING)
+            (self.origin if self._origin is None else self.destination).SetFocus()
+            return
+        try:
+            values = self.values()
+        except ValueError:
+            wx.MessageBox("Enter each date as eight digits in DDMMYYYY format.",
+                          "Invalid date", wx.OK | wx.ICON_WARNING)
+            self.depart.SetFocus()
+            return
+        if values["depart"] < _dt.date.today():
+            wx.MessageBox("Departure cannot be in the past.", "Invalid date",
+                          wx.OK | wx.ICON_WARNING)
+            return
+        try:
+            from tools import _build_greyhound_booking_url
+            _build_greyhound_booking_url(values)
+        except ValueError as exc:
+            wx.MessageBox(str(exc).capitalize() + ".", "Invalid trip",
+                          wx.OK | wx.ICON_WARNING)
+            return
+        self.search_button.Disable()
+        self.search_button.SetLabel("Searching")
+        wx.YieldIfNeeded()
+        try:
+            from greyhound import load_availability
+            with wx.BusyCursor():
+                self.availability = load_availability(values)
+        except RuntimeError as exc:
+            self.search_button.SetLabel("Search Greyhound")
+            self.search_button.Enable()
+            wx.MessageBox(str(exc), "Greyhound Australia Booking",
+                          wx.OK | wx.ICON_ERROR)
+            return
+        self.EndModal(wx.ID_OK)
+
+    def _on_char_hook(self, event):
+        if event.GetKeyCode() == wx.WXK_ESCAPE:
+            self.EndModal(wx.ID_CANCEL)
+        else:
+            event.Skip()
+
+
+class GreyhoundStopsDialog(wx.Dialog):
+    """Arrow-navigable complete Greyhound service stop list."""
+
+    def __init__(self, parent, items):
+        super().__init__(parent, title="Greyhound Service Stops",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        panel = wx.Panel(self)
+        outer = wx.BoxSizer(wx.VERTICAL)
+        self.stops = wx.ListBox(panel, choices=items)
+        if items:
+            self.stops.SetSelection(0)
+        outer.Add(self.stops, 1, wx.ALL | wx.EXPAND, 10)
+        close_btn = wx.Button(panel, wx.ID_CLOSE, "Close")
+        outer.Add(close_btn, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        panel.SetSizer(outer)
+        self.SetSize(820, 620)
+        close_btn.Bind(wx.EVT_BUTTON, lambda event: self.EndModal(wx.ID_CLOSE))
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+        self.Bind(wx.EVT_ACTIVATE, self._on_activate)
+        self.stops.SetFocus()
+
+    def _on_activate(self, event):
+        if event.GetActive():
+            wx.CallLater(100, self.stops.SetFocus)
+        event.Skip()
+
+    def _on_char_hook(self, event):
+        if event.GetKeyCode() == wx.WXK_ESCAPE:
+            self.EndModal(wx.ID_CLOSE)
+        else:
+            event.Skip()
+
+
+class GreyhoundAvailabilityDialog(wx.Dialog):
+    """Accessible list/detail display of live one-adult Greyhound results."""
+
+    def __init__(self, parent, availability, search_values):
+        super().__init__(parent, title="Greyhound Australia Results",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        from greyhound import availability_options, format_availability_option
+        self._format_option = format_availability_option
+        self._rows = availability_options(availability)
+        self._search_values = search_values
+        self._timetables = {}
+        panel = wx.Panel(self)
+        outer = wx.BoxSizer(wx.VERTICAL)
+        outer.Add(wx.StaticText(panel, label="Available trips:"), 0,
+                  wx.LEFT | wx.TOP, 10)
+        self.results = wx.ListBox(
+            panel, choices=([row["label"] for row in self._rows]
+                            or ["No trips available"]))
+        if self._rows:
+            self.results.SetSelection(0)
+        outer.Add(self.results, 1, wx.ALL | wx.EXPAND, 10)
+        outer.Add(wx.StaticText(panel, label="Trip details:"), 0,
+                  wx.LEFT | wx.RIGHT, 10)
+        self.details = wx.TextCtrl(
+            panel, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2)
+        _set_explicit_accessible_name(self, self.details, "Trip details")
+        outer.Add(self.details, 2, wx.ALL | wx.EXPAND, 10)
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        stops_btn = wx.Button(panel, label="View stops")
+        open_btn = wx.Button(panel, label="Open Greyhound")
+        close_btn = wx.Button(panel, wx.ID_CLOSE, "Close")
+        for button in (stops_btn, open_btn):
+            buttons.Add(button, 0, wx.RIGHT, 8)
+        buttons.Add(close_btn, 0)
+        outer.Add(buttons, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        panel.SetSizer(outer)
+        self.SetSize(780, 650)
+        self.results.Bind(wx.EVT_LISTBOX, self._on_selection)
+        stops_btn.Bind(wx.EVT_BUTTON, self._on_view_stops)
+        open_btn.Bind(wx.EVT_BUTTON, self._on_open_greyhound)
+        close_btn.Bind(wx.EVT_BUTTON, lambda event: self.EndModal(wx.ID_CLOSE))
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+        self.Bind(wx.EVT_ACTIVATE, self._on_activate)
+        self._last_focus = self.results
+        for control in (self.results, self.details, stops_btn, open_btn, close_btn):
+            control.Bind(wx.EVT_SET_FOCUS, self._remember_focus)
+        self._on_selection()
+        if self._rows:
+            self.results.SetFocus()
+
+    def _on_selection(self, event=None):
+        index = self.results.GetSelection()
+        if index != wx.NOT_FOUND and index < len(self._rows):
+            text = self._format_option(self._rows[index])
+            self.details.SetValue(text)
+            self.details.SetInsertionPoint(0)
+
+    def _remember_focus(self, event):
+        self._last_focus = event.GetEventObject()
+        event.Skip()
+
+    def _on_activate(self, event):
+        if event.GetActive():
+            wx.CallLater(100, self._restore_last_focus)
+        else:
+            focused = self.FindFocus()
+            if focused:
+                self._last_focus = focused
+        event.Skip()
+
+    def _restore_last_focus(self):
+        target = self._last_focus
+        try:
+            if target and not target.IsBeingDeleted():
+                target.SetFocus()
+        except RuntimeError:
+            pass
+
+    def _current(self):
+        index = self.results.GetSelection()
+        if index == wx.NOT_FOUND or index >= len(self._rows):
+            return None, None
+        return index, self._rows[index]
+
+    def _values_for_row(self, row):
+        values = dict(self._search_values)
+        if row["direction"] == "Return":
+            values["origin"], values["destination"] = (
+                self._search_values["destination"], self._search_values["origin"])
+            values["depart"] = self._search_values["return"]
+        return values
+
+    def _key_for_row(self, row):
+        values = self._values_for_row(row)
+        return (values["origin"]["code"], values["destination"]["code"],
+                values["depart"].isoformat())
+
+    def _timetable_for_row(self, row):
+        return self._timetables.get(self._key_for_row(row))
+
+    def _on_view_stops(self, event=None):
+        index, row = self._current()
+        if row is None:
+            wx.Bell()
+            return
+        key = self._key_for_row(row)
+        if key not in self._timetables:
+            values = self._values_for_row(row)
+            button = event.GetEventObject() if event else None
+            if button:
+                button.Disable()
+                button.SetLabel("Loading stops")
+            wx.YieldIfNeeded()
+            try:
+                from greyhound import load_timetable
+                with wx.BusyCursor():
+                    self._timetables[key] = load_timetable(
+                        values["origin"]["code"], values["destination"]["code"],
+                        values["depart"])
+            except RuntimeError as exc:
+                wx.MessageBox(str(exc), "Greyhound Australia Results",
+                              wx.OK | wx.ICON_ERROR)
+            finally:
+                if button:
+                    button.SetLabel("View stops")
+                    button.Enable()
+        timetable = self._timetables.get(key)
+        if timetable:
+            from greyhound import option_stop_items
+            dlg = GreyhoundStopsDialog(
+                self, option_stop_items(row, timetable))
+            dlg.ShowModal()
+            dlg.Destroy()
+
+    def _on_open_greyhound(self, event=None):
+        index, row = self._current()
+        if row is None:
+            wx.Bell()
+            return
+        try:
+            import webbrowser
+            from tools import _build_greyhound_booking_url
+            url = _build_greyhound_booking_url(self._search_values)
+            if webbrowser.open(url) is False:
+                raise RuntimeError("The web browser did not accept the booking link.")
+        except Exception as exc:
+            wx.MessageBox(
+                f"Could not open Greyhound Australia:\n\n{exc}",
+                "Greyhound Australia Results", wx.OK | wx.ICON_ERROR)
+
+    def _on_char_hook(self, event):
+        if event.GetKeyCode() == wx.WXK_ESCAPE:
+            self.EndModal(wx.ID_CLOSE)
+        else:
+            event.Skip()
 
 
 class DateTimePickerDialog(wx.Dialog):

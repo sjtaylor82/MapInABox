@@ -20,6 +20,27 @@ POI_LIVE_COOLDOWN_SECS = 3.0
 POI_BACKGROUND_WAIT_SECS = 2.0
 
 
+def _sort_pois_from_position(pois, lat, lon, radius_m=None):
+    """Recalculate and sort POIs from the position used for this search."""
+    current = []
+    for poi in pois:
+        plat = poi.get("lat")
+        plon = poi.get("lon")
+        if plat is None or plon is None:
+            if radius_m is None:
+                current.append(dict(poi))
+            continue
+        distance = dist_metres(lat, lon, plat, plon)
+        if radius_m is not None and distance > radius_m:
+            continue
+        item = dict(poi)
+        item["dist"] = distance
+        item["distance_m"] = distance
+        current.append(item)
+    current.sort(key=lambda item: item.get("dist", float("inf")))
+    return current
+
+
 def _core_helper(name):
     from core import __dict__ as core_names
     return core_names[name]
@@ -262,26 +283,8 @@ class PoiSearchMixin:
                 prepared = _apply_renames(
                     [p for p in raw_pois if not _is_suppressed(p, _suppressed)],
                     _renamed)
-                for poi in prepared:
-                    if "distance_m" not in poi and poi.get("dist") is not None:
-                        poi["distance_m"] = poi["dist"]
-                if radius_m is not None:
-                    current = []
-                    for poi in prepared:
-                        plat = poi.get("lat")
-                        plon = poi.get("lon")
-                        if plat is None or plon is None:
-                            continue
-                        d = dist_metres(self.lat, self.lon, plat, plon)
-                        if d > radius_m:
-                            continue
-                        item = dict(poi)
-                        item["dist"] = d
-                        item["distance_m"] = d
-                        current.append(item)
-                    prepared = current
-                prepared.sort(key=lambda x: x.get("dist", float("inf")))
-                return prepared
+                return _sort_pois_from_position(
+                    prepared, self.lat, self.lon, radius_m=radius_m)
 
             if ((name_filter or street_filter)
                     and source in ("osm", "here")
@@ -674,7 +677,9 @@ class PoiSearchMixin:
                         # whether the background disk cache already covers
                         # this request. This prevents repeated Overpass calls
                         # for requests within the loaded POI radius.
-                        if not name_filter and attempt_radius <= POI_BACKGROUND_RADIUS_METRES:
+                        if (not name_filter
+                                and not background
+                                and attempt_radius <= POI_BACKGROUND_RADIUS_METRES):
                             disk_bg = self._poi_fetcher.load_cached_pois(self.lat, self.lon)
                             if disk_bg:
                                 self._all_pois      = self._merge_personal_pois(disk_bg)
@@ -763,7 +768,7 @@ class PoiSearchMixin:
                 self._poi_fetch_in_progress = False
                 return
 
-            pois = _prepare_pois(pois)
+            pois = _prepare_pois(pois, radius_m=attempted_radius)
             if not pois and cached_presented:
                 miab_log(
                     "verbose",

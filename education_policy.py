@@ -23,7 +23,8 @@ EDUCATION_TOOL_CHOICES = (
 )
 EDUCATION_TOOL_KEYS = frozenset(key for _label, key in EDUCATION_TOOL_CHOICES)
 EDUCATION_NEVER_AVAILABLE = frozenset({
-    "hotel_search", "virgin_booking", "order_uber",
+    "hotel_search", "virgin_booking", "accor_booking", "expedia_booking",
+    "booking_com_booking", "greyhound_booking", "order_uber",
 })
 
 # A missing or damaged policy enables only straightforward information tools.

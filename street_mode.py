@@ -25,7 +25,106 @@ def save_settings(settings):
     return save(settings)
 
 
+def _street_area_identity(geo, preferred_name=""):
+    """Resolve the label and OSM boundary that describe the same area.
+
+    A world-cities result can be broader than Nominatim's reverse-geocoded
+    suburb (for example Newcastle versus The Hill).  In that case the reverse
+    result's OSM id must not be reused for the broader label, otherwise the
+    smaller suburb is downloaded and cached under the city's name.
+    """
+    nominatim_name = (geo.get("suburb", "") or "").strip()
+    preferred_name = (preferred_name or "").strip()
+    area_name = preferred_name or nominatim_name or "this area"
+    boundary_matches = (
+        not preferred_name
+        or preferred_name.casefold() == nominatim_name.casefold()
+    )
+    return (
+        area_name,
+        geo.get("osm_type") if boundary_matches else None,
+        geo.get("osm_id") if boundary_matches else None,
+    )
+
+
 class StreetModeMixin:
+    def _release_numbered_address_pin_after_move(self):
+        """Stop forcing a searched house number after cursor movement.
+
+        A street/address search pins both the road and the selected number so
+        the initial landing is announced accurately.  Once the user moves,
+        the road pin should remain available to keep arrow movement on that
+        street, but the number must be resolved afresh at the new position.
+        """
+        self._jump_address_number = None
+        self._jump_address_street = None
+        self._pending_jump_address_number = None
+        self._pending_jump_address_street = None
+        self._pending_jump_address_lat = None
+        self._pending_jump_address_lon = None
+
+    def _step_along_pinned_street(self, direction, distance_m):
+        """Move Up/Down along the current street's actual polyline geometry."""
+        pinned = getattr(self, "_jump_street_label", None)
+        segments = getattr(self, "_road_segments", [])
+        if not segments:
+            return False
+
+        engine = getattr(self, "_street_arrow_engine", None)
+        engine_nearby = bool(
+            engine is not None and engine.street_name
+            and dist_metres(self.lat, self.lon, *engine.position) <= 5.0
+        )
+        tracked = engine.street_name if engine_nearby else None
+        street = pinned or tracked
+        if not street:
+            street, _cross = self._nearest_road(self.lat, self.lon)
+            if street in (None, "", "Unknown", "No street data",
+                          "No street data nearby"):
+                return False
+        engine_stale = not engine_nearby or (
+            pinned is not None
+            and engine.street_name.casefold() != str(pinned).casefold()
+        )
+        if engine is None or engine_stale:
+            engine = FreeExploreEngine(step_m=distance_m)
+            engine.set_segments(segments)
+            engine.set_pois([])
+            # Preserve the old initial direction: Up chooses the road direction
+            # closest to north, and Down follows the reverse direction.
+            engine.start(
+                self.lat, self.lon, preferred_street=street, heading_deg=0.0)
+            if not engine.street_name:
+                return False
+            self._street_arrow_engine = engine
+
+        engine.step_m = float(distance_m)
+        old_lat, old_lon = self.lat, self.lon
+        if direction > 0:
+            engine.step_forward()
+        else:
+            engine.step_backward()
+        new_lat, new_lon = engine.position
+        if dist_metres(old_lat, old_lon, new_lat, new_lon) <= 0.5:
+            return False
+
+        self.lat, self.lon = new_lat, new_lon
+        # Preserve an explicit Street Search pin, but ordinary F11 entry does
+        # not need one: the private engine tracks the current road instead.
+        if pinned is not None:
+            self._jump_street_label = engine.street_name
+        self.street_label = engine.street_name
+        if pinned is not None:
+            self._jump_street_pin_lat = new_lat
+            self._jump_street_pin_lon = new_lon
+        miab_log(
+            "snap",
+            f"arrow road-step: ({old_lat:.5f},{old_lon:.5f})→"
+            f"({new_lat:.5f},{new_lon:.5f}) along '{engine.street_name}'",
+            self.settings,
+        )
+        return True
+
     def _check_internet(self):
         try:
             urllib.request.urlopen("https://www.google.com", timeout=5)
@@ -487,7 +586,9 @@ class StreetModeMixin:
                         f"Preferring map city '{map_city}' over Nominatim '{nominatim_suburb}'",
                         self.settings,
                     )
-                self._current_suburb = map_city
+                self._current_suburb, self._current_osm_type, self._current_osm_id = (
+                    _street_area_identity(geo, map_city)
+                )
             else:
                 if force_geocode_suburb and nominatim_suburb:
                     miab_log(
@@ -495,10 +596,10 @@ class StreetModeMixin:
                         f"POI jump using Nominatim suburb '{nominatim_suburb}'",
                         self.settings,
                     )
-                self._current_suburb = nominatim_suburb or "this area"
+                self._current_suburb, self._current_osm_type, self._current_osm_id = (
+                    _street_area_identity(geo)
+                )
             self._current_country_code = geo.get("country_code", "")
-            self._current_osm_type = geo.get("osm_type")
-            self._current_osm_id = geo.get("osm_id")
             self._prefetch_geo_features_for_point(fetch_seed_lat, fetch_seed_lon)
         else:
             # Geocoding failed - use fallback

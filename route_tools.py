@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -289,9 +290,7 @@ class RouteTools:
         coords = geom.get("coordinates", [None, None])
         if coords[0] is None or coords[1] is None:
             raise RuntimeError(f"Could not find '{address}' with open geocoder.")
-        label = props.get("name") or props.get("street") or address
-        if props.get("city") and props.get("city") not in label:
-            label = f"{label}, {props.get('city')}"
+        label = self._photon_label(props, address)
         return GeocodeResult(coords[1], coords[0], label)
 
     def _photon_geocode_candidates(
@@ -311,6 +310,96 @@ class RouteTools:
             headers={"User-Agent": "MapInABox/1.0"},
         )
         return data.get("features", [])[:limit] if isinstance(data, dict) else []
+
+    @staticmethod
+    def _search_query(value: str) -> str:
+        """Remove a leading article that commonly spoils business-name search."""
+        cleaned = " ".join((value or "").split())
+        return re.sub(r"^(?:the)\s+", "", cleaned, flags=re.IGNORECASE)
+
+    @staticmethod
+    def _photon_label(props: dict, fallback: str) -> str:
+        """Build a useful address label from Photon instead of dropping fields."""
+        name = str(props.get("name") or "").strip()
+        number = str(props.get("housenumber") or "").strip()
+        street = str(props.get("street") or "").strip()
+        street_address = " ".join(part for part in (number, street) if part)
+        locality = str(
+            props.get("district") or props.get("city") or props.get("county") or ""
+        ).strip()
+        parts = [
+            name,
+            street_address,
+            locality,
+            str(props.get("state") or "").strip(),
+            str(props.get("postcode") or "").strip(),
+            str(props.get("country") or "").strip(),
+        ]
+        label_parts = []
+        seen = set()
+        for part in parts:
+            key = part.casefold()
+            if part and key not in seen:
+                seen.add(key)
+                label_parts.append(part)
+        return ", ".join(label_parts) or fallback
+
+    @staticmethod
+    def _geocode_score(query: str, candidate: GeocodeResult) -> float:
+        """Rank results by exact query-token and house-number agreement."""
+        aliases = {
+            "st": "street", "rd": "road", "ave": "avenue",
+            "hwy": "highway", "qld": "queensland", "nsw": "new south wales",
+            "vic": "victoria", "sa": "south australia", "wa": "western australia",
+            "tas": "tasmania", "nt": "northern territory", "act": "australian capital territory",
+        }
+
+        def tokens(value: str) -> list[str]:
+            raw = re.findall(r"[a-z0-9]+", (value or "").casefold())
+            expanded = []
+            for token in raw:
+                expanded.extend(aliases.get(token, token).split())
+            return [token for token in expanded if token not in {"the"}]
+
+        wanted = tokens(query)
+        offered = tokens(candidate.formatted)
+        offered_set = set(offered)
+        if not wanted:
+            return 0.0
+        score = sum(2.0 if token.isdigit() else 1.0 for token in wanted if token in offered_set)
+        numbers = [token for token in wanted if token.isdigit()]
+        if numbers:
+            score += 6.0 if all(number in offered_set for number in numbers) else -6.0
+        # Prefer a result whose opening name/address closely matches the query.
+        wanted_phrase = " ".join(wanted)
+        offered_phrase = " ".join(offered)
+        if wanted_phrase and wanted_phrase in offered_phrase:
+            score += 3.0
+        return score / max(len(wanted), 1)
+
+    def _open_candidates_from_nominatim(
+        self, address: str, country_code: str, limit: int
+    ) -> list[GeocodeResult]:
+        results = []
+        for item in self._nominatim_geocode_candidates(address, country_code, limit=limit):
+            lat = item.get("lat")
+            lon = item.get("lon")
+            if lat is not None and lon is not None:
+                results.append(GeocodeResult(
+                    lat, lon, item.get("display_name", address)))
+        return results
+
+    def _open_candidates_from_photon(
+        self, address: str, country_code: str, limit: int
+    ) -> list[GeocodeResult]:
+        results = []
+        for feat in self._photon_geocode_candidates(address, country_code, limit=limit):
+            props = feat.get("properties", {})
+            coords = feat.get("geometry", {}).get("coordinates", [None, None])
+            if coords[0] is not None and coords[1] is not None:
+                results.append(GeocodeResult(
+                    coords[1], coords[0], self._photon_label(props, address)))
+        return results
 
     def _open_geocode(
         self, address: str, country_code: str = ""
@@ -349,34 +438,45 @@ class RouteTools:
         if candidates:
             return candidates[:limit]
 
+        search_value = self._search_query(address)
         try:
-            for item in self._nominatim_geocode_candidates(address, country_code, limit=limit):
-                lat = item.get("lat")
-                lon = item.get("lon")
-                if lat is None or lon is None:
-                    continue
-                candidates.append(GeocodeResult(lat, lon, item.get("display_name", address)))
+            candidates.extend(self._open_candidates_from_nominatim(
+                search_value, country_code, limit))
         except Exception:
             pass
 
-        if candidates:
-            return candidates[:limit]
+        # Keep the usual successful path to one request. Ask Photon only when
+        # Nominatim has no result that preserves the important query terms
+        # (notably a business name or a requested house number).
+        best_score = max(
+            (self._geocode_score(search_value, item) for item in candidates),
+            default=float("-inf"),
+        )
+        meaningful_count = len([
+            token for token in re.findall(r"[a-z0-9]+", search_value.casefold())
+            if token != "the"
+        ])
+        strong_threshold = 1.0 if meaningful_count else 0.0
+        if not candidates or best_score < strong_threshold:
+            try:
+                candidates.extend(self._open_candidates_from_photon(
+                    search_value, country_code, limit))
+            except Exception:
+                pass
 
-        try:
-            for feat in self._photon_geocode_candidates(address, country_code, limit=limit):
-                props = feat.get("properties", {})
-                geom = feat.get("geometry", {})
-                coords = geom.get("coordinates", [None, None])
-                if coords[0] is None or coords[1] is None:
-                    continue
-                label = props.get("name") or props.get("street") or address
-                if props.get("city") and props.get("city") not in label:
-                    label = f"{label}, {props.get('city')}"
-                candidates.append(GeocodeResult(coords[1], coords[0], label))
-        except Exception:
-            pass
-
-        return candidates[:limit]
+        unique = []
+        seen = set()
+        for candidate in candidates:
+            key = (
+                round(candidate.lat, 5), round(candidate.lon, 5),
+                candidate.formatted.strip().casefold(),
+            )
+            if key not in seen:
+                seen.add(key)
+                unique.append(candidate)
+        unique.sort(
+            key=lambda item: self._geocode_score(search_value, item), reverse=True)
+        return unique[:limit]
 
     # ------------------------------------------------------------------
     # Geocoding

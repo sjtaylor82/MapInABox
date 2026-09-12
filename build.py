@@ -50,6 +50,10 @@ m = re.search(r"APP_VERSION\s*=\s*['\"]([^'\"]+)['\"]", core_src)
 if not m:
     fail("Could not find APP_VERSION in core.py")
 VERSION = m.group(1)
+name_match = re.search(r"APP_NAME\s*=\s*['\"]([^'\"]+)['\"]", core_src)
+if not name_match:
+    fail("Could not find APP_NAME in core.py")
+APP_METADATA_NAME = name_match.group(1)
 print(f"Version: {VERSION}")
 
 # ── Sync version + edition into MapInABox.iss ────────────────────────────────
@@ -197,6 +201,39 @@ if not DO_MAC_APP:
     if os.path.exists(legacy_marker):
         fail("Build unexpectedly contains the obsolete Education marker")
     print(f"Verified {EDITION.title()} edition is embedded in the executable")
+
+    # JAWS Ctrl+Insert+V reads the version resource from the module owning the
+    # focused wxPython window. Stamp both the application executable and wx's
+    # compiled core, using core.py as the single source of name/version truth.
+    from version_resource import (
+        announcement, read_version_strings, release_targets,
+        stamp_version_resource, verify_release_metadata,
+    )
+    metadata_targets = release_targets(dist_root)
+    if len(metadata_targets) < 2:
+        fail("Packaged wx core was not found; JAWS version metadata would be unavailable")
+    for target in metadata_targets:
+        stamp_version_resource(
+            target,
+            APP_METADATA_NAME,
+            VERSION,
+            file_type=1 if target.suffix.lower() == ".exe" else 2,
+        )
+
+    # Rewriting the pyd must not make the packaged wx runtime unloadable.
+    wx_check = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.path.insert(0, sys.argv[1]); import wx; print(wx.version())",
+         os.path.join(dist_root, "_internal")],
+        capture_output=True, text=True, cwd=HERE,
+    )
+    if wx_check.returncode != 0:
+        fail("Packaged wx failed after metadata stamping: " + wx_check.stderr)
+    for target in metadata_targets:
+        problems = verify_release_metadata(target, APP_METADATA_NAME, VERSION)
+        if problems:
+            fail(f"{target.name} has invalid JAWS version metadata: " + "; ".join(problems))
+        print(f"Verified screen-reader metadata: {announcement(read_version_strings(target))}")
 
     manifest_path = write_manifest(dist_root, VERSION, EDITION)
     print(f"WROTE {manifest_path}  (portable update manifest)")

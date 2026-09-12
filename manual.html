@@ -25,7 +25,7 @@
 <body>
 
 <h1>Map in a Box — User Manual</h1>
-<p><strong>Version 2026.9.2</strong> &nbsp;|&nbsp; Windows &amp; macOS</p>
+<p><strong>Version 2026.9.3</strong> &nbsp;|&nbsp; Windows &amp; macOS</p>
 
 
 <nav aria-label="Table of contents">
@@ -224,7 +224,7 @@
 <p>Street mode lets you follow the order of addresses and intersections without estimating distances with the arrow keys.</p>
 
 <ul>
-  <li>Press <code>Page Up</code> to move toward the previous or lower known address and <code>Page Down</code> to move toward the next or higher one.</li>
+  <li>Press <code>Page Up</code> to move toward the previous or lower known address and <code>Page Down</code> to move toward the next or higher one. The nearest cross street is announced from the address point's actual side of the road when that information is available.</li>
   <li>Press <code>Ctrl+F12</code> to choose what those keys visit: all known addresses, with POI names announced where present, or only addresses and locations that have a POI.</li>
   <li>If several POIs share an address, use <code>Shift+Page Up</code> and <code>Shift+Page Down</code> to hear each one.</li>
   <li>Press <code>Ctrl+Alt+F12</code> to include all numbers, odd numbers, or even numbers.</li>
@@ -289,7 +289,7 @@
 
 <p>A tool may ask you to set marks, choose a destination, or add an API key before it can continue. If a key is missing, Map in a Box tells you which one you need.</p>
 
-<p>In Education, a computer administrator chooses which planning tools students can use. Hotel Search, Virgin Australia Booking, and Order an Uber are not included. Students also cannot open food websites, reviews, or menu links from Map in a Box.</p>
+<p>In Education, a computer administrator chooses which planning tools students can use. Hotel Search, Virgin Australia Booking, Accor Booking, Expedia Booking, Booking.com Booking, and Order an Uber are not included. Students also cannot open food websites, reviews, or menu links from Map in a Box.</p>
 
 <h3 id="tool-detour">14.1 Detour Calculator</h3>
 
@@ -414,7 +414,48 @@
 
 <p>Your browser opens the Virgin Australia flight-selection page with the search details filled in. Check the available flights and fares, then complete the booking on the Virgin Australia website. Map in a Box does not purchase a ticket or receive your payment details.</p>
 
-<h3 id="tool-order-uber">14.11 Order an Uber</h3>
+<h3 id="tool-accor-booking">14.11 Accor Booking</h3>
+
+<p>Accor Booking provides a short, screen-reader-friendly hotel-search form and opens Accor with the search details filled in.</p>
+
+<ol>
+  <li>Enter a destination or hotel name.</li>
+  <li>Enter check-in and check-out as eight digits in <code>DDMMYYYY</code> format, for example <code>19092026</code>.</li>
+  <li>Choose the numbers of rooms, adults, and children, and optionally request an accessible room.</li>
+  <li>Select <strong>Open Accor</strong>.</li>
+</ol>
+
+<p>Your browser opens Accor's hotel results. Check the destination, dates, guests, availability, and prices there before selecting a room. Map in a Box does not reserve a room or receive payment details.</p>
+
+<h3 id="tool-expedia-booking">14.12 Expedia Booking</h3>
+
+<p>Expedia Booking provides a short, screen-reader-friendly form for hotels, return flights, or flight-and-hotel packages, and opens Expedia Australia with the search details filled in.</p>
+
+<ol>
+  <li>Choose <strong>Hotels</strong>, <strong>Flights</strong>, or <strong>Package</strong>.</li>
+  <li>For flights and packages, enter where you are leaving from. Then enter your destination or hotel location.</li>
+  <li>Enter the start or departure date and the end or return date as eight digits in <code>DDMMYYYY</code> format, for example <code>19092026</code>.</li>
+  <li>Choose the numbers of rooms and adults. Rooms is unavailable for a flight-only search.</li>
+  <li>Select <strong>Open Expedia</strong>.</li>
+</ol>
+
+<p>Your browser opens the corresponding Expedia results. Check the locations, dates, travellers, availability, and prices there before selecting anything. Map in a Box does not make a reservation or receive payment details.</p>
+
+<h3 id="tool-booking-com">14.13 Booking.com Booking</h3>
+
+<p>Booking.com Booking provides a short, screen-reader-friendly form for stays, return flights, or flight-and-hotel packages.</p>
+
+<ol>
+  <li>Choose <strong>Hotels</strong>, <strong>Flights</strong>, or <strong>Package</strong>.</li>
+  <li>For flights and packages, enter where you are leaving from. Then enter your destination or hotel location.</li>
+  <li>Enter the start or departure date and the end or return date as eight digits in <code>DDMMYYYY</code> format.</li>
+  <li>Choose the numbers of rooms and adults. Rooms is unavailable for a flight-only search.</li>
+  <li>Select <strong>Open Booking.com</strong>.</li>
+</ol>
+
+<p>Your browser opens the corresponding Booking.com results. Check all search details, availability, and prices before selecting anything. Map in a Box does not make a reservation or receive payment details.</p>
+
+<h3 id="tool-order-uber">14.14 Order an Uber</h3>
 
 <p>Order an Uber hands a ride request to Uber with the pick-up point and destination already filled in. Open the Tools menu with <code>F12</code> and pick <strong>Order an Uber</strong>.</p>
 
@@ -509,7 +550,7 @@
 
 <h3>16.6 Education Admin tab</h3>
 <p>This tab appears only in Education. It shows the planning tools available to students. A computer administrator can turn each permitted tool on or off. Windows or macOS asks for administrator approval before applying the choices to everyone who uses that computer.</p>
-<p>Hotel Search, Virgin Australia Booking, and Order an Uber cannot be enabled. If the saved school policy cannot be read, Map in a Box makes only the default approved tools available.</p>
+<p>Hotel Search, Virgin Australia Booking, Accor Booking, Expedia Booking, Booking.com Booking, and Order an Uber cannot be enabled. If the saved school policy cannot be read, Map in a Box makes only the default approved tools available.</p>
 
 
 <h2 id="api-keys">17. Internet and API keys</h2>

@@ -39,6 +39,157 @@ _AIRLINE_DIRECT_AIRPORTS = {
     """.split()),
 }
 
+
+def _parse_ddmmyyyy(value):
+    """Parse the compact date format used by the accessible booking tools."""
+    import datetime as _dt
+    text = str(value or "").strip()
+    if not re.fullmatch(r"\d{8}", text):
+        raise ValueError("date must be DDMMYYYY")
+    return _dt.datetime.strptime(text, "%d%m%Y").date()
+
+
+def _build_accor_booking_url(values):
+    """Build Accor's search handoff URL without submitting a reservation."""
+    check_in = values["check_in"]
+    nights = (values["check_out"] - check_in).days
+    if nights < 1:
+        raise ValueError("check-out must be after check-in")
+    params = {
+        "goto": "rech_resa",
+        "code_langue": "en",
+        "destination": values["destination"],
+        "dayIn": f"{check_in.day:02d}",
+        "monthIn": f"{check_in.month:02d}",
+        "yearIn": str(check_in.year),
+        "nightNb": str(nights),
+        "roomNumber": str(values["rooms"]),
+        "adultNumber": str(values["adults"]),
+        "childrenNumber": str(values["children"]),
+        "accessibleRooms": "true" if values.get("accessible") else "false",
+    }
+    return "https://all.accor.com/lien_externe.svlt?" + urllib.parse.urlencode(params)
+
+
+def _build_expedia_booking_url(values):
+    """Build an Expedia Australia search URL without booking anything."""
+    check_in = values["check_in"]
+    check_out = values["check_out"]
+    if check_out <= check_in:
+        raise ValueError("check-out must be after check-in")
+    start_date = check_in.isoformat()
+    end_date = check_out.isoformat()
+    search_type = values.get("search_type", "hotels")
+    if search_type == "hotels":
+        params = {
+            "destination": values["destination"],
+            "startDate": start_date,
+            "endDate": end_date,
+            "d1": start_date,
+            "d2": end_date,
+            "rooms": str(values["rooms"]),
+            "adults": str(values["adults"]),
+            "children": "",
+        }
+        path = "Hotel-Search"
+    elif search_type == "flights":
+        depart = check_in.strftime("%m/%d/%Y")
+        returning = check_out.strftime("%m/%d/%Y")
+        params = {
+            "flight-type": "on",
+            "mode": "search",
+            "trip": "roundtrip",
+            "leg1": (f"from:{values['origin']},to:{values['destination']},"
+                     f"departure:{depart}TANYT"),
+            "leg2": (f"from:{values['destination']},to:{values['origin']},"
+                     f"departure:{returning}TANYT"),
+            "options": "cabinclass:economy",
+            "passengers": f"adults:{values['adults']}",
+        }
+        path = "Flights-Search"
+    elif search_type == "package":
+        params = {
+            "origin": values["origin"],
+            "destination": values["destination"],
+            "startDate": start_date,
+            "endDate": end_date,
+            "d1": start_date,
+            "d2": end_date,
+            "rooms": str(values["rooms"]),
+            "adults": str(values["adults"]),
+            "packageType": "fh",
+        }
+        path = "Holidays"
+    else:
+        raise ValueError("unknown Expedia search type")
+    return f"https://www.expedia.com.au/{path}?" + urllib.parse.urlencode(params)
+
+
+def _build_booking_com_url(values):
+    """Build a Booking.com search URL without booking anything."""
+    check_in = values["check_in"]
+    check_out = values["check_out"]
+    if check_out <= check_in:
+        raise ValueError("end or return date must be after the start date")
+    search_type = values.get("search_type", "hotels")
+    if search_type == "hotels":
+        path = "searchresults.html"
+        params = {
+            "ss": values["destination"],
+            "checkin": check_in.isoformat(),
+            "checkout": check_out.isoformat(),
+            "group_adults": str(values["adults"]),
+            "group_children": "0",
+            "no_rooms": str(values["rooms"]),
+            "selected_currency": "AUD",
+        }
+    elif search_type == "flights":
+        path = "flights/index.en-gb.html"
+        params = {
+            "type": "ROUNDTRIP",
+            "cabinClass": "ECONOMY",
+            "adults": str(values["adults"]),
+            "children": "",
+            "depart": values["origin"],
+            "arrive": values["destination"],
+            "departDate": check_in.isoformat(),
+            "returnDate": check_out.isoformat(),
+        }
+    elif search_type == "package":
+        path = "packages.html"
+        params = {
+            "package_type": "flight_hotel",
+            "origin": values["origin"],
+            "destination": values["destination"],
+            "checkin": check_in.isoformat(),
+            "checkout": check_out.isoformat(),
+            "nr_adults": str(values["adults"]),
+            "nr_rooms": str(values["rooms"]),
+        }
+    else:
+        raise ValueError("unknown Booking.com search type")
+    return f"https://www.booking.com/{path}?" + urllib.parse.urlencode(params)
+
+
+def _build_greyhound_booking_url(values):
+    """Build the URL understood by Greyhound Australia's booking widget."""
+    depart = values["depart"]
+    returning = values.get("return")
+    is_return = bool(values.get("is_return"))
+    if values["origin"]["code"] == values["destination"]["code"]:
+        raise ValueError("origin and destination must be different")
+    if is_return and (returning is None or returning <= depart):
+        raise ValueError("return date must be after departure date")
+    params = {"ORIGIN": values["origin"]["code"],
+              "DESTINATION": values["destination"]["code"],
+              "TRAVELDATE": depart.isoformat(),
+              "ISRETURN": "TRUE" if is_return else "FALSE"}
+    if is_return:
+        params["RETURNDATE"] = returning.isoformat()
+    if values.get("promo_code"):
+        params["PROMOCODE"] = values["promo_code"]
+    return "https://www.greyhound.com.au/?" + urllib.parse.urlencode(params) + "#tab1"
+
 # Dialogs imported lazily to avoid circular imports
 
 def _get_dialogs():
@@ -706,6 +857,14 @@ class ToolsMixin:
                     self._tool_flight_search()
                 elif selected_tool == "virgin_booking":
                     self._tool_virgin_australia_booking()
+                elif selected_tool == "accor_booking":
+                    self._tool_accor_booking()
+                elif selected_tool == "expedia_booking":
+                    self._tool_expedia_booking()
+                elif selected_tool == "booking_com_booking":
+                    self._tool_booking_com()
+                elif selected_tool == "greyhound_booking":
+                    self._tool_greyhound_booking()
                 elif selected_tool == "hotel_search":
                     self._tool_hotel_search()
                 elif selected_tool == "find_food":
@@ -2084,6 +2243,141 @@ class ToolsMixin:
             wx.MessageBox(
                 f"Could not open Virgin Australia:\n\n{exc}\n\nBooking link:\n{url}",
                 "Virgin Australia Booking", wx.OK | wx.ICON_ERROR)
+
+    def _tool_accor_booking(self):
+        """Collect an accessible hotel search and hand it to Accor."""
+        if not self._education_tool_allowed("accor_booking"):
+            return
+        from dialogs import AccorBookingDialog
+        dlg = AccorBookingDialog(self)
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy()
+            return
+        values = dlg.values()
+        dlg.Destroy()
+        url = _build_accor_booking_url(values)
+        miab_log(
+            "navigation",
+            f"Opening Accor search: {values['destination']}, "
+            f"{values['check_in']:%d %B %Y} for "
+            f"{(values['check_out'] - values['check_in']).days} night(s), "
+            f"{values['rooms']} room(s), {values['adults']} adult(s), "
+            f"{values['children']} child(ren).",
+            self.settings,
+        )
+        try:
+            import webbrowser
+            if webbrowser.open(url) is False:
+                raise RuntimeError("The web browser did not accept the booking link.")
+            self._status_update(
+                "Accor hotel results opened in your browser. Check the search "
+                "details before choosing a room or making a booking.",
+                force=True)
+        except Exception as exc:
+            wx.MessageBox(
+                f"Could not open Accor:\n\n{exc}\n\nBooking link:\n{url}",
+                "Accor Booking", wx.OK | wx.ICON_ERROR)
+
+    def _tool_expedia_booking(self):
+        """Collect an accessible travel search and hand it to Expedia."""
+        if not self._education_tool_allowed("expedia_booking"):
+            return
+        from dialogs import ExpediaBookingDialog
+        dlg = ExpediaBookingDialog(self)
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy()
+            return
+        values = dlg.values()
+        dlg.Destroy()
+        url = _build_expedia_booking_url(values)
+        miab_log(
+            "navigation",
+            f"Opening Expedia {values['search_type']} search: "
+            f"{values['origin'] + ' to ' if values['origin'] else ''}"
+            f"{values['destination']}, "
+            f"{values['check_in']:%d %B %Y} to "
+            f"{values['check_out']:%d %B %Y}, {values['rooms']} room(s), "
+            f"{values['adults']} adult(s).",
+            self.settings,
+        )
+        try:
+            import webbrowser
+            if webbrowser.open(url) is False:
+                raise RuntimeError("The web browser did not accept the booking link.")
+            self._status_update(
+                "Expedia results opened in your browser. Check the search "
+                "details before choosing a room or making a booking.",
+                force=True)
+        except Exception as exc:
+            wx.MessageBox(
+                f"Could not open Expedia:\n\n{exc}\n\nBooking link:\n{url}",
+                "Expedia Booking", wx.OK | wx.ICON_ERROR)
+
+    def _tool_booking_com(self):
+        """Collect an accessible travel search and hand it to Booking.com."""
+        if not self._education_tool_allowed("booking_com_booking"):
+            return
+        from dialogs import BookingComBookingDialog
+        dlg = BookingComBookingDialog(self)
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy()
+            return
+        values = dlg.values()
+        dlg.Destroy()
+        url = _build_booking_com_url(values)
+        miab_log(
+            "navigation",
+            f"Opening Booking.com {values['search_type']} search: "
+            f"{values['origin'] + ' to ' if values['origin'] else ''}"
+            f"{values['destination']}, {values['check_in']:%d %B %Y} to "
+            f"{values['check_out']:%d %B %Y}, {values['rooms']} room(s), "
+            f"{values['adults']} adult(s).",
+            self.settings,
+        )
+        try:
+            import webbrowser
+            if webbrowser.open(url) is False:
+                raise RuntimeError("The web browser did not accept the booking link.")
+            self._status_update(
+                "Booking.com results opened in your browser. Check the search "
+                "details before choosing anything or making a booking.",
+                force=True)
+        except Exception as exc:
+            wx.MessageBox(
+                f"Could not open Booking.com:\n\n{exc}\n\nBooking link:\n{url}",
+                "Booking.com Booking", wx.OK | wx.ICON_ERROR)
+
+    def _tool_greyhound_booking(self):
+        """Populate Greyhound's own booking widget using official stop codes."""
+        if not self._education_tool_allowed("greyhound_booking"):
+            return
+        from greyhound import load_stops
+        from dialogs import GreyhoundBookingDialog
+        try:
+            stops = load_stops()
+        except RuntimeError as exc:
+            wx.MessageBox(str(exc), "Greyhound Australia Booking",
+                          wx.OK | wx.ICON_ERROR)
+            return
+        dlg = GreyhoundBookingDialog(self, stops)
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy()
+            return
+        values = dlg.values()
+        availability = dlg.availability
+        dlg.Destroy()
+        miab_log(
+            "navigation",
+            f"Greyhound availability search: {values['origin']['description']} to "
+            f"{values['destination']['description']}, "
+            f"{values['depart']:%d %B %Y}, "
+            f"{'return' if values['is_return'] else 'one way'}, one adult.",
+            self.settings,
+        )
+        from dialogs import GreyhoundAvailabilityDialog
+        results = GreyhoundAvailabilityDialog(self, availability, values)
+        results.ShowModal()
+        results.Destroy()
 
     def _tool_order_uber(self):
         if not self._education_tool_allowed("order_uber"):

@@ -10,7 +10,40 @@
 
 import os
 import sys
+import ast
+from pathlib import Path
 from PyInstaller.utils.hooks import collect_all, collect_submodules
+
+version_info = None
+if sys.platform == "win32":
+    from PyInstaller.utils.win32.versioninfo import (
+        VSVersionInfo, FixedFileInfo, StringFileInfo, StringTable, StringStruct,
+        VarFileInfo, VarStruct,
+    )
+    constants = {}
+    for node in ast.parse(Path('core.py').read_text(encoding='utf-8')).body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in {'APP_NAME', 'APP_VERSION'}:
+                    constants[target.id] = ast.literal_eval(node.value)
+    version_parts = tuple(int(part) for part in constants['APP_VERSION'].split('.'))
+    windows_version = version_parts + (0,) * (4 - len(version_parts))
+    version_info = VSVersionInfo(
+        ffi=FixedFileInfo(filevers=windows_version, prodvers=windows_version,
+                          mask=0x3F, flags=0, OS=0x40004, fileType=1,
+                          subtype=0, date=(0, 0)),
+        kids=[
+            StringFileInfo([StringTable('040904B0', [
+                StringStruct('ProductName', constants['APP_NAME']),
+                StringStruct('ProductVersion', constants['APP_VERSION']),
+                StringStruct('FileDescription', constants['APP_NAME']),
+                StringStruct('FileVersion', constants['APP_VERSION']),
+                StringStruct('InternalName', constants['APP_NAME']),
+                StringStruct('OriginalFilename', 'MapInABox.exe'),
+            ])]),
+            VarFileInfo([VarStruct('Translation', [0x0409, 1200])]),
+        ],
+    )
 
 if sys.platform == "darwin":
     from PyInstaller.building.osx import BUNDLE
@@ -124,6 +157,7 @@ exe = EXE(
     upx=False,           # UPX disabled — triggers AV false positives, bad for an accessibility app
     console=False,       # No console window; output goes to %APPDATA%\MapInABox\miab.log
     disable_windowed_traceback=False,
+    version=version_info,
     icon='icon.ico' if os.path.exists('icon.ico') else None,
 )
 

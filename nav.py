@@ -1037,6 +1037,8 @@ from dialogs import POICategoryDialog, StreetSearchDialog
 from logging_utils import miab_log
 from poi_fetch import filter_pois_by_category
 
+_NAV_ARRIVAL_CONTEXT_DELAY_MS = 2500
+
 
 class NavMixin:
 
@@ -1383,7 +1385,6 @@ class NavMixin:
             self.lat, self.lon, dest_lat, dest_lon, dest_name)
         if ok:
             self._sync_nav_state_from_engine()
-            msg = self._nav_route_summary(dest_name, provider="Route")
             miab_log(
                 "navigation",
                 f"OSM route started: target={dest_name!r} steps={len(self._nav_instructions)}",
@@ -1392,7 +1393,7 @@ class NavMixin:
         else:
             fail(str(msg or "No route was returned."), detail=msg)
             return
-        wx.CallAfter(self._nav_update_ui, msg)
+        wx.CallAfter(self._nav_begin_route, dest_name, "Route")
 
     def _nav_start_google(self, dest_lat, dest_lon, dest_name,
                           allow_osm_fallback=True, travel_mode="walking",
@@ -1405,7 +1406,8 @@ class NavMixin:
                 travel_mode=travel_mode)
             if ok:
                 self._sync_nav_state_from_engine()
-                msg = self._nav_route_summary(dest_name, provider="Google route")
+                wx.CallAfter(self._nav_begin_route, dest_name, "Google route")
+                return
             wx.CallAfter(self._nav_update_ui, msg)
         except Exception as exc:
             miab_log("errors", f"[Nav] Google routing failed: {exc}", getattr(self, "settings", None))
@@ -1433,7 +1435,8 @@ class NavMixin:
                 travel_mode=travel_mode)
             if ok:
                 self._sync_nav_state_from_engine()
-                msg = self._nav_route_summary(dest_name, provider="HERE route")
+                wx.CallAfter(self._nav_begin_route, dest_name, "HERE route")
+                return
             wx.CallAfter(self._nav_update_ui, msg)
         except urllib.error.HTTPError as exc:
             miab_log("errors", f"[Nav] HERE routing HTTP {exc.code}", getattr(self, "settings", None))
@@ -1505,6 +1508,48 @@ class NavMixin:
             f"{n_steps} step{'s' if n_steps != 1 else ''}.  "
             f"Up for next, Down for previous, I to repeat."
         )
+
+    def _nav_begin_route(self, dest_name, provider="Route"):
+        """Enter step one immediately and announce it without stale UI text."""
+        instructions = getattr(self, '_nav_instructions', [])
+        if not instructions:
+            self._nav_update_ui(f"{provider} to {dest_name} ready.")
+            return
+
+        entry = instructions[0]
+        if len(entry) >= 5 and self._nav_valid_coord(entry[3], entry[4]):
+            self.lat, self.lon = entry[3], entry[4]
+            if hasattr(self, "map_panel"):
+                self.map_panel.set_position(
+                    self.lat, self.lon, True, getattr(self, "street_label", ""))
+        elif len(entry) >= 5:
+            miab_log(
+                "navigation",
+                f"Ignored invalid initial route coordinate: lat={entry[3]!r} lon={entry[4]!r}",
+                self.settings,
+            )
+
+        # Step one is now current. Up advances to step two; Down and I can
+        # still repeat step one.
+        self._nav_step = 1
+        self._nav.step = 1
+        message = self._nav_route_summary(dest_name, provider=provider)
+        # A route commonly starts while focus is still on the POI used as the
+        # destination.  Direct speech can then be interrupted (or never read)
+        # by that list's native selection event.  Replace the POI list with a
+        # focused, native navigation row so screen readers have one stable
+        # object containing instruction one.
+        if hasattr(self, "_replace_poi_action_item"):
+            # Any background/live POI request that began before navigation is
+            # now stale.  Prevent its completion callback from restoring the
+            # destination POI over instruction one.
+            self._poi_context_generation = getattr(
+                self, "_poi_context_generation", 0) + 1
+            self._replace_poi_action_item(message, clear_model=True)
+        elif hasattr(self, "_announce_transient"):
+            self._announce_transient(message)
+        else:
+            self._nav_status(message)
 
     def _nav_next_instruction_str(self) -> str:
         """Delegate to NavigationEngine."""
@@ -1723,7 +1768,9 @@ class NavMixin:
             )
             threading.Thread(target=self._lookup, daemon=True).start()
         wx.CallAfter(self._play_arrival_sound)
-        wx.CallLater(200, self._nav_arrival_context)
+        # Let the final turn instruction finish speaking before the secondary
+        # GPS/street context uses the same speech channel.
+        wx.CallLater(_NAV_ARRIVAL_CONTEXT_DELAY_MS, self._nav_arrival_context)
         wx.CallLater(3500, self._nav_arrival_streetview)
 
     def _nav_check_progress(self, current_nid) -> str:

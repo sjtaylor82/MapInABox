@@ -456,6 +456,19 @@ class StreetSurveyMixin:
                 best = (distance, -1 if cross < 0 else 1 if cross > 0 else 0)
         return best[1] if best else 0
 
+    def _street_survey_near_cross_street(self, street_name, lat, lon):
+        """Nearest named road other than the address's own street."""
+        try:
+            ranked = self._street_fetcher.nearest_roads_with_distances(
+                lat, lon, getattr(self, "_road_segments", []))
+            own = self._street_survey_bare(street_name)
+            for name, _distance in ranked:
+                if self._street_survey_bare(name) != own:
+                    return name
+        except Exception:
+            pass
+        return None
+
     def _street_survey_infer_unnumbered_parity(
             self, street_name, poi, numbered_addresses, axis):
         """Infer odd/even from the locally consistent physical road side."""
@@ -675,6 +688,14 @@ class StreetSurveyMixin:
         name = target.get("name", "") if address_mode in ("poi_names", "poi_only") else ""
         address_text = (f"{target['number']} {street}"
                         if target.get("number") else f"on {street}")
+        # Address records (especially GNAF) retain their real coordinate on
+        # one side of the road.  Resolve the cross-street reference from that
+        # coordinate before any later centreline travel, so odd/even address
+        # browsing can distinguish staggered side streets.
+        near_cross = self._street_survey_near_cross_street(
+            street, target["lat"], target["lon"])
+        if near_cross:
+            address_text += f", near {near_cross}"
         if name:
             if len(same_address_pois) > 1:
                 self.sound.play_shared_address_tone()

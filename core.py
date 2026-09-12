@@ -89,7 +89,7 @@ from poi_search import (
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '2026.9.2'
+APP_VERSION   = '2026.9.3'
 
 # Bundled read-only resources — inside the executable bundle or source tree.
 BASE_DIR = RESOURCE_DIR
@@ -2887,20 +2887,11 @@ class MapNavigator(
                             wx.CallAfter(self._status_update, street + (f", {suburb}" if suburb else ""))
                         return
 
-                if getattr(self, "street_mode", False):
-                    street = ""
-                    if hasattr(self, "_street_survey_current_street"):
-                        street = self._street_survey_current_street()
-                    street = street or getattr(self, "street_label", "") or ""
-                    if street and street not in ("Unknown", "No street data", "No street data nearby"):
-                        num = self._nearest_address_number(self.lat, self.lon, street, radius=500)
-                        suburb = getattr(self, "_current_suburb", "") or ""
-                        addr_str = f"{num} {street}" if num else street
-                        if suburb:
-                            addr_str += f", {suburb}"
-                        wx.CallAfter(self._status_update, addr_str)
-                        return
-
+                # In ordinary street mode, resolve the road at the current
+                # coordinate below. Do not trust street_label here: compass
+                # movement can leave the road while that display label still
+                # contains the last road visited (for example Portsmouth
+                # Place after moving north into Raby Bay).
                 label, cross = self._nearest_road(self.lat, self.lon)
 
                 # No street data nearby — check natural features first (same
@@ -3027,6 +3018,10 @@ class MapNavigator(
                 street = dlg.selected_street
                 source = dlg.selected_source
                 self.settings["poi_browse_radius_km"] = max(1, int(round(dlg.selected_radius / 1000.0)))
+                # This dialog is also the preference editor for subsequent
+                # POI searches. Persist the chosen radius immediately; without
+                # this, restarting reloads the previous value (often 10 km).
+                save_settings(self.settings)
                 filters = []
                 if name:
                     filters.append(f"'{name}'")
@@ -8025,14 +8020,26 @@ class MapNavigator(
             self.listbox.SetSelection(self._poi_index)
             return
 
-        if key == wx.WXK_UP:
-            new_lat = min(90, self.lat + step)
-        elif key == wx.WXK_DOWN:
-            new_lat = max(-90, self.lat - step)
-        elif key == wx.WXK_LEFT:
-            new_lon = ((self.lon - lon_step + 180) % 360) - 180
-        elif key == wx.WXK_RIGHT:
-            new_lon = ((self.lon + lon_step + 180) % 360) - 180
+        # On any named road, Up/Down follow its actual geometry. Applying a
+        # north/south offset and snapping afterwards can otherwise leave the
+        # road or return to the same point forever where it curves.
+        if (self.street_mode
+                and key in (wx.WXK_UP, wx.WXK_DOWN)):
+            moved = self._step_along_pinned_street(
+                1 if key == wx.WXK_UP else -1,
+                step * 111000.0,
+            )
+            new_lat, new_lon = self.lat, self.lon
+
+        if not moved:
+            if key == wx.WXK_UP:
+                new_lat = min(90, self.lat + step)
+            elif key == wx.WXK_DOWN:
+                new_lat = max(-90, self.lat - step)
+            elif key == wx.WXK_LEFT:
+                new_lon = ((self.lon - lon_step + 180) % 360) - 180
+            elif key == wx.WXK_RIGHT:
+                new_lon = ((self.lon + lon_step + 180) % 360) - 180
 
         if new_lat != self.lat or new_lon != self.lon:
             test_label = "No street data nearby"
@@ -8083,6 +8090,11 @@ class MapNavigator(
             self.lon = new_lon
             moved = True
         if moved:
+            # A numbered street search pins the requested house number for the
+            # landing announcement.  Do not drag that number along the street
+            # after an arrow move; keep only the street pin so snapping can
+            # continue to follow the selected road.
+            self._release_numbered_address_pin_after_move()
             self._street_survey_current_poi = None
             # Keep the visual map and coordinate panel responsive while the
             # slower place/country lookup runs in the background.

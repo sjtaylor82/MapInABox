@@ -303,7 +303,9 @@ _LOW_DETAIL = frozenset({
     "footway", "cycleway", "path", "steps", "track", "bridleway",
 })
 
-_CACHE_VERSION = 3
+# Version 4 invalidates entries that may have been saved under a preferred city
+# name while containing only the reverse-geocoded suburb's OSM boundary.
+_CACHE_VERSION = 4
 _CACHE_MAX_AGE_DAYS = 90
 
 

@@ -140,6 +140,10 @@ class FreeExploreEngine:
         self._seen_side_pos: set[str] = set()  # cleared each step
         self._seen_crossings: set[str] = set()
         self._travel_dir: int = 1
+        # Exact positions visited by forward arrow presses.  Keeping the
+        # previous path as well as the coordinates lets Backward retrace a
+        # turn at a T-junction instead of continuing along the new street.
+        self._step_history: list[tuple[FreeState, int, int]] = []
 
         # Enable verbose debug logging.  When True, the engine will emit
         # diagnostic information on each step and POI classification.  This
@@ -254,6 +258,7 @@ class FreeExploreEngine:
         self._seen_crossings.clear()
         self._travel_dir = 1
         self._last_path_id = -1   # prevents oscillating back to path we just left
+        self._step_history.clear()
 
     def set_segments(self, segments: Iterable[dict]) -> None:
         # Store raw segments and build initial paths
@@ -356,6 +361,7 @@ class FreeExploreEngine:
         self._seen_poi_pos.clear()
         self._seen_crossings.clear()
         self._travel_dir = travel_dir
+        self._step_history.clear()
         # Reset direction-change tracking so the first step is always treated
         # as a fresh start regardless of the previous session's direction.
         self._last_step_direction = travel_dir
@@ -365,10 +371,47 @@ class FreeExploreEngine:
         return intro if not poi_text else f"{intro} {poi_text}"
 
     def step_forward(self) -> str:
-        return self._step(self._travel_dir)
+        before = self._snapshot_position()
+        message = self._step(self._travel_dir)
+        if self._position_changed(before[0]):
+            self._step_history.append(before)
+        return message
 
     def step_backward(self) -> str:
+        if self._step_history:
+            previous_street = self.state.street_name
+            state, travel_dir, last_path_id = self._step_history.pop()
+            self.state = state
+            self._travel_dir = travel_dir
+            self._last_path_id = last_path_id
+            self._seen_poi_keys.clear()
+            self._seen_poi_pos.clear()
+            self._seen_crossings.clear()
+            self._poi_last_seen.clear()
+            if self.state.street_name != previous_street:
+                return f"Back onto {self.state.street_name}."
+            return self.describe_current()
         return self._step(-self._travel_dir)
+
+    def _snapshot_position(self) -> tuple[FreeState, int, int]:
+        state = FreeState(
+            street_name=self.state.street_name,
+            path_id=self.state.path_id,
+            path_index=self.state.path_index,
+            lat=self.state.lat,
+            lon=self.state.lon,
+            heading_deg=self.state.heading_deg,
+        )
+        return state, self._travel_dir, getattr(self, '_last_path_id', -1)
+
+    def _position_changed(self, previous: FreeState) -> bool:
+        return (
+            self.state.path_id != previous.path_id
+            or self.state.path_index != previous.path_index
+            or dist_metres(
+                self.state.lat, self.state.lon, previous.lat, previous.lon
+            ) > 0.01
+        )
 
     def describe_current(self) -> str:
         if not self.state.street_name:
@@ -444,6 +487,7 @@ class FreeExploreEngine:
         self._seen_poi_keys.clear()
         self._seen_poi_pos.clear()
         self._seen_crossings.clear()
+        self._step_history.clear()
         poi_text = self._describe_current_pois(include_seen=False)
         dist_m = int(best_d)
         msg = (f"Now on {self.state.street_name}"
@@ -459,6 +503,7 @@ class FreeExploreEngine:
         self._seen_poi_keys.clear()
         self._seen_poi_pos.clear()
         self._seen_crossings.clear()
+        self._step_history.clear()
         return "Turned around."
 
     def _step(self, direction: int) -> str:
@@ -612,20 +657,23 @@ class FreeExploreEngine:
                 continue
             if self._base_street_name(p["street_name"]) == current_street:
                 continue
-            for check_idx in (0, len(pts) - 1):
-                d = dist_metres(endpoint.lat, endpoint.lon,
-                                pts[check_idx].lat, pts[check_idx].lon)
-                if d > 50:
-                    continue
-                h_fwd = self._heading_for_index(pts, check_idx, 1)
-                h_rev = (h_fwd + 180.0) % 360.0
-                diff_fwd = abs((h_fwd - self.state.heading_deg + 180) % 360 - 180)
-                diff_rev = abs((h_rev - self.state.heading_deg + 180) % 360 - 180)
-                enter_dir = 1 if diff_fwd <= diff_rev else -1
-                diff = min(diff_fwd, diff_rev)
-                if diff < best_diff:
-                    best_diff = diff
-                    best = (pid, p, check_idx, enter_dir)
+            # A side street commonly ends on an interior point of the road it
+            # joins. Restricting this check to the other road's endpoints made
+            # the cursor oscillate at otherwise valid T intersections.
+            nearest = self._nearest_point_on_path(
+                endpoint.lat, endpoint.lon, pts)
+            if nearest is None or nearest["distance_m"] > 50:
+                continue
+            check_idx = nearest["index"]
+            h_fwd = self._heading_for_index(pts, check_idx, 1)
+            h_rev = (h_fwd + 180.0) % 360.0
+            diff_fwd = abs((h_fwd - self.state.heading_deg + 180) % 360 - 180)
+            diff_rev = abs((h_rev - self.state.heading_deg + 180) % 360 - 180)
+            enter_dir = 1 if diff_fwd <= diff_rev else -1
+            diff = min(diff_fwd, diff_rev)
+            if diff < best_diff:
+                best_diff = diff
+                best = (pid, p, check_idx, enter_dir)
 
         if best is None:
             return f"Dead end on {self.state.street_name}."

@@ -31,6 +31,32 @@ def save_settings(settings):
 
 
 class JumpSearchMixin:
+    @staticmethod
+    def _select_jump_dialog_text(dlg) -> None:
+        """Focus the jump entry and select its query for replacement."""
+        try:
+            # wxPython 4.2 on Windows does not expose the wxWidgets
+            # TextEntryDialog::GetTextCtrl method. Locate the actual child
+            # control instead, while retaining compatibility with ports that
+            # do expose the convenience method.
+            getter = getattr(dlg, "GetTextCtrl", None)
+            text_ctrl = getter() if callable(getter) else None
+            if text_ctrl is None:
+                text_ctrl = next((
+                    child for child in dlg.GetChildren()
+                    if all(callable(getattr(child, method, None)) for method in (
+                        "GetValue", "SetFocus", "SetSelection"))
+                ), None)
+            if text_ctrl is None:
+                return
+            text_ctrl.SetFocus()
+            # Explicit bounds are more reliable than (-1, -1) on wxMSW;
+            # the latter can leave only the insertion point at the start.
+            text_ctrl.SetSelection(0, len(text_ctrl.GetValue()))
+        except (AttributeError, RuntimeError, TypeError):
+            # A dialog may be closing when its delayed callback runs.
+            pass
+
     def _load_place_cache(self):
         try:
             with open(PLACE_CACHE_PATH, encoding="utf-8") as f:
@@ -355,11 +381,17 @@ class JumpSearchMixin:
 
     def show_jump_dialog(self, initial_value=""):
         # Suppress background location announcements for the entire jump session,
-        # including any 2-second retry waits.  Cleared at every real exit point.
+        # including the retry wait. Cleared at every real exit point.
         self._suppress_location_restore = True
         dlg = wx.TextEntryDialog(self, "Search City or Country (or paste lat,lon):", "Jump")
+        select_retry_later = None
         if initial_value:
             dlg.SetValue(initial_value)
+            # wxMSW assigns focus while ShowModal starts and can overwrite a
+            # selection made beforehand. Run this shortly after the modal
+            # event loop has settled, and keep the timer alive until it exits.
+            select_retry_later = wx.CallLater(
+                75, self._select_jump_dialog_text, dlg)
         def _on_escape(evt):
             if evt.GetKeyCode() == wx.WXK_ESCAPE:
                 dlg.EndModal(wx.ID_CANCEL)
@@ -548,11 +580,11 @@ class JumpSearchMixin:
                     candidates = self._online_place_candidates(original_q)
                     if not candidates:
                         self._announce_transient_then_return("No online result found.")
-                        wx.CallLater(2000, self.show_jump_dialog, original_q)
+                        wx.CallLater(1000, self.show_jump_dialog, original_q)
                         return
                 else:
                     self._announce_transient_then_return("Not found.")
-                    wx.CallLater(2000, self.show_jump_dialog, original_q)
+                    wx.CallLater(1000, self.show_jump_dialog, original_q)
                     return
             else:
                 self._announce_transient_then_return(
