@@ -5,6 +5,7 @@ import json
 import math
 import os
 import pickle
+import re
 import time
 
 import wx
@@ -1158,7 +1159,7 @@ class WorldMapPanel(wx.Panel):
             self._draw_world_labels(gc, w, h)
 
     def _paint_street(self, gc, w, h):
-        span = 0.02
+        span = 0.012
         lon_min = self.lon - span;  lon_max = self.lon + span
         lat_min = self.lat - span;  lat_max = self.lat + span
         kw = dict(lon_min=lon_min, lon_max=lon_max,
@@ -1192,6 +1193,51 @@ class WorldMapPanel(wx.Panel):
             x2, y2 = self._geo_to_px(lon_max, glat, w, h, **kw)
             gc.StrokeLine(x1, y1, x2, y2)
             glat += step
+
+        # Draw loaded OSM roads using individual line segments. Avoid keeping
+        # native GraphicsPath objects for hundreds of roads: on Windows those
+        # were a possible source of delayed heap corruption after street mode.
+        owner = self._owner
+        segments = getattr(owner, "_road_segments", []) if owner else []
+        active = re.sub(
+            r"\s*\(.*?\)", "", self.street_label or ""
+        ).strip().casefold()
+
+        def draw_roads(active_pass):
+            for seg in segments:
+                label = re.sub(
+                    r"\s*\(.*?\)", "", seg.get("name", "")
+                ).strip()
+                is_active = bool(active and label.casefold() == active)
+                if is_active != active_pass:
+                    continue
+                coords = seg.get("coords", [])
+                if len(coords) < 2:
+                    continue
+                if active_pass:
+                    colour, width = wx.Colour(255, 205, 45), 5
+                else:
+                    kind = (seg.get("kind") or "").casefold()
+                    width = 3 if kind in {
+                        "motorway", "trunk", "primary", "secondary"
+                    } else 2
+                    colour = wx.Colour(205, 215, 225)
+                gc.SetPen(gc.CreatePen(
+                    wx.GraphicsPenInfo(colour).Width(width)))
+                for index in range(len(coords) - 1):
+                    a_lat, a_lon = coords[index]
+                    b_lat, b_lon = coords[index + 1]
+                    if ((a_lat < lat_min and b_lat < lat_min)
+                            or (a_lat > lat_max and b_lat > lat_max)
+                            or (a_lon < lon_min and b_lon < lon_min)
+                            or (a_lon > lon_max and b_lon > lon_max)):
+                        continue
+                    x1, y1 = self._geo_to_px(a_lon, a_lat, w, h, **kw)
+                    x2, y2 = self._geo_to_px(b_lon, b_lat, w, h, **kw)
+                    gc.StrokeLine(x1, y1, x2, y2)
+
+        draw_roads(False)
+        draw_roads(True)
         self._draw_classroom_trail(gc, w, h, kw)
         self._draw_classroom_destination(gc, w, h, kw)
         px, py = self._geo_to_px(self.lon, self.lat, w, h, **kw)

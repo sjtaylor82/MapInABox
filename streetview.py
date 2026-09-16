@@ -1,7 +1,7 @@
 """streetview.py — Google Street View imagery lookup with vision analysis.
 
 Fetches two Street View frames at a given coordinate (one in each direction
-along the street) and uses Mistral to describe what is visible from street
+along the street) and uses the built-in AI to describe what is visible from street
 level or an indoor/place preview - crossings, entrances, stairs, signage, and
 other access features.
 
@@ -83,7 +83,7 @@ def lookup_streetview_description(
     lat: float,
     lon: float,
     google_api_key: str = "",
-    mistral_client=None,
+    ai_client=None,
     street_heading: Optional[float] = None,
     cache_path: str = "streetview_cache.json",
     include_images: bool = True,
@@ -121,7 +121,7 @@ def lookup_streetview_description(
         miab_log("verbose", "[StreetView] No Street View coverage at this location.", None)
         return None
 
-    mistral_ready = bool(mistral_client and getattr(mistral_client, "is_configured", False))
+    ai_ready = bool(ai_client and getattr(ai_client, "is_configured", False))
 
     # ── Determine headings ─────────────────────────────────────────────────
     # ── Fetch images ───────────────────────────────────────────────────────
@@ -129,7 +129,7 @@ def lookup_streetview_description(
     img_a = _fetch_streetview_image(lat, lon, h1, google_api_key)
     img_b = _fetch_streetview_image(lat, lon, h2, google_api_key)
 
-    images = []   # list of (bytes, heading) for Mistral
+    images = []   # list of (bytes, heading) for the AI
     if img_a:
         images.append((img_a, h1))
     if img_b:
@@ -146,25 +146,25 @@ def lookup_streetview_description(
         miab_log("verbose", f"[StreetView] Cache hit for {cache_key}.", None)
         return (image_bytes_list if include_images else [], cached_desc)
 
-    if not mistral_ready:
+    if not ai_ready:
         return (
             image_bytes_list if include_images else [],
-            "Street View imagery loaded. A Mistral API key is required to fetch a visual description.",
+            "Street View imagery loaded. The AI service is not available to describe it.",
         )
 
     headings = [h for _, h in images]
     try:
-        description = mistral_client.describe_streetview_images(image_bytes_list, headings, mode=mode)
+        description = ai_client.describe_streetview_images(image_bytes_list, headings, mode=mode)
     except Exception as exc:
-        miab_log("errors", f"[StreetView] Mistral description failed: {exc}", None)
+        miab_log("errors", f"[StreetView] AI description failed: {exc}", None)
         description = ""
     if not description:
-        description = (
-            "Street View imagery loaded, but Mistral could not generate a description right now."
-        )
+        reason = (getattr(ai_client, "last_error_message", "")
+                  or "The AI could not generate one right now.")
+        return (image_bytes_list if include_images else [],
+                f"Street View imagery loaded, but no description is available. {reason}")
 
-    if description and "Mistral could not generate a description" not in description:
-        _set_cached(cache, cache_key, description)
-        _save_cache(cache_path, cache)
+    _set_cached(cache, cache_key, description)
+    _save_cache(cache_path, cache)
 
     return (image_bytes_list if include_images else [], description)

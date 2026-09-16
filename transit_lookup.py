@@ -25,14 +25,18 @@ import pickle
 import io
 import json
 import os
+import shutil
+import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 from logging_utils import miab_log
 import urllib.parse
 import zipfile
 import datetime
 import math
+import operator
 import re
 from typing import Optional
 
@@ -47,7 +51,11 @@ GTFS_STALE_DAYS   = 7
 
 # Increment this whenever _parse_zip output structure changes (new fields etc).
 # Any pickle saved with a different version will be discarded and re-parsed.
-GTFS_PARSER_VERSION = 7
+GTFS_PARSER_VERSION = 10
+
+# Departures kept per stop after merging timetable periods and route variants.
+# The busiest SEQ stop has about 3,800; anything above keeps its earliest.
+_MAX_DEPARTURES_PER_STOP = 5000
 
 # Matches "Platform 1", "Plat. 3", "Platform G" etc. inside a stop_name, for
 # operators (e.g. PTV Victoria) that never populate platform_code/stop_code
@@ -62,16 +70,35 @@ OVERRIDES_LOCAL_FILE = "gtfs_overrides.json"   # relative to script dir
 OVERRIDES_SERVER_URL = ""                       # e.g. "https://yourserver.com/gtfs_overrides.json"
 OVERRIDES_STALE_DAYS = 7
 
-# POI kinds that trigger "Ask Mistral" option in the stop list
-MAJOR_STATION_KINDS: frozenset = frozenset({
-    "station", "halt", "bus station", "ferry terminal",
-})
-
 ROUTE_TYPE_LABELS: dict[str, str] = {
     "0": "tram", "1": "metro", "2": "train", "3": "bus",
     "4": "ferry", "5": "cable tram", "6": "aerial",
     "7": "funicular", "11": "trolleybus", "12": "monorail",
 }
+
+# Extended GTFS route types, by hundreds.  Regional operators such as NSW
+# TrainLink publish coaches as 2xx, which the basic table would call "bus".
+_EXTENDED_ROUTE_TYPE_LABELS: dict[int, str] = {
+    1: "train", 2: "coach", 4: "metro", 7: "bus", 8: "trolleybus",
+    9: "tram", 10: "ferry", 11: "air", 12: "ferry", 13: "aerial",
+    14: "funicular",
+}
+
+
+def _route_type_label(route_type: str) -> str:
+    code = (route_type or "3").strip()
+    if code in ROUTE_TYPE_LABELS:
+        return ROUTE_TYPE_LABELS[code]
+    try:
+        return _EXTENDED_ROUTE_TYPE_LABELS.get(int(code) // 100, "bus")
+    except ValueError:
+        return "bus"
+
+
+def _gtfs_date(value: str) -> int:
+    """Return a GTFS YYYYMMDD date as an int, or 0 when malformed."""
+    value = (value or "").strip()
+    return int(value) if len(value) == 8 and value.isdigit() else 0
 
 # OSM kind values that indicate a transit stop/station
 TRANSIT_POI_KINDS: frozenset = frozenset({
@@ -131,6 +158,9 @@ class TransitLookup:
         self._overrides: dict | None  = None
         self.stale_confirm_cb = None
         self._stale_decisions: dict[str, bool] = {}
+        # Status callback of the public call running on each thread, so a
+        # feed download deep inside feed discovery can report progress.
+        self._status = threading.local()
 
     # ------------------------------------------------------------------
     # Public helpers used by MapNavigator
@@ -140,10 +170,6 @@ class TransitLookup:
     def is_transit_poi(poi: dict) -> bool:
         """Return True if ``poi["kind"]`` indicates a transit stop/station."""
         return poi.get("kind", "").lower() in TRANSIT_POI_KINDS
-
-    def is_major_station(self, poi: dict) -> bool:
-        """Return True if poi is a major station warranting an Ask Mistral option."""
-        return poi.get("kind", "").lower() in MAJOR_STATION_KINDS
 
     def prefetch_for_location(
         self,
@@ -158,6 +184,7 @@ class TransitLookup:
         an area downloader can prepare transit data without pretending the
         representative city centre is the user's intended station.
         """
+        self._status.cb = status_cb
         if status_cb:
             status_cb("Discovering public transport feeds…")
         feed_ids = self._ensure_feeds_for_location(lat, lon)
@@ -185,6 +212,7 @@ class TransitLookup:
         far from the representative city: selecting Queensland intentionally
         includes regional and island feeds throughout Queensland.
         """
+        self._status.cb = status_cb
         if status_cb:
             status_cb(f"Finding public transport feeds for {subdivision}…")
 
@@ -277,6 +305,7 @@ class TransitLookup:
         Each stop dict includes ``_feed_id`` so callers can query routes
         against the correct feed even when multiple feeds are merged.
         """
+        self._status.cb = status_cb
         if status_cb:
             status_cb("Loading transit data…")
 
@@ -577,42 +606,157 @@ class TransitLookup:
         route_id: str,
         feed_id: str,
         n: int = 3,
+        now: Optional[datetime.datetime] = None,
     ) -> tuple[Optional[str], list[str]]:
-        """Return ``(headsign, ["HH:MM", …])`` for the next *n* departures.
+        """Return ``(headsign, [time, …])`` for the next *n* departures.
 
-        Falls back to the earliest departures of the day if none remain today.
+        Only trips whose service runs on that day count.  Departures after
+        today name the day, e.g. "tomorrow 07:15" or "Thursday 07:15".
         Returns ``(None, [])`` if no data.
         """
         data = self._feeds.get(feed_id, {})
-        deps = data.get("stop_departures", {}).get(stop_id, [])
+        routes = data.get("routes", {})
+        line = self._line_key(routes.get(route_id)) or route_id
+
+        def same_line(entry):
+            return (self._line_key(routes.get(entry[2])) or entry[2]) == line
+
+        source_stop = stop_id
+        deps = [d for d in data.get("stop_departures", {}).get(stop_id, []) if same_line(d)]
         if not deps:
-            deps = self._fallback_departures_for_route(stop_id, route_id, feed_id)
-            if not deps:
-                return None, []
+            source_stop, deps = self._fallback_departures_for_route(
+                stop_id, route_id, feed_id)
+            deps = [d for d in deps if same_line(d)]
+        if not deps:
+            return None, []
 
-        now = datetime.datetime.now()
-        now_secs = now.hour * 3600 + now.minute * 60 + now.second
-
-        upcoming = [(s, hs) for s, _tid, rid, hs in deps
-                    if rid == route_id and s >= now_secs]
+        now = now or datetime.datetime.now()
+        today = now.date()
+        upcoming = []
+        # Start a day back: GTFS times past 24:00 belong to the previous
+        # service day but leave after midnight.
+        for offset in range(-1, 8):
+            service_day = today + datetime.timedelta(days=offset)
+            midnight = datetime.datetime.combine(service_day, datetime.time())
+            for entry in deps:
+                when = midnight + datetime.timedelta(seconds=entry[0])
+                # Caches from before parser version 8 have no service days.
+                day_services = entry[4] if len(entry) > 4 else ()
+                if when >= now and self._service_runs(data, day_services, service_day):
+                    upcoming.append((when, entry[3]))
+            # One extra day covers trips timed past 24:00.
+            if offset >= 1 and len(upcoming) >= n:
+                break
+        upcoming.sort(key=lambda item: item[0])
+        if source_stop in data.get("departures_truncated", ()):
+            # This busy stop kept only its earliest departures, so later ones
+            # today are unknown and a time on another day could be wrong.
+            upcoming = [item for item in upcoming if item[0].date() == today]
         if not upcoming:
-            upcoming = [(s, hs) for s, _tid, rid, hs in deps if rid == route_id]
-        if not upcoming:
-            deps = self._fallback_departures_for_route(stop_id, route_id, feed_id)
-            if not deps:
-                return None, []
-            upcoming = [(s, hs) for s, _tid, rid, hs in deps if rid == route_id and s >= now_secs]
-            if not upcoming:
-                upcoming = [(s, hs) for s, _tid, rid, hs in deps if rid == route_id]
-            if not upcoming:
-                return None, []
+            return deps[0][3] or None, []
+        return upcoming[0][1], [self._spoken_departure(when, now)
+                                for when, _hs in upcoming[:n]]
 
-        headsign = upcoming[0][1]
-        times = []
-        for secs, _ in upcoming[:n]:
-            h, m = divmod(secs // 60, 60)
-            times.append(f"{h % 24:02d}:{m:02d}")
-        return headsign, times
+    def upcoming_departures(
+        self,
+        stops: list[dict],
+        now: Optional[datetime.datetime] = None,
+        limit: int = 100,
+    ) -> tuple[list[dict], bool]:
+        """Departures from any of *stops*, earliest first.
+
+        *stops* are dicts with ``stop_id`` and ``_feed_id`` (as returned by
+        nearby_stops).  Covers what is left of today; when nothing is, the
+        next day that has services.  Trips that end at the stop are skipped.
+
+        Returns ``(departures, incomplete)``.  Each departure has ``when``,
+        ``route_id``, ``feed_id``, ``headsign`` and ``stop`` (the stop dict).
+        *incomplete* is True when a very busy stop's later departures were
+        not kept, so the list may be missing some.
+        """
+        now = now or datetime.datetime.now()
+        today = now.date()
+
+        def collect(service_days):
+            found: dict = {}
+            for stop in stops:
+                feed_id = stop.get("_feed_id")
+                sid = stop.get("stop_id")
+                data = self._feeds.get(feed_id, {})
+                routes = data.get("routes", {})
+                route_stops = data.get("route_stops", {})
+                for entry in data.get("stop_departures", {}).get(sid, []):
+                    rid, hs = entry[2], entry[3]
+                    trip_stops = route_stops.get((rid, hs))
+                    if trip_stops and trip_stops[-1].get("stop_id") == sid:
+                        continue  # arrives and terminates here
+                    day_services = entry[4] if len(entry) > 4 else ()
+                    for service_day in service_days:
+                        when = (datetime.datetime.combine(service_day, datetime.time())
+                                + datetime.timedelta(seconds=entry[0]))
+                        if when < now or not self._service_runs(data, day_services, service_day):
+                            continue
+                        # Platforms of one station can list the same trip.
+                        line = self._line_key(routes.get(rid)) or rid
+                        key = (feed_id, line, hs, when)
+                        found.setdefault(key, {"when": when, "route_id": rid,
+                                               "feed_id": feed_id,
+                                               "headsign": hs, "stop": stop})
+            return sorted(found.values(), key=lambda d: d["when"])
+
+        # The rest of today's service, including yesterday's trips timed past
+        # 24:00 that leave after midnight.
+        departures = collect([today - datetime.timedelta(days=1), today])
+        if not departures:
+            for offset in range(1, 8):
+                departures = collect([today + datetime.timedelta(days=offset)])
+                if departures:
+                    break
+        incomplete = any(
+            stop.get("stop_id") in self._feeds.get(stop.get("_feed_id"), {}).get(
+                "departures_truncated", ())
+            for stop in stops)
+        return departures[:limit], incomplete
+
+    @staticmethod
+    def _line_key(route: Optional[dict]):
+        """Identify a line the way routes_for_stop groups route variants."""
+        if not route:
+            return None
+        return (route.get("type"), route.get("short") or route.get("long"))
+
+    @staticmethod
+    def _service_runs(data: dict, day_services, day: datetime.date) -> bool:
+        """True if any of *day_services* runs on *day* per the feed's calendars."""
+        calendars = data.get("services") or {}
+        exceptions = data.get("service_exceptions") or {}
+        if not calendars and not exceptions:
+            return True  # The feed publishes no calendar at all.
+        key = day.year * 10000 + day.month * 100 + day.day
+        weekday_bit = 1 << day.weekday()
+        for service in day_services:
+            change = exceptions.get(service, {}).get(key)
+            if change == 1:
+                return True
+            if change == 2:
+                continue
+            calendar = calendars.get(service)
+            if (calendar and calendar[0] & weekday_bit
+                    and calendar[1] <= key and (not calendar[2] or key <= calendar[2])):
+                return True
+        return False
+
+    @staticmethod
+    def _spoken_departure(when: datetime.datetime, now: datetime.datetime) -> str:
+        clock = when.strftime("%H:%M")
+        days = (when.date() - now.date()).days
+        if days <= 0:
+            return clock
+        if days == 1:
+            return f"tomorrow {clock}"
+        if days < 7:
+            return f"{when.strftime('%A')} {clock}"
+        return f"next {when.strftime('%A')} {clock}"
 
     def _fallback_departures_for_route(
         self,
@@ -620,8 +764,8 @@ class TransitLookup:
         route_id: str,
         feed_id: str,
         radius_m: int = 600,
-    ) -> list[tuple[int, str, str, str]]:
-        """Return departures from the nearest nearby stop that serves route_id.
+    ) -> tuple[str, list[tuple]]:
+        """Return ``(stop_id, departures)`` from the nearest stop serving route_id.
 
         Some GTFS feeds expose an interchange node or platform centroid with no
         departure rows, while a nearby platform stop carries the actual times.
@@ -632,18 +776,22 @@ class TransitLookup:
         stops = data.get("stops", {})
         base = stops.get(stop_id)
         if not base:
-            return []
+            return stop_id, []
         base_lat = base.get("lat")
         base_lon = base.get("lon")
         if base_lat is None or base_lon is None:
-            return []
+            return stop_id, []
 
+        routes = data.get("routes", {})
+        line = self._line_key(routes.get(route_id)) or route_id
         best = None
+        best_sid = stop_id
         best_dist = float("inf")
         for sid, stop in stops.items():
             if sid == stop_id:
                 continue
-            if route_id not in data.get("stop_routes", {}).get(sid, set()):
+            if not any((self._line_key(routes.get(rid)) or rid) == line
+                       for rid in data.get("stop_routes", {}).get(sid, ())):
                 continue
             deps = data.get("stop_departures", {}).get(sid, [])
             if not deps:
@@ -657,8 +805,9 @@ class TransitLookup:
                 continue
             if d <= radius_m and d < best_dist:
                 best = deps
+                best_sid = sid
                 best_dist = d
-        return best or []
+        return best_sid, best or []
 
     def refresh_catalog(self) -> Optional[object]:
         """Force-download the catalogue and clear feed-discovery indexes.
@@ -728,6 +877,7 @@ class TransitLookup:
 
     def refresh_cached_feeds(self, status_cb=None) -> tuple[list[str], list[str]]:
         """Force-refresh every parsed feed cache, retaining failures as fallback."""
+        self._status.cb = status_cb
         feed_ids = [item["feed_id"] for item in self.cached_feed_summaries()]
         if not feed_ids:
             return [], []
@@ -1372,6 +1522,100 @@ class TransitLookup:
         os.makedirs(d, exist_ok=True)
         return d
 
+    def _report(self, message: str) -> None:
+        callback = getattr(self._status, "cb", None)
+        if callback:
+            try:
+                callback(message)
+            except Exception:
+                pass
+
+    def _meta_path(self, feed_id: str) -> str:
+        return os.path.join(self._cache_dir(), f"{feed_id}.meta.json")
+
+    def _read_meta(self, feed_id: str) -> dict:
+        try:
+            with open(self._meta_path(feed_id), encoding="utf-8") as f:
+                meta = json.load(f)
+            return meta if isinstance(meta, dict) else {}
+        except Exception:
+            return {}
+
+    def _write_meta(self, feed_id: str, meta: dict) -> None:
+        try:
+            with open(self._meta_path(feed_id), "w", encoding="utf-8") as f:
+                json.dump(meta, f)
+        except Exception as exc:
+            miab_log("errors", f"[Transit] Could not save feed details for {feed_id}: {exc}",
+                     getattr(self, "settings", None))
+
+    def _feed_unchanged(self, feed_id: str, download_url: str) -> bool:
+        """True when the server confirms the feed hasn't changed since our download.
+
+        Asks with the ETag / Last-Modified saved at download time; a 304 reply
+        costs a few hundred bytes instead of re-downloading and re-parsing.
+        """
+        meta = self._read_meta(feed_id)
+        if meta.get("url") != download_url or not (meta.get("etag") or meta.get("last_modified")):
+            return False
+        headers = {"User-Agent": "MapInABox/1.0"}
+        if meta.get("etag"):
+            headers["If-None-Match"] = meta["etag"]
+        if meta.get("last_modified"):
+            headers["If-Modified-Since"] = meta["last_modified"]
+        try:
+            request = urllib.request.Request(download_url, headers=headers)
+            with urllib.request.urlopen(request, timeout=10, context=_ssl_context()):
+                return False  # 200: changed (the body is left unread)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 304:
+                meta["downloaded_at"] = time.time()
+                self._write_meta(feed_id, meta)
+                miab_log("navigation", f"[Transit] Feed {feed_id} unchanged on the server "
+                         f"— keeping the saved timetable", getattr(self, "settings", None))
+                return True
+            return False
+        except Exception:
+            return False
+
+    def _download_feed(self, feed_id: str, download_url: str, zip_path: str) -> None:
+        """Stream a feed to *zip_path*, reporting progress; raises on failure."""
+        partial = zip_path + ".part"
+        request = urllib.request.Request(download_url, headers={"User-Agent": "MapInABox/1.0"})
+        try:
+            with urllib.request.urlopen(request, timeout=90, context=_ssl_context()) as r, \
+                    open(partial, "wb") as out:
+                total = int(r.headers.get("Content-Length") or 0)
+                if total >= 20_000_000:
+                    self._report(f"Downloading a {total // 1_000_000} megabyte public transport "
+                                 f"timetable. The first download can take a few minutes.")
+                done = 0
+                next_report = 25
+                while True:
+                    chunk = r.read(1 << 20)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    done += len(chunk)
+                    if total >= 20_000_000 and done * 100 // total >= next_report < 100:
+                        self._report(f"Timetable download {next_report} percent.")
+                        next_report += 25
+                etag = r.headers.get("ETag") or ""
+                last_modified = r.headers.get("Last-Modified") or ""
+            if total and done < total:
+                raise OSError(f"download ended early ({done} of {total} bytes)")
+            os.replace(partial, zip_path)
+        except BaseException:
+            try:
+                os.remove(partial)
+            except OSError:
+                pass
+            raise
+        self._write_meta(feed_id, {
+            "downloaded_at": time.time(), "feed_id": feed_id, "url": download_url,
+            "etag": etag, "last_modified": last_modified,
+        })
+
     def _gtfs_is_stale(self, feed_id: str) -> bool:
         age = self._gtfs_cache_age_days(feed_id)
         return age is None or age > GTFS_STALE_DAYS
@@ -1437,10 +1681,17 @@ class TransitLookup:
                 if data.get("_parser_version") != GTFS_PARSER_VERSION:
                     miab_log("navigation", f"[Transit] Pickle for {feed_id} is parser version "
                           f"{data.get('_parser_version')} (current={GTFS_PARSER_VERSION})"
-                          f" — discarding and re-downloading", getattr(self, "settings", None))
-                    os.remove(pickle_p)
+                          f" — re-downloading", getattr(self, "settings", None))
+                    # Keep the old data in use (and on disk) until the
+                    # replacement has downloaded and parsed successfully.
+                    stale_fallback_data = data
                     # fall through to download
                 else:
+                    if (force_refresh or stale) and self._feed_unchanged(feed_id, download_url):
+                        # The server says nothing changed: no prompt, download or parse.
+                        self._stale_decisions.pop(feed_id, None)
+                        self._feeds[feed_id] = data
+                        return feed_id, data
                     if force_refresh:
                         stale_fallback_data = data
                         miab_log(
@@ -1498,17 +1749,10 @@ class TransitLookup:
         # ── Load or download the zip ──────────────────────────────────
         if not force_refresh and not stale and os.path.exists(zp):
             miab_log("navigation", f"[Transit] Using cached GTFS zip for {feed_id}", getattr(self, "settings", None))
-            with open(zp, "rb") as f:
-                zip_bytes = f.read()
         else:
             miab_log("navigation", f"[Transit] Downloading GTFS for {feed_id} …", getattr(self, "settings", None))
             try:
-                req = urllib.request.Request(
-                    download_url,
-                    headers={"User-Agent": "MapInABox/1.0"},
-                )
-                with urllib.request.urlopen(req, timeout=90, context=_ssl_context()) as r:
-                    zip_bytes = r.read()
+                self._download_feed(feed_id, download_url, zp)
             except Exception as exc:
                 miab_log("errors", f"[Transit] Download failed for {feed_id}: {exc}", getattr(self, "settings", None))
                 if stale_fallback_data is not None:
@@ -1523,14 +1767,10 @@ class TransitLookup:
                 self._failed_feeds.add(feed_id)
                 return feed_id, None
 
-            meta_p = os.path.join(self._cache_dir(), f"{feed_id}.meta.json")
-            with open(zp, "wb") as f:
-                f.write(zip_bytes)
-            with open(meta_p, "w", encoding="utf-8") as f:
-                json.dump({"downloaded_at": time.time(), "feed_id": feed_id}, f)
         # ── Parse and save pickle ─────────────────────────────────────
+        self._report("Reading the timetable…")
         try:
-            data = self._parse_zip(zip_bytes, feed_id)
+            data = self._parse_zip(zp, feed_id)
         except Exception as exc:
             miab_log(
                 "errors",
@@ -1556,7 +1796,7 @@ class TransitLookup:
         return feed_id, data
 
     @staticmethod
-    def _iter_source_zips(zip_bytes: bytes, feed_id: str):
+    def _iter_source_zips(source, feed_id: str):
         """Yield (id_prefix, ZipFile) pairs to parse.
 
         Most GTFS feeds are a single flat ZIP with stops.txt etc. at the
@@ -1573,7 +1813,16 @@ class TransitLookup:
         unique id_prefix so IDs (which can collide between an operator's
         separate per-mode exports) never clash.
         """
-        outer = zipfile.ZipFile(io.BytesIO(zip_bytes))
+        outer = zipfile.ZipFile(
+            io.BytesIO(source) if isinstance(source, (bytes, bytearray)) else source)
+        try:
+            # Close the zip when done so Windows lets it be deleted afterwards.
+            yield from TransitLookup._iter_zip_contents(outer, source, feed_id)
+        finally:
+            outer.close()
+
+    @staticmethod
+    def _iter_zip_contents(outer, source, feed_id: str):
         names = [n for n in outer.namelist() if not n.endswith("/")]
         has_top_level_gtfs = any(
             n.lower().split("/")[-1] == "stops.txt" for n in names)
@@ -1590,25 +1839,64 @@ class TransitLookup:
 
         miab_log("navigation", f"[Transit] {feed_id}: no top-level GTFS files — treating as "
               f"a zip-of-zips with {len(inner_zip_names)} nested feed(s).", None)
+        # Unpack each nested zip to a temporary file rather than memory: some
+        # are over 100 MB.
+        temp_dir = None if isinstance(source, (bytes, bytearray)) else os.path.dirname(source)
         for i, inner_name in enumerate(inner_zip_names):
+            handle, temp_path = tempfile.mkstemp(suffix=".zip", dir=temp_dir)
+            inner_zf = None
             try:
-                inner_bytes = outer.read(inner_name)
-                inner_zf = zipfile.ZipFile(io.BytesIO(inner_bytes))
+                with os.fdopen(handle, "wb") as out, outer.open(inner_name) as inner:
+                    shutil.copyfileobj(inner, out, 1 << 20)
+                inner_zf = zipfile.ZipFile(temp_path)
             except Exception as exc:
                 miab_log("errors", f"[Transit] {feed_id}: failed to open nested zip "
                       f"{inner_name!r}: {exc}", None)
-                continue
-            yield f"z{i}_", inner_zf
+            try:
+                if inner_zf is not None:
+                    yield f"z{i}_", inner_zf
+            finally:
+                if inner_zf is not None:
+                    inner_zf.close()
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
 
-    def _parse_zip(self, zip_bytes: bytes, feed_id: str) -> dict:
-        """Parse a GTFS ZIP (or zip-of-zips) and return a structured dict."""
+    def _parse_zip(self, source, feed_id: str) -> dict:
+        """Parse a GTFS ZIP (or zip-of-zips), given as a file path or bytes."""
 
-        def read_csv(zf: zipfile.ZipFile, fname: str) -> list[dict]:
+        def read_csv(zf: zipfile.ZipFile, fname: str):
+            # Yield rows one at a time: stop_times.txt can have millions.
             names = {n.lower().split("/")[-1]: n for n in zf.namelist()}
             if fname not in names:
-                return []
+                return
             with zf.open(names[fname]) as f:
-                return list(csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig")))
+                yield from csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig"))
+
+        def read_columns(zf: zipfile.ZipFile, fname: str, columns: tuple):
+            # Plain rows picked by column position: about twice as fast as
+            # DictReader, which matters for stop_times.txt's millions of rows.
+            names = {n.lower().split("/")[-1]: n for n in zf.namelist()}
+            if fname not in names:
+                return
+            with zf.open(names[fname]) as f:
+                reader = csv.reader(io.TextIOWrapper(f, encoding="utf-8-sig"))
+                header = [h.strip() for h in next(reader, [])]
+                positions = [header.index(c) if c in header else None for c in columns]
+                width = max((i for i in positions if i is not None), default=-1) + 1
+                if all(i is not None for i in positions) and len(positions) > 1:
+                    pick = operator.itemgetter(*positions)
+                    for row in reader:
+                        if len(row) >= width:
+                            yield pick(row)
+                        elif row:
+                            row = row + [""] * (width - len(row))
+                            yield pick(row)
+                else:
+                    for row in reader:
+                        yield tuple(row[i] if i is not None and i < len(row) else ""
+                                    for i in positions)
 
         # Accumulated across all source zips (normally just one).
         stops:           dict[str, dict]  = {}
@@ -1618,8 +1906,16 @@ class TransitLookup:
         stop_departures: dict[str, list]  = {}
         route_stops:     dict[tuple, list] = {}
         trip_headsign:   dict[str, str]   = {}
+        # service_id -> (weekday bitmask with Monday as bit 0, start, end YYYYMMDD)
+        services:           dict[str, tuple] = {}
+        # service_id -> {YYYYMMDD: 1 added | 2 removed}
+        service_exceptions: dict[str, dict]  = {}
+        departures_truncated: set = set()
+        interned: dict = {}
+        # stop_id -> {(line, headsign, minute): [secs, trip, route, headsign, {services}]}
+        merged_departures: dict[str, dict] = {}
 
-        for id_prefix, zf in self._iter_source_zips(zip_bytes, feed_id):
+        for id_prefix, zf in self._iter_source_zips(source, feed_id):
             def pfx(raw: str) -> str:
                 return f"{id_prefix}{raw}" if raw else raw
 
@@ -1673,34 +1969,55 @@ class TransitLookup:
                         "route_id":  pfx(rid),
                         "short":     row.get("route_short_name", "").strip(),
                         "long":      row.get("route_long_name",  "").strip(),
-                        "type":      ROUTE_TYPE_LABELS.get(
-                                         row.get("route_type", "3").strip(), "bus"),
+                        "type":      _route_type_label(row.get("route_type", "3")),
                         "agency_id": pfx(aid),
                         "agency":    local_agencies.get(aid, local_agencies.get("", "")),
                     }
 
+            # ── service calendars ──────────────────────────────────────
+            weekdays = ("monday", "tuesday", "wednesday", "thursday",
+                        "friday", "saturday", "sunday")
+            for row in read_csv(zf, "calendar.txt"):
+                svc = pfx(row.get("service_id", "").strip())
+                if svc:
+                    mask = sum(1 << i for i, day in enumerate(weekdays)
+                               if row.get(day, "").strip() == "1")
+                    services[svc] = (mask, _gtfs_date(row.get("start_date")),
+                                     _gtfs_date(row.get("end_date")))
+            for row in read_csv(zf, "calendar_dates.txt"):
+                svc = pfx(row.get("service_id", "").strip())
+                day = _gtfs_date(row.get("date"))
+                kind = row.get("exception_type", "").strip()
+                if svc and day and kind in ("1", "2"):
+                    service_exceptions.setdefault(svc, {})[day] = int(kind)
+
             # ── trips ──────────────────────────────────────────────────
-            trip_info: dict[str, tuple[str, str]] = {}  # tid → (rid, headsign)
-            for row in read_csv(zf, "trips.txt"):
-                tid = row.get("trip_id", "").strip()
-                rid = row.get("route_id", "").strip()
-                hs  = row.get("trip_headsign", "").strip()
+            trip_info: dict[str, tuple[str, str, str]] = {}  # tid → (rid, headsign, service)
+            for tid, rid, hs, svc in read_columns(
+                    zf, "trips.txt", ("trip_id", "route_id", "trip_headsign", "service_id")):
+                tid = tid.strip()
+                rid = rid.strip()
+                hs  = hs.strip()
+                svc = pfx(svc.strip())
                 if tid:
-                    trip_info[tid] = (pfx(rid), hs)
+                    trip_info[tid] = (pfx(rid), hs, interned.setdefault(svc, svc))
 
             # ── stop_times ─────────────────────────────────────────────
             # One representative trip per (route_id, headsign): stores
             # ordered stops keyed as (rid, headsign) → {tid, seqs: [(seq,sid)]}
             rep_trip: dict[tuple, dict] = {}
+            line_of = {rid: self._line_key(r) for rid, r in routes.items()}
 
-            for row in read_csv(zf, "stop_times.txt"):
-                tid = row.get("trip_id", "").strip()
-                sid = pfx(row.get("stop_id", "").strip())
-                dep = (row.get("departure_time", "") or row.get("arrival_time", "")).strip()
-                seq = row.get("stop_sequence", "0").strip()
+            for tid, sid, dep, arr, seq in read_columns(
+                    zf, "stop_times.txt",
+                    ("trip_id", "stop_id", "departure_time", "arrival_time", "stop_sequence")):
+                tid = tid.strip()
+                sid = pfx(sid.strip())
+                dep = (dep.strip() or arr.strip())
+                seq = seq.strip() or "0"
                 if not (tid and sid):
                     continue
-                rid, hs = trip_info.get(tid, ("", ""))
+                rid, hs, svc = trip_info.get(tid, ("", "", ""))
                 if not rid:
                     continue
                 stop_routes.setdefault(sid, set()).add(rid)
@@ -1719,9 +2036,17 @@ class TransitLookup:
                 if dep:
                     secs = _t2s(dep)
                     if secs >= 0:
-                        bucket = stop_departures.setdefault(sid, [])
-                        if len(bucket) < 5000:
-                            bucket.append((secs, tid, rid, hs))
+                        # Operators such as TransLink repeat each trip under a
+                        # new route_id and service_id per timetable period, so
+                        # merge the same line, direction and minute into one
+                        # departure listing every service that runs it.
+                        key2 = (line_of.get(rid, rid), hs, secs // 60)
+                        stop_merge = merged_departures.setdefault(sid, {})
+                        entry = stop_merge.get(key2)
+                        if entry is None:
+                            stop_merge[key2] = [secs, tid, rid, hs, {svc}]
+                        else:
+                            entry[4].add(svc)
 
             # ── ordered stop sequences per (route_id, headsign) ─────────
             for (rid, hs), rep in rep_trip.items():
@@ -1742,19 +2067,17 @@ class TransitLookup:
 
             trip_headsign.update({tid: v[1] for tid, v in trip_info.items()})
 
-        # Sort first, then deduplicate (same route + same minute = same
-        # service day), then cap at 300 per stop.
-        for sid in stop_departures:
-            stop_departures[sid].sort()
-            seen_rt: set = set()
-            deduped: list = []
-            for entry in stop_departures[sid]:
-                secs, _tid, rid, _hs = entry
-                key2 = (rid, secs // 60)
-                if key2 not in seen_rt:
-                    seen_rt.add(key2)
-                    deduped.append(entry)
-            stop_departures[sid] = deduped[:300]
+        # Entries: (secs, trip_id, route_id, headsign, services), earliest
+        # first.  A capped stop's later departures that day are unknown.
+        for sid, stop_merge in merged_departures.items():
+            entries = sorted(stop_merge.values(), key=lambda entry: entry[0])
+            if len(entries) > _MAX_DEPARTURES_PER_STOP:
+                departures_truncated.add(sid)
+            kept = []
+            for secs, tid, rid, hs, svcs in entries[:_MAX_DEPARTURES_PER_STOP]:
+                svc_tuple = tuple(sorted(svcs))
+                kept.append((secs, tid, rid, hs, interned.setdefault(svc_tuple, svc_tuple)))
+            stop_departures[sid] = kept
 
         n_unique_routes = len({(r["short"] or r["long"]).strip() or rid for rid, r in routes.items() if r["short"] or r["long"]})
         unique_agencies = sorted({r.get("agency", "") for r in routes.values() if r.get("agency")})
@@ -1772,6 +2095,9 @@ class TransitLookup:
             "route_stops":     route_stops,
             "stop_departures": stop_departures,
             "trip_headsign":   trip_headsign,
+            "services":        services,
+            "service_exceptions": service_exceptions,
+            "departures_truncated": departures_truncated,
         }
 
     # ------------------------------------------------------------------

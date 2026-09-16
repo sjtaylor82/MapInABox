@@ -5,6 +5,7 @@ import time
 
 import wx
 
+from geo import INTERNAL_ROAD_LABELS
 from logging_utils import miab_log
 
 _STREET_GENERIC = frozenset({
@@ -103,6 +104,8 @@ class _StreetSearchFrame(wx.Frame):
                 continue
             low = name.lower()
             if low in seen:
+                continue
+            if low in INTERNAL_ROAD_LABELS:
                 continue
             has_real_name = bool(seg.get("raw_name", "").strip())
             if not has_real_name and low in _STREET_GENERIC:

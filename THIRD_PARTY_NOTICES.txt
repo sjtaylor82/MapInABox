@@ -62,7 +62,7 @@ Bundled and downloaded data
 Online services
 ---------------
 
-Google, HERE, Mistral, OpenRouteService, OpenSky, AviationStack, Wikipedia,
+Google, HERE, Groq, OpenRouteService, OpenSky, AviationStack, Wikipedia,
 Mapillary, Priceline, Tripadvisor, Serper, RapidAPI, Virgin Australia, and
 other linked services are governed by their own terms. They are not relicensed
 under the Map in a Box project licence.

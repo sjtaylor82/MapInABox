@@ -41,6 +41,10 @@ def save_favourites(entries: list[dict], path: str = FAVOURITES_PATH) -> None:
 
 def favourite_key(entry: dict) -> tuple:
     name = str(entry.get("name", "")).strip().lower()
+    if str(entry.get("kind") or "").casefold() == "address":
+        # An address remains the same favourite when better source data moves
+        # its coordinate from a road centreline to the actual address point.
+        return entry.get("type", "place"), name, "address"
     try:
         lat = round(float(entry.get("lat", 0)), 5)
         lon = round(float(entry.get("lon", 0)), 5)
@@ -108,8 +112,19 @@ def favourite_label(entry: dict, current_lat: float, current_lon: float) -> str:
     return ", ".join(parts)
 
 
+def unified_favourite_items(entries: list[dict],
+                            personal_pois: list[dict]) -> list[tuple[dict, bool]]:
+    """Combine every saved-place type for the single favourites list."""
+    combined = [(entry, False) for entry in entries]
+    combined.extend((entry, True) for entry in personal_pois or [])
+    return sorted(
+        combined,
+        key=lambda item: str(item[0].get("name", "")).casefold(),
+    )
+
+
 class FavouritesDialog(wx.Dialog):
-    """Accessible favourites and personal POI browser."""
+    """Accessible unified browser for every kind of saved place."""
 
     def __init__(self, parent, entries: list[dict], personal_pois: list[dict] | None = None):
         super().__init__(
@@ -121,86 +136,50 @@ class FavouritesDialog(wx.Dialog):
         self._parent = parent
         self.entries = entries
         self.personal_pois = personal_pois or []
-        self._current_items: dict[str, list[dict]] = {"poi": [], "place": [], "personal": []}
+        self._current_items: list[tuple[dict, bool]] = []
 
         panel = wx.Panel(self)
         vs = wx.BoxSizer(wx.VERTICAL)
-        self.notebook = wx.Notebook(panel)
-        self.poi_page = wx.Panel(self.notebook)
-        self.place_page = wx.Panel(self.notebook)
-        self.personal_page = wx.Panel(self.notebook)
-        self.poi_list = wx.ListBox(self.poi_page, style=wx.LB_SINGLE)
-        self.place_list = wx.ListBox(self.place_page, style=wx.LB_SINGLE)
-        self.personal_list = wx.ListBox(self.personal_page, style=wx.LB_SINGLE)
-        self._setup_page(self.poi_page, self.poi_list)
-        self._setup_page(self.place_page, self.place_list)
-        self._setup_page(self.personal_page, self.personal_list)
-        self.notebook.AddPage(self.poi_page, "External POIs")
-        self.notebook.AddPage(self.place_page, "Places")
-        self.notebook.AddPage(self.personal_page, "Personal POIs")
-        vs.Add(self.notebook, 1, wx.EXPAND | wx.ALL, 8)
+        self.saved_list = wx.ListBox(panel, style=wx.LB_SINGLE)
+        vs.Add(self.saved_list, 1, wx.EXPAND | wx.ALL, 8)
         close_btn = wx.Button(panel, wx.ID_CLOSE, "Close")
         vs.Add(close_btn, 0, wx.ALIGN_RIGHT | wx.RIGHT | wx.BOTTOM, 8)
         panel.SetSizer(vs)
 
         close_btn.Bind(wx.EVT_BUTTON, lambda e: self.Destroy())
         self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
-        for lb in (self.poi_list, self.place_list, self.personal_list):
-            lb.Bind(wx.EVT_LISTBOX_DCLICK, lambda e: self._jump_selected())
-            lb.Bind(wx.EVT_CONTEXT_MENU, self._show_context_menu)
+        self.saved_list.Bind(
+            wx.EVT_LISTBOX_DCLICK, lambda e: self._jump_selected())
+        self.saved_list.Bind(wx.EVT_CONTEXT_MENU, self._show_context_menu)
 
         self.refresh()
         self.CentreOnParent()
-        self.notebook.SetFocus()
-
-    def _setup_page(self, page: wx.Panel, listbox: wx.ListBox) -> None:
-        sizer = wx.BoxSizer(wx.VERTICAL)
-        sizer.Add(listbox, 1, wx.EXPAND | wx.ALL, 8)
-        page.SetSizer(sizer)
+        self.saved_list.SetFocus()
 
     def refresh(self) -> None:
-        pois = [e for e in self.entries if e.get("type") == "poi"]
-        places = [e for e in self.entries if e.get("type") != "poi"]
-        personal = list(self.personal_pois or [])
-        pois.sort(key=lambda e: str(e.get("name", "")).lower())
-        places.sort(key=lambda e: str(e.get("name", "")).lower())
-        personal.sort(key=lambda e: str(e.get("name", "")).lower())
-        self._current_items = {"poi": pois, "place": places, "personal": personal}
-        self._set_list(self.poi_list, pois, "No external POI favourites saved.")
-        self._set_list(self.place_list, places, "No place favourites saved.")
-        self._set_list(self.personal_list, personal, "No personal POIs saved.")
-
-    def _set_list(self, listbox: wx.ListBox, items: list[dict], empty_label: str) -> None:
+        combined = unified_favourite_items(self.entries, self.personal_pois)
+        self._current_items = combined
         labels = [
-            favourite_label(item, self._parent.lat, self._parent.lon)
-            for item in items
+            favourite_label(item[0], self._parent.lat, self._parent.lon)
+            for item in combined
         ]
-        listbox.Set(labels or [empty_label])
-        listbox.SetSelection(0)
-
-    def _active_kind_and_list(self) -> tuple[str, wx.ListBox]:
-        page = self.notebook.GetSelection()
-        if page == 0:
-            return "poi", self.poi_list
-        if page == 1:
-            return "place", self.place_list
-        return "personal", self.personal_list
+        self.saved_list.Set(labels or ["No favourites saved."])
+        self.saved_list.SetSelection(0)
 
     def _active_item_name(self) -> str:
-        kind, _listbox = self._active_kind_and_list()
-        if kind == "personal":
-            return "personal POI"
-        if kind == "poi":
-            return "external POI favourite"
         return "favourite"
 
     def _selected_entry(self) -> dict | None:
-        kind, listbox = self._active_kind_and_list()
-        items = self._current_items[kind]
-        idx = listbox.GetSelection()
-        if idx == wx.NOT_FOUND or idx < 0 or idx >= len(items):
+        idx = self.saved_list.GetSelection()
+        if idx == wx.NOT_FOUND or idx < 0 or idx >= len(self._current_items):
             return None
-        return items[idx]
+        return self._current_items[idx][0]
+
+    def _selected_is_personal(self) -> bool:
+        idx = self.saved_list.GetSelection()
+        return bool(
+            idx != wx.NOT_FOUND and 0 <= idx < len(self._current_items)
+            and self._current_items[idx][1])
 
     def _announce(self, msg: str) -> None:
         if hasattr(self._parent, "_status_update"):
@@ -232,25 +211,25 @@ class FavouritesDialog(wx.Dialog):
         if not entry:
             self._announce(f"No {self._active_item_name()} selected.")
             return
-        kind, _listbox = self._active_kind_and_list()
+        is_personal = self._selected_is_personal()
         self.Destroy()
-        wx.CallAfter(self._parent._jump_to_saved_entry, entry, kind == "personal")
+        wx.CallAfter(self._parent._jump_to_saved_entry, entry, is_personal)
 
     def _navigate_selected(self) -> None:
         entry = self._selected_entry()
         if not entry:
             self._announce(f"No {self._active_item_name()} selected.")
             return
-        kind, _listbox = self._active_kind_and_list()
+        is_personal = self._selected_is_personal()
         self.Destroy()
-        wx.CallAfter(self._parent._navigate_to_saved_entry, entry, kind == "personal")
+        wx.CallAfter(self._parent._navigate_to_saved_entry, entry, is_personal)
 
     def _rename_selected(self) -> None:
         entry = self._selected_entry()
         if not entry:
             self._announce(f"No {self._active_item_name()} selected.")
             return
-        is_personal = self._active_kind_and_list()[0] == "personal"
+        is_personal = self._selected_is_personal()
         old_name = str(entry.get("name") or "Unnamed favourite")
         title = "Rename Personal POI" if is_personal else "Rename Favourite"
         dlg = wx.TextEntryDialog(self, f"New name for '{old_name}':", title, old_name)
@@ -276,7 +255,7 @@ class FavouritesDialog(wx.Dialog):
         if not entry:
             self._announce(f"No {self._active_item_name()} selected.")
             return
-        is_personal = self._active_kind_and_list()[0] == "personal"
+        is_personal = self._selected_is_personal()
         item_name = "personal POI" if is_personal else "favourite"
         name = str(entry.get("name") or f"this {item_name}")
         dlg = wx.MessageDialog(
@@ -305,7 +284,7 @@ class FavouritesDialog(wx.Dialog):
     def _show_context_menu(self, event) -> None:
         if not self._selected_entry():
             return
-        is_personal = self._active_kind_and_list()[0] == "personal"
+        is_personal = self._selected_is_personal()
         item_name = "personal POI" if is_personal else "favourite"
         menu = wx.Menu()
         jump = menu.Append(wx.ID_ANY, f"Jump to {item_name}")

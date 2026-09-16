@@ -1,4 +1,9 @@
-"""mistral.py - Mistral-backed AI queries for Map in a Box."""
+"""ai_client.py - AI queries for Map in a Box.
+
+Requests go to the app's Cloudflare Worker proxy (POST /ai), which holds the
+provider key server-side and chooses the text or vision model — so end users
+need no key.  See proxy/worker.js.
+"""
 
 from __future__ import annotations
 
@@ -6,113 +11,67 @@ import base64
 import json
 import os
 import re
+import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Optional
 from logging_utils import miab_log
+from serper import PROXY_URL, _PROXY_HEADERS
 
-MISTRAL_TEXT_MODEL = "mistral-small-latest"
-MISTRAL_VISION_MODEL = "mistral-small-2506"
+AI_URL = f"{PROXY_URL}/ai"
+# The Worker clamps max_tokens to 64..4096.  Reasoning models spend part of
+# the budget before answering, so long list and narrative outputs get the cap.
+_DEFAULT_MAX_TOKENS = 2048
+_LONG_MAX_TOKENS = 4096
+# Groq's free tier rejects any request over 8,000 input tokens.  Fetched page
+# text is capped per request, and anything still too large is refused locally
+# (web text and JSON can run as dense as ~3 characters per token).
+MAX_SOURCE_CHARS = 15000
+_MAX_REQUEST_CHARS = 21000
 _CACHE_TTL_DAYS = 90
 _MENU_CACHE_TTL_DAYS = 30
 
+_thread_state = threading.local()
 
-class MistralClient:
+
+class AIServiceError(RuntimeError):
+    """An AI request failed; user_message is a speakable reason."""
+
+    def __init__(self, detail: str, user_message: str) -> None:
+        super().__init__(detail)
+        self.user_message = user_message
+
+
+def _user_message_for(status: int, detail: str) -> str:
+    low = (detail or "").lower()
+    if status == 429:
+        if "ip cap" in low:
+            return "You have used today's AI allowance. Try again tomorrow."
+        if "daily cap" in low or "per day" in low:
+            return "The AI's daily limit has been reached. Try again tomorrow."
+        return "The AI service is busy. Try again in a minute."
+    if status == 413 or "request too large" in low:
+        return "That request was too large for the AI service."
+    return "The AI service is unavailable right now."
+
+
+class AIClient:
     def __init__(self, script_dir: Optional[str] = None) -> None:
         import sys
         self._base = script_dir or getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-        self._api_key = ""
         self._cache: dict = {}
         self._load_cache()
 
-    def init(self, api_key: str) -> None:
-        if not api_key or not api_key.strip():
-            self._api_key = ""
-            miab_log("api_calls", "[Mistral] No API key provided - Mistral disabled.", getattr(self, "settings", None))
-            return
-        self._api_key = api_key.strip()
-        miab_log("api_calls", "[Mistral] Key loaded.", getattr(self, "settings", None))
-
     @property
     def is_configured(self) -> bool:
-        return bool(self._api_key)
+        return bool(AI_URL)
 
-    def ask_transit(self, lat: float, lon: float, place_name: str = "this location") -> list[dict]:
-        if not self.is_configured:
-            return []
-        miab_log("api_calls", f"[Mistral] Transit lookup start: {place_name!r} at ({lat:.4f}, {lon:.4f})", getattr(self, "settings", None))
-        snippets, links = self._search_web_grounding(
-            [
-                f"{place_name} regional bus train ferry",
-                f"{place_name} timetable coach regional bus",
-                f"{place_name} public transport routes",
-            ],
-            label="Transit",
-        )
-        prompt = (
-            f"List every REGIONAL and LONG-DISTANCE public transport route "
-            f"(coach, regional bus, regional train, ferry) that serves or stops at "
-            f"'{place_name}' at coordinates {lat:.4f}, {lon:.4f}. Do NOT include local "
-            f"urban or suburban routes. Return ONLY a JSON array of objects with keys "
-            f"operator, service, route_name, and stops.\n\n"
-            f"WEB SNIPPETS:\n{snippets}\n\n"
-            f"CANDIDATE LINKS:\n{chr(10).join(links)}"
-        )
-        try:
-            text = self._chat(prompt)
-            miab_log("api_calls", f"[Mistral] Transit raw response length: {len(text or '')}", getattr(self, "settings", None))
-            routes = self._parse_json_list(text)
-            miab_log("api_calls", f"[Mistral] Transit parsed entries: {len(routes)}", getattr(self, "settings", None))
-            clean = []
-            for r in routes:
-                if isinstance(r, dict) and r.get("operator") and r.get("service"):
-                    clean.append({
-                        "operator": str(r.get("operator", "")).strip(),
-                        "service": str(r.get("service", "")).strip(),
-                        "route_name": str(r.get("route_name", "")).strip(),
-                        "stops": [str(s) for s in (r.get("stops", []) or []) if s],
-                    })
-            miab_log("api_calls", f"[Mistral] Transit usable entries: {len(clean)}", getattr(self, "settings", None))
-            return clean
-        except Exception as exc:
-            miab_log("errors", f"[Mistral] Transit query failed: {exc}", getattr(self, "settings", None))
-            return []
-
-    def ask_times(self, operator: str, service: str, route_name: str = "") -> str:
-        if not self.is_configured:
-            return "Mistral not configured."
-        cache_key = (f"times_{operator}_{service}".lower().replace(" ", "_").replace("(", "").replace(")", "").replace(".", ""))
-        cached = self._get_cache(cache_key, text=True)
-        if cached is not None:
-            miab_log("api_calls", f"[Mistral] Times cache hit for {operator} {service}", getattr(self, "settings", None))
-            return cached
-        miab_log("api_calls", f"[Mistral] Times lookup start: {operator} {service} {route_name!r}", getattr(self, "settings", None))
-        snippets, links = self._search_web_grounding(
-            [
-                f"{operator} {service} timetable",
-                f"{operator} {service} route timetable",
-                f"{operator} {service} schedule",
-            ],
-            label="Times",
-        )
-        prompt = (
-            f"Describe the timetable for the {operator} service {service} "
-            f"{f'({route_name})' if route_name else ''} in plain English. "
-            f"Include frequency, approximate first and last service, and weekend/public holiday differences. "
-            f"Be concise.\n\n"
-            f"WEB SNIPPETS:\n{snippets}\n\n"
-            f"CANDIDATE LINKS:\n{chr(10).join(links)}"
-        )
-        try:
-            text = self._chat(prompt)
-            if text:
-                miab_log("api_calls", f"[Mistral] Times raw response length: {len(text)}", getattr(self, "settings", None))
-                self._set_cache(cache_key, text, text=True)
-                return text
-        except Exception as exc:
-            miab_log("errors", f"[Mistral] Times query failed: {exc}", getattr(self, "settings", None))
-        return "Could not retrieve timetable information."
+    @property
+    def last_error_message(self) -> str:
+        """Speakable reason the last AI request on this thread failed, or ""."""
+        return getattr(_thread_state, "last_error", "")
 
     def ask_shopping(
         self,
@@ -128,7 +87,7 @@ class MistralClient:
         cache_key = f"shop_names_{centre_name.lower().strip()}_{address_key}"
         cached = self._get_cache(cache_key)
         if cached is not None:
-            miab_log("api_calls", f"[Mistral] Shopping cache hit for {centre_name}", getattr(self, "settings", None))
+            miab_log("api_calls", f"[AI] Shopping cache hit for {centre_name}", getattr(self, "settings", None))
             return cached
         try:
             centre_hint = f"{centre_name} {centre_address}".strip()
@@ -140,15 +99,15 @@ class MistralClient:
                 f"\"{centre_hint}\" food restaurants cafes takeaway dining",
                 f"\"{centre_hint}\" food court restaurants cafes outlets",
             ]
-            miab_log("api_calls", f"[Mistral] Shopping lookup start: {centre_name!r} at ({lat:.4f}, {lon:.4f})", getattr(self, "settings", None))
+            miab_log("api_calls", f"[AI] Shopping lookup start: {centre_name!r} at ({lat:.4f}, {lon:.4f})", getattr(self, "settings", None))
             snippets, links = self._search_web_grounding(queries, label="Shopping")
-            combined_text = snippets[:25000]
-            miab_log("api_calls", f"[Mistral] Shopping combined text length: {len(combined_text)} "
+            combined_text = snippets[:MAX_SOURCE_CHARS]
+            miab_log("api_calls", f"[AI] Shopping combined text length: {len(combined_text)} "
                 f"(links={len(links)})", getattr(self, "settings", None))
             if combined_text:
-                miab_log("api_calls", f"[Mistral] Shopping text preview: {combined_text[:500]!r}", getattr(self, "settings", None))
+                miab_log("api_calls", f"[AI] Shopping text preview: {combined_text[:500]!r}", getattr(self, "settings", None))
             else:
-                miab_log("api_calls", "[Mistral] Shopping grounding empty; skipping model call.", getattr(self, "settings", None))
+                miab_log("api_calls", "[AI] Shopping grounding empty; skipping model call.", getattr(self, "settings", None))
                 return []
 
             confirmed = ""
@@ -171,18 +130,18 @@ class MistralClient:
                 f"Use the SOURCE blocks below as the evidence. Ignore anything not supported there:\n"
                 f"{combined_text}"
             )
-            text = self._chat(prompt)
-            miab_log("api_calls", f"[Mistral] Shopping raw response length: {len(text or '')}", getattr(self, "settings", None))
+            text = self._chat(prompt, max_tokens=_LONG_MAX_TOKENS)
+            miab_log("api_calls", f"[AI] Shopping raw response length: {len(text or '')}", getattr(self, "settings", None))
             names = self._parse_json_list(text)
-            miab_log("api_calls", f"[Mistral] Shopping parsed entries: {len(names)}", getattr(self, "settings", None))
+            miab_log("api_calls", f"[AI] Shopping parsed entries: {len(names)}", getattr(self, "settings", None))
             clean = self._clean_store_names(names, centre_name)
             clean = self._retain_evidenced_store_names(clean, combined_text, existing_names=existing_names)
-            miab_log("api_calls", f"[Mistral] Shopping usable entries: {len(clean)}", getattr(self, "settings", None))
+            miab_log("api_calls", f"[AI] Shopping usable entries: {len(clean)}", getattr(self, "settings", None))
             if clean:
                 self._set_cache(cache_key, clean)
             return clean
         except Exception as exc:
-            miab_log("errors", f"[Mistral] Shopping query failed: {exc}", getattr(self, "settings", None))
+            miab_log("errors", f"[AI] Shopping query failed: {exc}", getattr(self, "settings", None))
             return []
 
     def ask_store_detail(
@@ -194,11 +153,11 @@ class MistralClient:
         source_links: list[str] | None = None,
     ) -> str:
         if not self.is_configured:
-            return "Mistral not configured."
+            return "AI service not available."
         cache_key = f"store_{centre_name}_{centre_address}_{store_name}".lower().replace(" ", "_")
         cached = self._get_cache(cache_key, text=True)
         if cached is not None:
-            miab_log("api_calls", f"[Mistral] Store detail cache hit for {store_name}", getattr(self, "settings", None))
+            miab_log("api_calls", f"[AI] Store detail cache hit for {store_name}", getattr(self, "settings", None))
             return cached
         centre_hint = f"{centre_name} {centre_address}".strip()
         snippets = source_text or ""
@@ -220,11 +179,11 @@ class MistralClient:
             f"Do not guess, infer, embellish, or use typical mall layouts. "
             f"If no location details are stated, say only that the store is listed in the official directory. "
             f"Use at most three short sentences.\n\n"
-            f"PAGE TEXT:\n{snippets}\n\n"
+            f"PAGE TEXT:\n{snippets[:MAX_SOURCE_CHARS]}\n\n"
             f"CANDIDATE LINKS:\n{chr(10).join(links)}"
         )
         try:
-            miab_log("api_calls", f"[Mistral] Fetching store detail for '{store_name}'...", getattr(self, "settings", None))
+            miab_log("api_calls", f"[AI] Fetching store detail for '{store_name}'...", getattr(self, "settings", None))
             text = self._chat(prompt)
             if text:
                 if text.strip().upper() == "NONE":
@@ -232,7 +191,10 @@ class MistralClient:
                 self._set_cache(cache_key, text, text=True)
                 return text
         except Exception as exc:
-            miab_log("errors", f"[Mistral] Store detail query failed: {exc}", getattr(self, "settings", None))
+            miab_log("errors", f"[AI] Store detail query failed: {exc}", getattr(self, "settings", None))
+            if self.last_error_message:
+                return (f"{store_name} is listed in the official store directory, but more "
+                        f"detail isn't available. {self.last_error_message}")
         return f"{store_name} is listed in the official store directory."
 
     def ask_store_floor(self, store_name: str, centre_name: str) -> str:
@@ -247,9 +209,9 @@ class MistralClient:
         cache_key = f"floor_{centre_name}_{store_name}".lower().replace(" ", "_")
         cached = self._get_cache(cache_key, text=True)
         if cached is not None:
-            miab_log("api_calls", f"[Mistral] Floor cache hit for {store_name}: {cached!r}", getattr(self, "settings", None))
+            miab_log("api_calls", f"[AI] Floor cache hit for {store_name}: {cached!r}", getattr(self, "settings", None))
             return cached
-        miab_log("api_calls", f"[Mistral] Floor lookup start: {store_name} at {centre_name}", getattr(self, "settings", None))
+        miab_log("api_calls", f"[AI] Floor lookup start: {store_name} at {centre_name}", getattr(self, "settings", None))
         snippets, links = self._search_web_grounding(
             [
                 f"{centre_name} store directory {store_name} level",
@@ -274,12 +236,12 @@ class MistralClient:
             f"- Do NOT infer from category, anchor stores, or typical layouts.\n"
             f"- Do NOT say 'likely', 'probably', 'usually', 'typically', or similar.\n"
             f"- Do NOT mention any store other than '{store_name}'.\n\n"
-            f"PAGE TEXT:\n{snippets[:18000]}"
+            f"PAGE TEXT:\n{snippets[:MAX_SOURCE_CHARS]}"
         )
         try:
             text = (self._chat(prompt) or "").strip()
         except Exception as exc:
-            miab_log("errors", f"[Mistral] Floor query failed: {exc}", getattr(self, "settings", None))
+            miab_log("errors", f"[AI] Floor query failed: {exc}", getattr(self, "settings", None))
             return ""
         # Reject hedge words and the explicit NONE signal.
         cleaned = text.strip().rstrip(".")
@@ -293,10 +255,10 @@ class MistralClient:
                         "does not state", "does not mention", "unclear",
                         "i don't know", "i do not know", "could not find",
                         "couldn't find", "not enough information"))):
-            miab_log("api_calls", f"[Mistral] Floor: not stated for {store_name} (raw={text!r})", getattr(self, "settings", None))
+            miab_log("api_calls", f"[AI] Floor: not stated for {store_name} (raw={text!r})", getattr(self, "settings", None))
             self._set_cache(cache_key, "", text=True)
             return ""
-        miab_log("api_calls", f"[Mistral] Floor for {store_name}: {text!r}", getattr(self, "settings", None))
+        miab_log("api_calls", f"[AI] Floor for {store_name}: {text!r}", getattr(self, "settings", None))
         self._set_cache(cache_key, text, text=True)
         return text
 
@@ -312,12 +274,12 @@ class MistralClient:
             "Describe terrain, land use, buildings, roads, water, and vegetation in 2 to 4 sentences."
         )
         try:
-            text = self._chat(prompt, image_bytes=image_bytes, model=MISTRAL_VISION_MODEL)
+            text = self._chat(prompt, image_bytes=image_bytes)
             if cache_key and text:
                 self._set_cache(cache_key, text, text=True)
             return text
         except Exception as exc:
-            miab_log("errors", f"[Mistral] Satellite description failed: {exc}", getattr(self, "settings", None))
+            miab_log("errors", f"[AI] Satellite description failed: {exc}", getattr(self, "settings", None))
             return ""
 
     def describe_streetview_images(self, image_bytes_list: list, headings: list,
@@ -426,11 +388,10 @@ class MistralClient:
         try:
             content = [{"type": "text", "text": prompt}]
             for b in image_bytes_list[:2]:
-                b64 = base64.b64encode(b).decode("ascii")
-                content.append({"type": "image_url", "image_url": f"data:image/jpeg;base64,{b64}"})
-            return self._chat(contents=content, model=MISTRAL_VISION_MODEL)
+                content.append(self._image_part(b))
+            return self._chat(contents=content, vision=True)
         except Exception as exc:
-            miab_log("errors", f"[Mistral] Street View description failed: {exc}", getattr(self, "settings", None))
+            miab_log("errors", f"[AI] Street View description failed: {exc}", getattr(self, "settings", None))
             return ""
 
     def query_text(self, prompt: str, cache_key: str) -> str:
@@ -440,18 +401,18 @@ class MistralClient:
         if cached:
             return cached
         try:
-            result = self._chat(prompt, model=MISTRAL_TEXT_MODEL)
+            result = self._chat(prompt, max_tokens=_LONG_MAX_TOKENS)
             if result:
                 self._set_cache(cache_key, result, text=True)
             return result
         except Exception as exc:
-            miab_log("errors", f"[Mistral] query_text failed: {exc}", getattr(self, "settings", None))
+            miab_log("errors", f"[AI] query_text failed: {exc}", getattr(self, "settings", None))
             return ""
 
     def narrative_directions(self, digest: dict) -> str:
         """Turn a route digest from NavigationEngine into pedestrian prose.
 
-        Returns "" if Mistral is not configured, the digest is malformed, or
+        Returns "" if AI is not configured, the digest is malformed, or
         the post-check finds an invented street name. Callers should fall back
         to the deterministic step list on empty return.
         """
@@ -567,20 +528,17 @@ class MistralClient:
             "- Output numbered steps in plain prose.  No markdown, no bullet points, "
             "no preamble, no closing summary.  Each numbered step on its own line."
         )
+        # Compact JSON: indentation roughly doubles the digest's token count.
         user = (
             "Route digest:\n"
-            + json.dumps(digest, indent=2, default=str)
+            + json.dumps(digest, separators=(",", ":"), default=str)
         )
 
         try:
-            text = self._chat_with_system(system, user, model="mistral-large-latest")
+            text = self._chat_with_system(system, user, max_tokens=_LONG_MAX_TOKENS)
         except Exception as exc:
-            miab_log("errors", f"[Mistral] narrative_directions large failed: {exc} — retrying small", getattr(self, "settings", None))
-            try:
-                text = self._chat_with_system(system, user, model=MISTRAL_TEXT_MODEL)
-            except Exception as exc2:
-                miab_log("errors", f"[Mistral] narrative_directions small failed: {exc2}", getattr(self, "settings", None))
-                return ""
+            miab_log("errors", f"[AI] narrative_directions failed: {exc}", getattr(self, "settings", None))
+            return ""
         if not text:
             return ""
 
@@ -604,74 +562,102 @@ class MistralClient:
             sanitized,
         )
         if leftover:
-            miab_log("api_calls", f"[Mistral] narrative_directions rejected — invented name: "
+            miab_log("api_calls", f"[AI] narrative_directions rejected — invented name: "
                   f"{leftover.group(0)!r}", getattr(self, "settings", None))
             return ""
 
         self._set_cache(cache_key, text, text=True)
         return text
 
-    def _chat_with_system(self, system: str, user: str, model: str) -> str:
-        """Mistral chat with a system message and a single user turn."""
+    def _chat_with_system(self, system: str, user: str,
+                          max_tokens: int = _DEFAULT_MAX_TOKENS) -> str:
+        """AI chat with a system message and a single user turn."""
         messages = [
             {"role": "system", "content": system},
             {"role": "user",   "content": user},
         ]
-        req_body = json.dumps({"model": model, "messages": messages}).encode("utf-8")
-        req = urllib.request.Request(
-            "https://api.mistral.ai/v1/chat/completions",
-            data=req_body,
-            headers={
-                "Authorization": f"Bearer {self._api_key}",
-                "Content-Type":  "application/json",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=90) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-        choices = payload.get("choices") or []
-        if not choices:
-            return ""
-        content = (choices[0].get("message") or {}).get("content", "")
-        if isinstance(content, list):
-            return "".join(
-                part.get("text", "")
-                for part in content
-                if isinstance(part, dict) and part.get("type") == "text"
-            ).strip()
-        return str(content or "").strip()
+        return self._post_ai(messages, vision=False, max_tokens=max_tokens)
 
-    def _chat(self, prompt: str = "", contents=None, model: str = MISTRAL_TEXT_MODEL, image_bytes: bytes = None) -> str:
+    def _chat(self, prompt: str = "", contents=None, image_bytes: bytes = None,
+              vision: bool = False, max_tokens: int = _DEFAULT_MAX_TOKENS) -> str:
         messages = []
         if contents is not None:
             messages.append({"role": "user", "content": contents})
         elif image_bytes is not None:
-            b64 = base64.b64encode(image_bytes).decode("ascii")
+            vision = True
             messages.append({"role": "user", "content": [
                 {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": f"data:image/jpeg;base64,{b64}"},
+                self._image_part(image_bytes),
             ]})
         else:
             messages.append({"role": "user", "content": prompt})
+        return self._post_ai(messages, vision=vision, max_tokens=max_tokens)
 
-        req_body = json.dumps({"model": model, "messages": messages}).encode("utf-8")
+    @staticmethod
+    def _image_part(image_bytes: bytes) -> dict:
+        b64 = base64.b64encode(image_bytes).decode("ascii")
+        return {"type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+
+    def _post_ai(self, messages: list, vision: bool, max_tokens: int) -> str:
+        """POST to the Worker's /ai route and return the reply text.
+
+        Raises AIServiceError on transport or proxy errors (including daily
+        caps) so callers log the failure and fall back as they already do;
+        last_error_message then holds the reason to tell the user.
+        """
+        _thread_state.last_error = ""
+        text_chars = 0
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, str):
+                text_chars += len(content)
+            elif isinstance(content, list):
+                text_chars += sum(len(part.get("text", "")) for part in content
+                                  if isinstance(part, dict))
+        if text_chars > _MAX_REQUEST_CHARS:
+            self._fail(f"AI request too large to send ({text_chars} chars)",
+                       _user_message_for(413, ""))
+        req_body = json.dumps({
+            "messages": messages,
+            "vision": bool(vision),
+            "max_tokens": int(max_tokens),
+        }).encode("utf-8")
         req = urllib.request.Request(
-            "https://api.mistral.ai/v1/chat/completions",
+            AI_URL,
             data=req_body,
-            headers={
-                "Authorization": f"Bearer {self._api_key}",
-                "Content-Type": "application/json",
-            },
+            headers={**_PROXY_HEADERS, "Content-Type": "application/json"},
+            method="POST",
         )
-        with urllib.request.urlopen(req, timeout=90) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-        choices = payload.get("choices") or []
-        if not choices:
-            return ""
-        message = choices[0].get("message") or {}
-        content = message.get("content", "")
+        try:
+            with urllib.request.urlopen(req, timeout=90) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = str(json.loads(exc.read().decode("utf-8", "ignore")).get("error") or "")
+            except Exception:
+                pass
+            self._fail(f"AI proxy HTTP {exc.code}: {detail or exc.reason}",
+                       _user_message_for(exc.code, detail), exc)
+        except Exception as exc:
+            self._fail(f"AI proxy request failed: {exc}",
+                       "The AI service could not be reached.", exc)
+        content = payload.get("content", "")
         if isinstance(content, list):
-            return "".join((part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text")).strip()
-        return str(content or "").strip()
+            content = "".join(
+                part.get("text", "")
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+        # Some reasoning models inline their thinking; never speak it.
+        content = re.sub(r"<think>.*?</think>", "", str(content or ""), flags=re.S | re.I)
+        return content.strip()
+
+    @staticmethod
+    def _fail(detail: str, user_message: str, cause: Exception = None):
+        _thread_state.last_error = user_message
+        raise AIServiceError(detail, user_message) from cause
 
     def _search_web_grounding(self, queries: list[str], label: str = "") -> tuple[str, list[str]]:
         snippets = []
@@ -682,7 +668,7 @@ class MistralClient:
             lambda q: f"https://html.duckduckgo.com/html/?q={q}",
         ]
         for phrase in queries:
-            miab_log("api_calls", f"[Mistral] {label} search phrase: {phrase!r}", getattr(self, "settings", None))
+            miab_log("api_calls", f"[AI] {label} search phrase: {phrase!r}", getattr(self, "settings", None))
             query = urllib.parse.quote(phrase)
             for build_search_url in search_urls:
                 search_url = build_search_url(query)
@@ -691,7 +677,7 @@ class MistralClient:
                     with urllib.request.urlopen(req, timeout=20) as resp:
                         html = resp.read().decode("utf-8", "ignore")
                 except Exception as exc:
-                    miab_log("errors", f"[Mistral] {label} search fetch failed for {search_url}: {exc}", getattr(self, "settings", None))
+                    miab_log("errors", f"[AI] {label} search fetch failed for {search_url}: {exc}", getattr(self, "settings", None))
                     continue
 
                 found_snippets = re.findall(
@@ -721,12 +707,14 @@ class MistralClient:
                     found_links.append(link)
                     seen_links.add(link)
 
-                miab_log("api_calls", f"[Mistral] {label} search via {urllib.parse.urlparse(search_url).netloc} "
+                miab_log("api_calls", f"[AI] {label} search via {urllib.parse.urlparse(search_url).netloc} "
                     f"found {len(found_snippets)} snippets and {len(found_links)} candidate URLs", getattr(self, "settings", None))
         candidate_links.sort(key=lambda item: (-item[0], item[1]))
         links = [link for _, link in candidate_links[:10]]
         page_text_parts = []
         for link in links[:6]:
+            if sum(len(part) for part in page_text_parts) >= MAX_SOURCE_CHARS:
+                break
             try:
                 req = urllib.request.Request(link, headers={"User-Agent": "Mozilla/5.0"})
                 with urllib.request.urlopen(req, timeout=20) as resp:
@@ -735,10 +723,10 @@ class MistralClient:
                 text = re.sub(r"<[^>]+>", " ", text)
                 text = re.sub(r"\s+", " ", text).strip()
                 if text:
-                    page_text_parts.append(f"SOURCE: {link}\n{text[:12000]}")
-                    miab_log("api_calls", f"[Mistral] {label} page text collected: {len(page_text_parts[-1])} chars from {link}", getattr(self, "settings", None))
+                    page_text_parts.append(f"SOURCE: {link}\n{text[:8000]}")
+                    miab_log("api_calls", f"[AI] {label} page text collected: {len(page_text_parts[-1])} chars from {link}", getattr(self, "settings", None))
             except Exception as exc:
-                miab_log("errors", f"[Mistral] {label} page fetch failed for {link}: {exc}", getattr(self, "settings", None))
+                miab_log("errors", f"[AI] {label} page fetch failed for {link}: {exc}", getattr(self, "settings", None))
                 continue
         combined = "\n\n".join(page_text_parts).strip()
         if not combined:
@@ -746,7 +734,8 @@ class MistralClient:
                 combined = ""
             else:
                 combined = "\n".join(snippets).strip()
-        miab_log("api_calls", f"[Mistral] {label} combined grounding length: {len(combined)} (links={len(links)}, pages={len(page_text_parts)})", getattr(self, "settings", None))
+        combined = combined[:MAX_SOURCE_CHARS]
+        miab_log("api_calls", f"[AI] {label} combined grounding length: {len(combined)} (links={len(links)}, pages={len(page_text_parts)})", getattr(self, "settings", None))
         return (combined, links[:10])
 
     @staticmethod
@@ -762,13 +751,13 @@ class MistralClient:
                 for key in ("u", "url", "ru", "r", "target", "dest"):
                     if key in query and query[key]:
                         candidate = urllib.parse.unquote(query[key][0]).strip()
-                        decoded = MistralClient._decode_bing_destination(candidate)
+                        decoded = AIClient._decode_bing_destination(candidate)
                         if decoded:
                             return decoded
                         if candidate.startswith(("http://", "https://")):
                             return candidate
                 if parsed.path.lower().startswith("/ck/a"):
-                    decoded = MistralClient._decode_bing_destination(raw)
+                    decoded = AIClient._decode_bing_destination(raw)
                     if decoded:
                         return decoded
             if "duckduckgo.com" not in host:
@@ -919,7 +908,7 @@ class MistralClient:
                 continue
             if low in bad_exact:
                 continue
-            if centre and MistralClient._looks_like_centre_heading(low, centre):
+            if centre and AIClient._looks_like_centre_heading(low, centre):
                 continue
             if any(token in low for token in ("directory", "shopping centre", "shopping center", "tenant list")):
                 continue

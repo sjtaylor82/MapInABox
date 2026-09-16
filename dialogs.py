@@ -370,7 +370,7 @@ class SettingsDialog(wx.Dialog):
         general_vs.Add(self.combo_distance_units, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        general_vs.Add(wx.StaticText(self.general_page, label=_("POI database (for street/free mode):")), 0, wx.LEFT, 8)
+        general_vs.Add(wx.StaticText(self.general_page, label=_("POI database (for street mode):")), 0, wx.LEFT, 8)
         self.combo_poi_source = wx.Choice(
             self.general_page,
             choices=[_("OpenStreetMap"), _("HERE")],
@@ -581,15 +581,6 @@ class SettingsDialog(wx.Dialog):
         api_vs.Add(wx.adv.HyperlinkCtrl(self.api_page, label=_("Get a Google API key"),
             url="https://developers.google.com/maps/get-started"), 0, wx.LEFT | wx.BOTTOM, 8)
 
-        api_vs.Add(wx.StaticLine(self.api_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        api_vs.Add(wx.StaticText(self.api_page, label=credential_label("Mistral API key - optional descriptions for satellite/street view and transit:", "mistral_api_key")), 0, wx.LEFT, 8)
-        self.txt_mistral_key = wx.TextCtrl(self.api_page, style=wx.TE_PASSWORD)
-        api_vs.Add(self.txt_mistral_key, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
-        self.cb_mistral_service = wx.CheckBox(
-            self.api_page, label=_("Use Mistral API services"))
-        api_vs.Add(self.cb_mistral_service, 0, wx.LEFT | wx.BOTTOM, 8)
-        api_vs.Add(wx.adv.HyperlinkCtrl(self.api_page, label=_("Get a Mistral API key (free mode, no credit card)"),
-            url="https://console.mistral.ai/"), 0, wx.LEFT | wx.BOTTOM, 8)
 
         api_vs.Add(wx.StaticLine(self.api_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         api_vs.Add(wx.StaticText(self.api_page, label=credential_label("HERE API key - optional POI details and HERE navigation:", "here_api_key")), 0, wx.LEFT, 8)
@@ -669,7 +660,7 @@ class SettingsDialog(wx.Dialog):
         self.cb_log_errors    = wx.CheckBox(self.logging_page, label=_("Errors - exceptions, API failures, missing data"))
         self.cb_log_street    = wx.CheckBox(self.logging_page, label=_("Street/POI data - Overpass queries, cache hits/misses"))
         self.cb_log_snap      = wx.CheckBox(self.logging_page, label=_("Street snap - jump/search snap decisions and arrow key movement"))
-        self.cb_log_api       = wx.CheckBox(self.logging_page, label=_("HERE/Mistral API calls - requests and responses"))
+        self.cb_log_api       = wx.CheckBox(self.logging_page, label=_("HERE/AI API calls - requests and responses"))
         self.cb_log_challenge = wx.CheckBox(self.logging_page, label=_("Challenge sessions - player, country, time, score"))
         self.cb_log_features  = wx.CheckBox(self.logging_page, label=_("Feature usage - keys pressed, lookups made"))
         self.cb_log_nav       = wx.CheckBox(self.logging_page, label=_("Navigation events - country entries, crossings, jumps"))
@@ -761,9 +752,6 @@ class SettingsDialog(wx.Dialog):
         self.txt_google_key.Bind(wx.EVT_TEXT, self._on_google_key_changed)
         self.cb_google_service.Bind(
             wx.EVT_CHECKBOX, self._on_google_key_changed)
-        self.txt_mistral_key.SetValue(settings.get("mistral_api_key", ""))
-        self.cb_mistral_service.SetValue(
-            settings.get("mistral_service_enabled", True))
         self.txt_here_key.SetValue(settings.get("here_api_key", ""))
         self.cb_here_service.SetValue(
             settings.get("here_service_enabled", True))
@@ -937,7 +925,6 @@ class SettingsDialog(wx.Dialog):
             "key_bindings":           dict(self._key_bindings),
             "postcode_lookup":        "online" if self.combo_postcode_lookup.GetSelection() == 1 else "included",
             "google_api_key":         self.txt_google_key.GetValue().strip(),
-            "mistral_api_key":         self.txt_mistral_key.GetValue().strip(),
             "here_api_key":             self.txt_here_key.GetValue().strip(),
             "ors_api_key":              self.txt_ors_key.GetValue().strip(),
             "aviationstack_api_key":    self.txt_aviationstack_key.GetValue().strip(),
@@ -945,7 +932,6 @@ class SettingsDialog(wx.Dialog):
             "opensky_client_id":        self.txt_opensky_id.GetValue().strip(),
             "opensky_client_secret":    self.txt_opensky_secret.GetValue().strip(),
             "google_service_enabled": self.cb_google_service.GetValue(),
-            "mistral_service_enabled": self.cb_mistral_service.GetValue(),
             "here_service_enabled": self.cb_here_service.GetValue(),
             "ors_service_enabled": self.cb_ors_service.GetValue(),
             "aviationstack_service_enabled": self.cb_aviationstack_service.GetValue(),
@@ -2200,7 +2186,7 @@ class GreyhoundStopPickerDialog(wx.Dialog):
 class GreyhoundBookingDialog(wx.Dialog):
     """Accessible Greyhound route and date form backed by its stop directory."""
 
-    def __init__(self, parent, stops):
+    def __init__(self, parent, stops, origin=None):
         super().__init__(parent, title="Greyhound Australia Booking",
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         _set_explicit_accessible_name(self, self, "Greyhound Australia Booking")
@@ -2211,7 +2197,7 @@ class GreyhoundBookingDialog(wx.Dialog):
         outer = wx.BoxSizer(wx.VERTICAL)
         grid = wx.FlexGridSizer(cols=2, vgap=8, hgap=10)
         grid.AddGrowableCol(1, 1)
-        depart = _dt.date.today() + _dt.timedelta(days=7)
+        depart = _dt.date.today()
         self.trip_type = wx.RadioBox(panel, label="Trip type",
                                     choices=["One way", "Return"],
                                     majorDimension=1, style=wx.RA_SPECIFY_ROWS)
@@ -2256,25 +2242,32 @@ class GreyhoundBookingDialog(wx.Dialog):
         open_btn.Bind(wx.EVT_BUTTON, self._on_submit)
         self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
         self._on_trip_type()
-        self.trip_type.SetFocus()
+        if origin is not None:
+            # Opened from a place's route list: only the destination is left.
+            self._set_stop(True, origin)
+            self.destination.SetFocus()
+        else:
+            self.trip_type.SetFocus()
 
     def _choose_stop(self, origin):
-        from greyhound import stop_label
         dlg = GreyhoundStopPickerDialog(
             self, self._stops, "Choose origin" if origin else "Choose destination")
         if dlg.ShowModal() == wx.ID_OK:
-            stop = dlg.selected_stop
-            if origin:
-                self._origin = stop
-                self.origin.SetLabel(stop_label(stop))
-                _set_explicit_accessible_name(
-                    self, self.origin, f"Origin, {stop_label(stop)}")
-            else:
-                self._destination = stop
-                self.destination.SetLabel(stop_label(stop))
-                _set_explicit_accessible_name(
-                    self, self.destination, f"Destination, {stop_label(stop)}")
+            self._set_stop(origin, dlg.selected_stop)
         dlg.Destroy()
+
+    def _set_stop(self, origin, stop):
+        from greyhound import stop_label
+        if origin:
+            self._origin = stop
+            self.origin.SetLabel(stop_label(stop))
+            _set_explicit_accessible_name(
+                self, self.origin, f"Origin, {stop_label(stop)}")
+        else:
+            self._destination = stop
+            self.destination.SetLabel(stop_label(stop))
+            _set_explicit_accessible_name(
+                self, self.destination, f"Destination, {stop_label(stop)}")
 
     def _on_trip_type(self, event=None):
         self.return_date.Enable(self.trip_type.GetSelection() == 1)

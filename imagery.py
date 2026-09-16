@@ -78,7 +78,7 @@ class ImageryMixin:
                 result = lookup_streetview_description(
                     lat, lon,
                     google_api_key=google_key,
-                    mistral_client=self._mistral,
+                    ai_client=self._ai,
                     street_heading=heading,
                     cache_path=os.path.join(CACHE_DIR, "streetview_cache.json"),
                 )
@@ -135,7 +135,7 @@ class ImageryMixin:
                 result = lookup_satellite_description(
                     lat, lon, zoom=15,
                     google_api_key=self.settings.get("google_api_key", ""),
-                    mistral_client=self._mistral,
+                    ai_client=self._ai,
                     cache_path=os.path.join(CACHE_DIR, "satellite_cache.json")
                 )
 

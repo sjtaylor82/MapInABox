@@ -11,7 +11,7 @@ import wx
 
 from distance_units import format_distance
 from free import FreeExploreEngine
-from geo import haversine_m, dist_metres, nearest_point_on_segment
+from geo import bearing_deg, haversine_m, dist_metres, nearest_point_on_segment
 from logging_utils import miab_log
 from world_map_panel import _IS_LAND
 
@@ -48,6 +48,50 @@ def _street_area_identity(geo, preferred_name=""):
 
 
 class StreetModeMixin:
+    def _street_shift_follow_axis(self):
+        """Return the cardinal key axis matching the local street bearing."""
+        street = (getattr(self, "_jump_street_label", None)
+                  or getattr(self, "street_label", ""))
+        target = re.sub(r"\s*\(.*?\)", "", street or "").strip().casefold()
+        if not target:
+            return None
+        best = None
+        for seg in getattr(self, "_road_segments", []):
+            label = re.sub(
+                r"\s*\(.*?\)", "", seg.get("name", "")
+            ).strip().casefold()
+            if label != target:
+                continue
+            coords = seg.get("coords", [])
+            for index in range(len(coords) - 1):
+                a_lat, a_lon = coords[index]
+                b_lat, b_lon = coords[index + 1]
+                snap_lat, snap_lon = nearest_point_on_segment(
+                    self.lat, self.lon, a_lat, a_lon, b_lat, b_lon)
+                distance = dist_metres(
+                    self.lat, self.lon, snap_lat, snap_lon)
+                if best is None or distance < best[0]:
+                    best = (
+                        distance,
+                        bearing_deg(a_lat, a_lon, b_lat, b_lon) % 180.0,
+                    )
+        if best is None:
+            return None
+        heading = best[1]
+        return "vertical" if heading <= 45.0 or heading >= 135.0 else "horizontal"
+
+    def _release_street_pin_for_grid_move(self):
+        """Let cardinal grid movement leave a searched or tracked street."""
+        self._jump_street_label = None
+        self._jump_street_pin_lat = None
+        self._jump_street_pin_lon = None
+        self._street_arrow_engine = None
+        self._street_arrow_axis_heading = None
+        # A deliberate grid move owns its coordinate, including in an empty
+        # cell.  The initial-entry convenience must not teleport it back onto
+        # a road and destroy Up/Down or Left/Right reversibility.
+        self._street_auto_land_done = True
+
     def _release_numbered_address_pin_after_move(self):
         """Stop forcing a searched house number after cursor movement.
 
@@ -58,13 +102,17 @@ class StreetModeMixin:
         """
         self._jump_address_number = None
         self._jump_address_street = None
+        self._jump_address_point_lat = None
+        self._jump_address_point_lon = None
+        self._jump_address_point_source = None
         self._pending_jump_address_number = None
         self._pending_jump_address_street = None
         self._pending_jump_address_lat = None
         self._pending_jump_address_lon = None
 
-    def _step_along_pinned_street(self, direction, distance_m):
-        """Move Up/Down along the current street's actual polyline geometry."""
+    def _step_along_pinned_street(self, direction, distance_m,
+                                  heading_hint=0.0):
+        """Move forward or backward along the current street."""
         pinned = getattr(self, "_jump_street_label", None)
         segments = getattr(self, "_road_segments", [])
         if not segments:
@@ -85,18 +133,18 @@ class StreetModeMixin:
         engine_stale = not engine_nearby or (
             pinned is not None
             and engine.street_name.casefold() != str(pinned).casefold()
-        )
+        ) or getattr(self, "_street_arrow_axis_heading", None) != heading_hint
         if engine is None or engine_stale:
             engine = FreeExploreEngine(step_m=distance_m)
             engine.set_segments(segments)
             engine.set_pois([])
-            # Preserve the old initial direction: Up chooses the road direction
-            # closest to north, and Down follows the reverse direction.
             engine.start(
-                self.lat, self.lon, preferred_street=street, heading_deg=0.0)
+                self.lat, self.lon, preferred_street=street,
+                heading_deg=heading_hint)
             if not engine.street_name:
                 return False
             self._street_arrow_engine = engine
+            self._street_arrow_axis_heading = heading_hint
 
         engine.step_m = float(distance_m)
         old_lat, old_lon = self.lat, self.lon
@@ -298,10 +346,15 @@ class StreetModeMixin:
         # Build label with addresses from cache
         self.street_label = primary
         parts = []
+        intersection_cross = self._street_display_intersection_cross(primary)
+        if (cross and intersection_cross
+                and cross.casefold() in {
+                    name.casefold() for name in intersection_cross
+                }):
+            cross = None
         streets_to_annotate = [primary]
         if cross:
             streets_to_annotate.append(cross)
-        intersection_cross = self._street_display_intersection_cross(primary)
 
         pinned_num    = getattr(self, '_jump_address_number', None)
         pinned_street = getattr(self, '_jump_address_street', None)
@@ -655,9 +708,9 @@ class StreetModeMixin:
         self._poi_index         = 0
         self._poi_explore_stack = []
         self.street_label       = ""
-        self._jump_street_label = None
-        self._jump_street_pin_lat = None
-        self._jump_street_pin_lon = None
+        self._jump_street_label = pending_addr_street or None
+        self._jump_street_pin_lat = request_lat if pending_addr_street else None
+        self._jump_street_pin_lon = request_lon if pending_addr_street else None
         self._jump_address_number = pending_addr_num
         self._jump_address_street = pending_addr_street
         self._inside_barrier    = True
@@ -1405,8 +1458,21 @@ class StreetModeMixin:
         finished.wait()
         return answer["update"]
 
+    def _gnaf_available_here(self):
+        """Whether the current map/street position is in Australia."""
+        country_code = str(
+            getattr(self, "_current_country_code", "") or ""
+        ).strip().upper()
+        if country_code == "AU":
+            return True
+        # _current_country_code is populated by street-mode geocoding.  In
+        # map mode the normal country lookup instead maintains
+        # last_country_found.
+        country = str(getattr(self, "last_country_found", "") or "").strip()
+        return country.casefold() == "australia"
+
     def _confirm_or_toggle_gnaf_addresses(self):
-        if str(getattr(self, "_current_country_code", "") or "").upper() != "AU":
+        if not self._gnaf_available_here():
             self._gnaf_toggle_pending_until = 0.0
             self._status_update(
                 "GNAF addresses are available only in Australia.", force=True)
@@ -1430,7 +1496,7 @@ class StreetModeMixin:
             self._gnaf_toggle_pending_until = 0.0
 
     def _toggle_gnaf_addresses(self):
-        if str(getattr(self, "_current_country_code", "") or "").upper() != "AU":
+        if not self._gnaf_available_here():
             self._gnaf_toggle_pending_until = 0.0
             self._status_update(
                 "GNAF addresses are available only in Australia.", force=True)

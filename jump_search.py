@@ -11,7 +11,6 @@ import urllib.request
 import wx
 
 from app_paths import CACHE_DIR
-from geo import dist_km
 from geo_features import GeoFeatures
 from logging_utils import miab_log
 from speech_dispatch import speak as _speak
@@ -99,24 +98,6 @@ class JumpSearchMixin:
                 continue
             candidates.append((label, lat, lon, sort_key(label), "cache"))
         return candidates
-
-    def _nearby_cached_place_label(self, lat, lon, radius_km=5.0):
-        best = None
-        best_km = radius_km
-        for place in self._load_place_cache():
-            label = str(place.get("label", ""))
-            if not label:
-                continue
-            try:
-                plat = float(place["lat"])
-                plon = float(place["lon"])
-            except Exception:
-                continue
-            km = dist_km(lat, lon, plat, plon)
-            if km <= best_km:
-                best = label
-                best_km = km
-        return best
 
     # Classes that represent geographic areas/features — keep existing map-mode behaviour.
     # Everything else (offices, amenities, shops, buildings, …) lands in street mode.

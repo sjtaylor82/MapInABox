@@ -9,6 +9,7 @@ import pickle
 import re
 import shutil
 import tempfile
+import threading
 
 from app_paths import RESOURCE_DIR, USER_DIR
 from distance_units import format_distance
@@ -86,6 +87,11 @@ class GeoFeatures:
         self._country_cache_order = []
         self._country_name_index = {}   # country_code -> {name_norm: [feat, ...]}
         self._country_name_sorted = {}  # country_code -> sorted list of name_norms
+        # Location lookups and proactive prefetches run on separate threads.
+        # Keep all cache-file and in-memory LRU mutations in one critical
+        # section so two threads cannot load/write/evict the same country at
+        # once. RLock also keeps future nested loading helpers safe.
+        self._country_load_lock = threading.RLock()
         if not path or not os.path.isdir(path):
             return
         try:
@@ -135,6 +141,7 @@ class GeoFeatures:
             return None
 
     def _save_country_cache(self, country_code, source_path, features, name_index, name_sorted):
+        temp_path = None
         try:
             os.makedirs(self._cache_dir, exist_ok=True)
             cache_path = self._country_cache_path(country_code)
@@ -145,12 +152,29 @@ class GeoFeatures:
                 "name_index": name_index,
                 "name_sorted": name_sorted,
             }
-            with open(cache_path, "wb") as f:
+            fd, temp_path = tempfile.mkstemp(
+                prefix=f".{country_code}.", suffix=".tmp",
+                dir=self._cache_dir)
+            with os.fdopen(fd, "wb") as f:
                 pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, cache_path)
+            temp_path = None
         except Exception:
             pass
+        finally:
+            if temp_path:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
 
     def _load_country(self, country_code):
+        with self._country_load_lock:
+            return self._load_country_locked(country_code)
+
+    def _load_country_locked(self, country_code):
         if country_code in self._country_cache:
             return self._country_cache[country_code]
         meta = self._manifest.get(country_code)

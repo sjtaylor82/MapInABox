@@ -8,7 +8,7 @@ consistent, global, structured picture of named shops, food venues and
 facilities together with the terminal and level they sit on.
 
 An *optional* enrichment layer fetches an official airport page and asks
-Mistral to extract before/after-security and assistance details that OSM does
+the AI to extract before/after-security and assistance details that OSM does
 not carry.  Every field the model returns is discarded unless it is literally
 evidenced in the fetched page text, because for a blind traveller a wrong
 "after security, near Gate 24" is worse than no location at all.
@@ -45,6 +45,7 @@ import re
 import time
 import urllib.parse
 import urllib.request
+from ai_client import MAX_SOURCE_CHARS
 from logging_utils import miab_log
 
 _CACHE_VERSION = "v4"
@@ -307,7 +308,7 @@ def build_extraction_prompt(query: str, focus_key: str, source_text: str) -> str
         "- airlines may list airlines only when the source says those flights check in, depart, or board from that area.\n"
         "- evidence must be a short source phrase that supports the item.\n"
         "- Return fewer items rather than guessing.\n\n"
-        f"SOURCE TEXT:\n{source_text}"
+        f"SOURCE TEXT:\n{source_text[:MAX_SOURCE_CHARS]}"
     )
 
 
@@ -558,7 +559,7 @@ def build_airline_gate_prompt(query: str, source_text: str) -> str:
         "- evidence: a short phrase from the source that supports the mapping.\n"
         "- Include an item only if the source states a gate, gate range, or terminal for that airline.\n"
         "- Return fewer items rather than guessing.\n\n"
-        f"SOURCE TEXT:\n{source_text}"
+        f"SOURCE TEXT:\n{source_text[:MAX_SOURCE_CHARS]}"
     )
 
 

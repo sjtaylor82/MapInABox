@@ -1260,6 +1260,11 @@ class FreeMixin:
         self._status_update(msg)
 
     def _toggle_free_mode(self):
+        """Legacy Free Mode entry point, retained only for rollback.
+
+        Free Mode is retired: the application exposes no menu item, keyboard
+        binding, help entry, or manual section that calls this method.
+        """
         if not self.street_mode:
             self._status_update("Free mode works only in street mode.", force=True)
             return

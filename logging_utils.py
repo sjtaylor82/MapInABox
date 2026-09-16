@@ -3,7 +3,7 @@
 Categories:
     errors       — exceptions, API failures, missing data
     street       — Overpass queries, cache hits/misses
-    api_calls    — HERE/Mistral requests and responses
+    api_calls    — HERE/AI requests and responses
     challenges   — player, country, time, score
     feature_usage — keys pressed, lookups made
     navigation   — country entries, crossings, jumps
@@ -41,7 +41,8 @@ def miab_log(category: str, msg: str, settings=None) -> None:
         }
         if category not in enabled:
             return
-    ts = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # Millisecond precision is needed to diagnose screen-reader timing.
+    ts = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
     line = f"[{ts}] [{category.upper()}] {msg}"
     log_path = _resolve_log_path(settings)
     if log_path:

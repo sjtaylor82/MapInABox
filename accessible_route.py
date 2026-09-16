@@ -129,10 +129,10 @@ def start_narrative_briefing(host) -> None:
             "Narrative briefing is only available for OpenStreetMap routes. "
             "Switch navigation provider to OSM in settings.")
         return
-    mistral = getattr(host, "_mistral", None)
-    if not mistral or not getattr(mistral, "is_configured", False):
+    ai = getattr(host, "_ai", None)
+    if not ai or not getattr(ai, "is_configured", False):
         host._announce_transient(
-            "Narrative briefing needs a Mistral API key. Add one in settings.")
+            "Narrative briefing is unavailable because the AI service is not available.")
         return
 
     # If briefing mode is already active, treat the action as "repeat current".
@@ -233,10 +233,13 @@ def start_narrative_briefing(host) -> None:
             except Exception as _exc:
                 miab_log("errors", f"[Nav] Pedestrian feature lookup failed: {_exc}", getattr(host, "settings", None))
 
-            text = mistral.narrative_directions(digest)
+            text = ai.narrative_directions(digest)
             if not text:
+                reason = ai.last_error_message
                 wx.CallAfter(
                     host._announce_transient,
+                    f"Briefing unavailable. {reason} Falling back to step list."
+                    if reason else
                     "Briefing was rejected or unavailable. Falling back to step list.")
                 wx.CallAfter(host._nav_announce_step)
                 return

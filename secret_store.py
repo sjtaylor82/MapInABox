@@ -11,7 +11,6 @@ from __future__ import annotations
 SERVICE_NAME = "MapInABox"
 CREDENTIAL_KEYS = (
     "google_api_key",
-    "mistral_api_key",
     "here_api_key",
     "ors_api_key",
     "aviationstack_api_key",
@@ -21,6 +20,7 @@ CREDENTIAL_KEYS = (
     # Retain and protect credentials saved by earlier MIAB integrations, even
     # when the current build no longer presents those services in Settings.
     "gemini_api_key",
+    "mistral_api_key",
     "aerodatabox_api_key",
 )
 SECURE = "secure"

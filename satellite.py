@@ -1,7 +1,7 @@
 """satellite.py — Google Maps satellite imagery lookup with vision analysis.
 
-Fetches satellite/aerial imagery at a given coordinate and uses Mistral
-to provide a rich, detailed description of the landscape suitable for accessibility.
+Fetches satellite/aerial imagery at a given coordinate and uses the
+built-in AI to provide a rich, detailed description of the landscape suitable for accessibility.
 """
 
 import urllib.parse
@@ -71,7 +71,7 @@ def lookup_satellite_description(
     lon: float,
     zoom: int = 15,
     google_api_key: str = "",
-    mistral_client = None,
+    ai_client = None,
     cache_path: str = "satellite_cache.json"
 ) -> Optional[Tuple[bytes, str]]:
     """Fetch satellite image and return image bytes + description.
@@ -81,7 +81,7 @@ def lookup_satellite_description(
         lon: Longitude
         zoom: Zoom level (default 15 for city/neighborhood scale)
         google_api_key: Google Maps API key
-        mistral_client: MistralClient instance for vision analysis
+        ai_client: AIClient instance for vision analysis
         cache_path: Path to cache file
 
     Returns:
@@ -102,32 +102,32 @@ def lookup_satellite_description(
     if not image_bytes:
         return None
 
-    mistral_ready = bool(mistral_client and getattr(mistral_client, "is_configured", False))
+    ai_ready = bool(ai_client and getattr(ai_client, "is_configured", False))
 
     # If description is cached, return cached + fresh image
     if cached_desc:
         return (image_bytes, cached_desc)
 
-    if not mistral_ready:
+    if not ai_ready:
         return (
             image_bytes,
-            "Satellite imagery loaded. A Mistral API key is required to fetch a visual description.",
+            "Satellite imagery loaded. The AI service is not available to describe it.",
         )
 
-    # Get description from Mistral
+    # Get description from the AI
     try:
-        description = mistral_client.describe_satellite_image(image_bytes, cache_key)
+        description = ai_client.describe_satellite_image(image_bytes, cache_key)
     except Exception as exc:
-        miab_log("errors", f"[Satellite] Mistral description failed: {exc}", None)
+        miab_log("errors", f"[Satellite] AI description failed: {exc}", None)
         description = ""
     if not description:
-        description = (
-            "Satellite imagery loaded, but Mistral could not generate a description right now."
-        )
+        reason = (getattr(ai_client, "last_error_message", "")
+                  or "The AI could not generate one right now.")
+        return (image_bytes,
+                f"Satellite imagery loaded, but no description is available. {reason}")
 
     # Save description to cache
-    if description and "Mistral could not generate a description" not in description:
-        _set_cached(cache, cache_key, description)
-        _save_cache(cache_path, cache)
+    _set_cached(cache, cache_key, description)
+    _save_cache(cache_path, cache)
 
     return (image_bytes, description)

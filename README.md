@@ -67,13 +67,12 @@ Core features that do not require the user to provide an API key may contact:
 - MobilityData and OurAirports public datasets for transit and airport data.
 - `samtaylor9.nfshost.com` for GNAF address lookup in Australia when GNAF address data is enabled.
 - Google Search, Bing, DuckDuckGo, Google Maps, Uber (`m.uber.com`), venue websites, and provider websites when the user explicitly opens a search result, menu, review page, map page, donation page, ride booking link, or other external browser link.
-- `miab-menu-search.miab.workers.dev` for best-effort menu and website discovery features.
+- `miab-menu-search.miab.workers.dev` for best-effort menu and website discovery features, and for built-in AI features: image descriptions, narrative walking briefings, and extra shopping-centre information. AI requests, including any image being described, are forwarded to Groq.
 
 Optional features are only contacted when the user supplies the relevant key or chooses the relevant action:
 
 - Google Maps, Routes, Places, Static Maps, and Street View.
 - HERE search, routing, geocoding, transit, and POI services.
-- Mistral AI for image descriptions, transit questions, narrative walking briefings, and extra shopping-centre information.
 - AviationStack for airport arrival and departure boards.
 - OpenRouteService for distance calculations.
 - RapidAPI-hosted services including Priceline, TripAdvisor, and timetable lookup.

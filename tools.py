@@ -2347,7 +2347,7 @@ class ToolsMixin:
                 f"Could not open Booking.com:\n\n{exc}\n\nBooking link:\n{url}",
                 "Booking.com Booking", wx.OK | wx.ICON_ERROR)
 
-    def _tool_greyhound_booking(self):
+    def _tool_greyhound_booking(self, origin=None):
         """Populate Greyhound's own booking widget using official stop codes."""
         if not self._education_tool_allowed("greyhound_booking"):
             return
@@ -2359,7 +2359,7 @@ class ToolsMixin:
             wx.MessageBox(str(exc), "Greyhound Australia Booking",
                           wx.OK | wx.ICON_ERROR)
             return
-        dlg = GreyhoundBookingDialog(self, stops)
+        dlg = GreyhoundBookingDialog(self, stops, origin=origin)
         if dlg.ShowModal() != wx.ID_OK:
             dlg.Destroy()
             return
@@ -2917,15 +2917,15 @@ class ToolsMixin:
     ) -> tuple[list[dict], list[dict], list[str]]:
         """Optional, evidence-gated enrichment from official airport pages.
 
-        Runs only when Mistral is configured and a source is reachable (the
+        Runs only when the AI is available and a source is reachable (the
         user pasted a URL, or Serper found the official site).  Returns
         (amenity_records, airline_hints, source_links).  Amenity records are
         only extracted when OSM was thin; the airline gate-range extraction
         runs for the comprehensive "all" view, since that data (per-airline
         gate ranges, before/after security) is exactly what OSM lacks.
         """
-        mistral = getattr(self, "_mistral", None)
-        if not (mistral and getattr(mistral, "is_configured", False)):
+        ai = getattr(self, "_ai", None)
+        if not (ai and getattr(ai, "is_configured", False)):
             return [], [], []
 
         want_amenities = osm_have < 12
@@ -2947,8 +2947,8 @@ class ToolsMixin:
             try:
                 prompt = airport_directory.build_extraction_prompt(query, focus_key, source_text)
                 ckey = airport_directory.cache_key(query, focus_key, source_text)
-                raw_text = mistral.query_text(prompt, ckey)
-                records = mistral._parse_json_list(raw_text)
+                raw_text = ai.query_text(prompt, ckey)
+                records = ai._parse_json_list(raw_text)
                 official = airport_directory.clean_directory_records(
                     records, source_text, focus_key=focus_key,
                 )
@@ -2958,8 +2958,8 @@ class ToolsMixin:
             try:
                 prompt = airport_directory.build_airline_gate_prompt(query, source_text)
                 ckey = airport_directory.cache_key("airline_gates " + query, "all", source_text)
-                raw_text = mistral.query_text(prompt, ckey)
-                records = mistral._parse_json_list(raw_text)
+                raw_text = ai.query_text(prompt, ckey)
+                records = ai._parse_json_list(raw_text)
                 airline_hints = airport_directory.clean_airline_gate_records(records, source_text)
             except Exception as exc:
                 self._tool_trace(f"Airport airline-gate enrichment failed: {exc}")
@@ -3768,12 +3768,12 @@ class ToolsMixin:
     def _fetch_segment_streetview(self, lat, lon, heading, show_cb):
         """Fetch and describe Street View at one route waypoint (on demand)."""
         google_key = self.settings.get("google_api_key", "").strip()
-        mistral = getattr(self, "_mistral", None)
+        ai = getattr(self, "_ai", None)
         if not google_key:
             show_cb("Street View needs a Google API key. Add one in settings.")
             return
-        if not mistral or not getattr(mistral, "is_configured", False):
-            show_cb("Street View descriptions need a Mistral API key. Add one in settings.")
+        if not ai or not getattr(ai, "is_configured", False):
+            show_cb("Street View descriptions are unavailable because the AI service is not available.")
             return
         if lat is None or lon is None:
             show_cb("There is no map point for this item to look at.")
@@ -3787,7 +3787,7 @@ class ToolsMixin:
             try:
                 result = lookup_streetview_description(
                     float(lat), float(lon),
-                    google_api_key=google_key, mistral_client=mistral,
+                    google_api_key=google_key, ai_client=ai,
                     street_heading=heading, cache_path=cache_path,
                     include_images=False, mode="navigation",
                 )

@@ -36,6 +36,10 @@ COUNTRY_ALIASES = {
     "Venezuela":       "Venezuela",
     "Tanzania":        "Tanzania",
     "Moldova":         "Moldova",
+    # The GeoJSON represents the Russian-leased Baikonur area as a distinct
+    # territory. It remains separately announced on the map, but shares the
+    # surrounding Kazakhstan/Asia ambience.
+    "Baikonur":        "Kazakhstan",
     # Australian external territories
     "Norfolk Island":              "Australia",
     "Christmas Island":            "Australia",
@@ -92,14 +96,25 @@ class SoundEngine:
     _VOL_STEP = 0.1
     _VOL_MIN  = 0.0
     _VOL_MAX  = 1.0
+    _AMBIENT_FADE_MS = 750
+    _AMBIENT_CHANNEL_IDS = (0, 15)
 
     def __init__(self):
         pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
         pygame.mixer.set_num_channels(16)
-        self._ch = pygame.mixer.Channel(0)
+        self._ambient_channels = [
+            pygame.mixer.Channel(i) for i in self._AMBIENT_CHANNEL_IDS
+        ]
+        self._ambient_index = 0
+        self._ambient_transition_generation = 0
+        self._ambient_transition_timer = None
+        # Retain the historical attribute for callers that play a one-off
+        # looping sound directly on the current ambience channel.
+        self._ch = self._ambient_channels[self._ambient_index]
         self._master_volume = 0.7
         self._apply_volume()
         self._current = None
+        self._current_path = None
 
     def _apply_volume(self):
         """Set the master volume on every pygame mixer channel."""
@@ -225,25 +240,89 @@ class SoundEngine:
         for path in candidates:
             if os.path.exists(path):
                 self._current = canonical
-                self.play_file(path, loops=-1)
+                resolved_path = os.path.normcase(os.path.abspath(path))
+                if resolved_path == self._current_path:
+                    # Adjacent countries often share a regional fallback
+                    # (for example Namibia and South Africa both use Africa).
+                    # Restarting the same loop on a second channel produces an
+                    # audible dip/phase artefact instead of a useful transition.
+                    return
+                self._crossfade_ambient(path)
+                self._current_path = resolved_path
                 return
 
-        # No sound found — stop current sound
+        # No sound found — gently leave the previous ambience behind.
         self._current = canonical
-        self._ch.stop()
+        self._current_path = None
+        self.fadeout()
+
+    def _crossfade_ambient(self, path):
+        """Fade out, then decode and fade in *path*.
+
+        SDL_mixer may briefly lock the audio device while decoding compressed
+        OGG/MP3 data. Loading the incoming sound during a crossfade therefore
+        causes an audible glitch in the outgoing loop on some Windows audio
+        drivers. Decode only after the old sound is fully silent.
+        """
+        old_channel = self._ambient_channels[self._ambient_index]
+        next_index = 1 - self._ambient_index
+        new_channel = self._ambient_channels[next_index]
+        self._ambient_transition_generation += 1
+        generation = self._ambient_transition_generation
+        try:
+            new_channel.stop()
+            old_channel.fadeout(self._AMBIENT_FADE_MS)
+            import wx
+            self._ambient_transition_timer = wx.CallLater(
+                self._AMBIENT_FADE_MS,
+                self._finish_ambient_transition,
+                path,
+                next_index,
+                generation,
+            )
+        except Exception as e:
+            miab_log("errors", f"[SoundEngine] Cannot play {path}: {e}", getattr(self, "settings", None))
+
+    def _finish_ambient_transition(self, path, channel_index, generation):
+        """Start the pending ambience only if it is still the newest request."""
+        if generation != self._ambient_transition_generation:
+            return
+        try:
+            sound = pygame.mixer.Sound(path)
+            channel = self._ambient_channels[channel_index]
+            channel.stop()
+            channel.set_volume(self._master_volume)
+            channel.play(
+                sound, loops=-1, fade_ms=self._AMBIENT_FADE_MS)
+            self._ambient_index = channel_index
+            self._ch = channel
+        except Exception as e:
+            miab_log("errors", f"[SoundEngine] Cannot play {path}: {e}", getattr(self, "settings", None))
 
     def play_file(self, path, loops=0):
         """Play a WAV file once (or looped if loops=-1)."""
         try:
+            self._ambient_transition_generation += 1
             sound = pygame.mixer.Sound(path)
             self._ch.play(sound, loops=loops)
+            self._current_path = None
         except Exception as e:
             miab_log("errors", f"[SoundEngine] Cannot play {path}: {e}", getattr(self, "settings", None))
 
     def stop(self):
         """Stop current playback."""
-        self._ch.stop()
+        self._ambient_transition_generation += 1
+        for channel in self._ambient_channels:
+            channel.stop()
         self._current = None
+        self._current_path = None
+
+    def fadeout(self, milliseconds=None):
+        """Fade out all ambience channels without affecting navigation tones."""
+        self._ambient_transition_generation += 1
+        duration = self._AMBIENT_FADE_MS if milliseconds is None else max(0, int(milliseconds))
+        for channel in self._ambient_channels:
+            channel.fadeout(duration)
 
     def play_poi_tone(self, side: str):
         """Short directional beep: 'left', 'right', or 'both'."""
@@ -265,6 +344,8 @@ class SoundEngine:
                 np.stack([l, r], axis=-1), dtype=np.int16)
             snd = pygame.sndarray.make_sound(stereo)
             for idx in range(1, pygame.mixer.get_num_channels()):
+                if idx in self._AMBIENT_CHANNEL_IDS:
+                    continue
                 ch = pygame.mixer.Channel(idx)
                 if not ch.get_busy():
                     ch.play(snd)
@@ -288,6 +369,8 @@ class SoundEngine:
             )
             snd = pygame.sndarray.make_sound(stereo)
             for idx in range(1, pygame.mixer.get_num_channels()):
+                if idx in self._AMBIENT_CHANNEL_IDS:
+                    continue
                 channel = pygame.mixer.Channel(idx)
                 if not channel.get_busy():
                     channel.play(snd)
@@ -312,6 +395,8 @@ class SoundEngine:
                 np.stack((wave, wave), axis=-1), dtype=np.int16)
             snd = pygame.sndarray.make_sound(stereo)
             for idx in range(1, pygame.mixer.get_num_channels()):
+                if idx in self._AMBIENT_CHANNEL_IDS:
+                    continue
                 channel = pygame.mixer.Channel(idx)
                 if not channel.get_busy():
                     channel.play(snd)
@@ -350,6 +435,8 @@ class SoundEngine:
             )
             snd = pygame.sndarray.make_sound(stereo)
             for idx in range(1, pygame.mixer.get_num_channels()):
+                if idx in self._AMBIENT_CHANNEL_IDS:
+                    continue
                 ch = pygame.mixer.Channel(idx)
                 if not ch.get_busy():
                     ch.play(snd)

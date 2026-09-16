@@ -1,7 +1,7 @@
 """mall_directory.py - Shopping-centre directory helpers for Map in a Box.
 
 The main app fetches official centre website text via fetch_official_source_text(),
-asks Mistral to extract store names, and uses describe_tenant() for detail views.
+asks the AI to extract store names, and uses describe_tenant() for detail views.
 
 Public API
 ----------

@@ -1582,12 +1582,12 @@ class NavMixin:
         wx.CallAfter(self._nav_narrative_briefing)
 
     def _nav_narrative_briefing(self):
-        """Shift+I — load a Mistral-generated full pedestrian briefing and
+        """Shift+I — load an AI-generated full pedestrian briefing and
         enter step-through briefing mode.
 
         Only available for OSM routes (where we have a node path with named
-        cross streets). Falls back to the deterministic step list if Mistral
-        is not configured, fails, or returns invented street names.
+        cross streets). Falls back to the deterministic step list if the AI
+        is not available, fails, or returns invented street names.
 
         Once loaded, Up/Down walk through briefing steps, I repeats the
         current step, and Escape exits briefing mode (back to normal nav
@@ -1598,7 +1598,7 @@ class NavMixin:
 
     @staticmethod
     def _parse_briefing_steps(text: str) -> list[str]:
-        """Split Mistral's numbered narrative into discrete steps.
+        """Split the AI's numbered narrative into discrete steps.
 
         The system prompt asks for each numbered step on its own line, so we
         split on lines beginning with `<digits>.` and re-join any wrapped
@@ -1837,6 +1837,26 @@ class NavMixin:
                 street = self._street_survey_current_street()
                 if not street:
                     return ""
+                context_resolver = getattr(
+                    self, "_street_survey_intersection_context_street", None)
+                if callable(context_resolver):
+                    physical_street = context_resolver(street)
+                    if not physical_street:
+                        return "Cross street information is not available here."
+                    if _street_key(physical_street) != _street_key(street):
+                        physical_here = self._street_survey_project(
+                            physical_street, self.lat, self.lon)
+                        if physical_here:
+                            metres = int(round(physical_here[0]))
+                            direction = compass_name(bearing_deg(
+                                self.lat, self.lon,
+                                physical_here[2], physical_here[3]
+                            )).lower()
+                            return (
+                                f"{physical_street} {format_distance(metres)} "
+                                f"{direction}."
+                            )
+                        return f"{physical_street}."
                 intersections = self._street_survey_intersections(street)
                 here = self._street_survey_project(street, self.lat, self.lon)
                 if not intersections or not here:
@@ -1874,6 +1894,43 @@ class NavMixin:
                         names.append(name)
                     return sorted(names, key=str.lower)
 
+                def _junction_type(nid):
+                    node_edges = edges.get(nid, [])
+                    neighbours = list({
+                        neighbour for neighbour, _name in node_edges
+                        if neighbour in nodes
+                    })
+                    branches = len(neighbours)
+                    bearings = [
+                        bearing_deg(
+                            nodes[nid][0], nodes[nid][1],
+                            nodes[neighbour][0], nodes[neighbour][1])
+                        for neighbour in neighbours
+                    ] if nid in nodes else []
+
+                    def opposite(a, b):
+                        separation = abs((a - b + 180) % 360 - 180)
+                        return separation >= 145.0
+
+                    if branches >= 5:
+                        return f"{branches}-way intersection"
+                    if branches == 4:
+                        paired = all(any(
+                            index != other and opposite(bearing, bearings[other])
+                            for other in range(len(bearings))
+                        ) for index, bearing in enumerate(bearings))
+                        return ("4-way intersection" if paired
+                                else "complex intersection")
+                    if branches == 3:
+                        has_opposite_pair = any(
+                            opposite(bearings[a], bearings[b])
+                            for a in range(len(bearings))
+                            for b in range(a + 1, len(bearings))
+                        )
+                        return ("T-junction" if has_opposite_pair
+                                else "3-way intersection")
+                    return "intersection"
+
                 nearest_here = None
                 for along, nid, nlat, nlon in intersections:
                     real_distance = dist_metres(self.lat, self.lon, nlat, nlon)
@@ -1909,7 +1966,10 @@ class NavMixin:
                             "name": name,
                             "delta": along_delta,
                             "front": front_word,
+                            "bearing": intersection_bearing,
                             "side": branch_side,
+                            "perpendicular": abs(abs_rel - 90.0) <= 35.0,
+                            "junction_type": _junction_type(nid),
                             "same_side": my_side in ("left", "right") and branch_side == my_side,
                             "distance": real_distance,
                         })
@@ -1921,42 +1981,25 @@ class NavMixin:
                         f"distance={metres:.1f}m node={nid}",
                         self.settings,
                     )
-                    return f"{street} at {', '.join(cross_names[:2])}."
+                    return f"At {cross_names[0]}, {_junction_type(nid)}."
                 if not candidates:
                     return ""
-                behind = [item for item in candidates if item["delta"] < 0]
-                ahead = [item for item in candidates if item["delta"] > 0]
-                if behind and ahead:
-                    behind.sort(key=lambda item: abs(item["delta"]))
-                    ahead.sort(key=lambda item: abs(item["delta"]))
-                    back_name = behind[0]["name"]
-                    forward_name = ahead[0]["name"]
-                    if _street_key(back_name) != _street_key(forward_name):
-                        back_metres = int(round(behind[0]["distance"]))
-                        forward_metres = int(round(ahead[0]["distance"]))
-                        miab_log(
-                            "verbose",
-                            f"X street result: current='{street}' between='{back_name}' "
-                            f"back_distance={behind[0]['distance']:.1f}m "
-                            f"and='{forward_name}' forward_distance={ahead[0]['distance']:.1f}m",
-                            self.settings,
-                        )
-                        return (
-                            f"Between {back_name} {format_distance(back_metres)} "
-                            f"and {forward_name} {format_distance(forward_metres)}."
-                        )
                 candidates.sort(key=lambda item: item["distance"])
-                nearest = candidates[0]
-                rel_word = "forward" if nearest["front"] == "ahead" else "back"
+                perpendicular = [item for item in candidates if item["perpendicular"]]
+                nearest = perpendicular[0] if perpendicular else candidates[0]
                 metres = int(round(nearest["distance"]))
+                direction = compass_name(nearest["bearing"]).lower()
                 miab_log(
                     "verbose",
                     f"X street result: current='{street}' cross='{nearest['name']}' "
-                    f"front='{rel_word}' distance={nearest['distance']:.1f}m "
+                    f"direction='{direction}' distance={nearest['distance']:.1f}m "
                     f"side='{nearest['side']}' my_side='{my_side}'",
                     self.settings,
                 )
-                return f"{nearest['name']} is {format_distance(metres)} {rel_word}."
+                return (
+                    f"{nearest['name']} {format_distance(metres)} "
+                    f"{direction}, {nearest['junction_type']}."
+                )
 
             announcement = (
                 _nearest_side_or_cross_street_text()
@@ -2000,7 +2043,7 @@ class NavMixin:
     def _nav_arrival_streetview(self):
         """Announce a Street View description at the destination after arrival.
 
-        Only fires when Google StreetView and Mistral vision are both configured.
+        Only fires when Google StreetView and AI vision are both available.
         Runs text-only (no dialog) so it doesn't interrupt the user's workflow.
         """
         try:
@@ -2008,8 +2051,8 @@ class NavMixin:
         except ImportError:
             return
         google_key = self.settings.get("google_api_key", "").strip()
-        mistral = getattr(self, "_mistral", None)
-        if not google_key or not mistral or not getattr(mistral, "is_configured", False):
+        ai = getattr(self, "_ai", None)
+        if not google_key or not ai or not getattr(ai, "is_configured", False):
             return
         dest_lat = getattr(self, "_nav_dest_lat", None)
         dest_lon = getattr(self, "_nav_dest_lon", None)
@@ -2025,7 +2068,7 @@ class NavMixin:
                 result = lookup_streetview_description(
                     float(dest_lat), float(dest_lon),
                     google_api_key=google_key,
-                    mistral_client=mistral,
+                    ai_client=ai,
                     street_heading=None,
                     cache_path=cache_path,
                     include_images=False,

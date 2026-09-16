@@ -4,9 +4,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import greyhound
 from greyhound import (
     _normalise_stops, availability_options, filter_stops, format_option_stops,
-    load_availability, load_stops, option_stop_items, stop_label,
+    load_availability, load_stops, option_stop_items, stop_coordinates,
+    stop_label, stops_named_after, stops_near,
 )
 from tools import _build_greyhound_booking_url
 
@@ -16,6 +18,17 @@ STOPS = [
     {"Code": "NEWC", "Description": "Newcastle West", "Address": "King Street"},
     {"Code": "BNE", "Description": "Brisbane", "Address": "Roma Street"},
 ]
+
+
+class _Response:
+    def __init__(self, body):
+        self.body = body
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        return False
+    def read(self):
+        return self.body
 
 
 def values(**changes):
@@ -71,6 +84,133 @@ class GreyhoundTests(unittest.TestCase):
 
             self.assertEqual(len(load_stops(str(path), now=1001,
                                             opener=no_network)), 3)
+
+    def test_nearby_places_match_stop_names_not_partial_words(self):
+        stops = _normalise_stops(STOPS + [
+            {"Code": "SYD", "Description": "SYDNEY", "Address": "Central Station"},
+            {"Code": "QFT", "Description": "SYDNEY DOMESTIC AIRPORT",
+             "Address": "Multiple addresses for this stop"},
+        ])
+        codes = {s["code"] for s in stops_named_after(stops, {"Sydney", "Newcastle"})}
+        self.assertEqual(codes, {"SYD", "QFT", "NEW", "NEWC"})
+        # Part of a word is not a place name.
+        self.assertEqual(stops_named_after(stops, {"Newcast"}), [])
+
+    def test_stop_location_falls_back_and_is_cached(self):
+        queries = []
+
+        def photon(request, timeout=0):
+            query = request.full_url.split("q=")[1].split("&")[0]
+            queries.append(query)
+            features = [] if len(queries) < 3 else [
+                {"geometry": {"coordinates": [153.11, -30.30]}}]
+            return _Response(json.dumps({"features": features}).encode())
+
+        stop = {"code": "CFS", "description": "COFFS HARBOUR",
+                "address": "COACH TERMINAL, PACIFIC HWY"}
+        with tempfile.TemporaryDirectory() as folder:
+            path = str(Path(folder) / "coords.json")
+            self.assertEqual(stop_coordinates(stop, path, now=0, opener=photon),
+                             (-30.30, 153.11))
+            self.assertEqual(len(queries), 3)  # address, then name + town, then town
+
+            def no_network(*args, **kwargs):
+                raise AssertionError("network should not be used")
+
+            self.assertEqual(stop_coordinates(stop, path, now=100, opener=no_network),
+                             (-30.30, 153.11))
+
+    def test_network_failure_is_not_cached_as_unknown_location(self):
+        def offline(*args, **kwargs):
+            raise OSError("offline")
+
+        stop = {"code": "BNE", "description": "BRISBANE", "address": ""}
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "coords.json"
+            self.assertIsNone(stop_coordinates(stop, str(path), opener=offline))
+            self.assertFalse(path.exists())
+
+    def test_stops_near_rejects_same_named_town_elsewhere(self):
+        stops = _normalise_stops([
+            {"Code": "RCM", "Description": "RICHMOND", "Address": "GOLDRING ST, RICHMOND QLD"},
+            {"Code": "BYR", "Description": "BYRON BAY", "Address": "BUTLER ST, BYRON BAY NSW"},
+        ])
+        where = {"RICHMOND": (-20.73, 143.14), "BYRON BAY": (-28.645, 153.611)}
+
+        def photon(request, timeout=0):
+            for name, (lat, lon) in where.items():
+                if name.replace(" ", "+") in request.full_url.upper():
+                    return _Response(json.dumps({"features": [
+                        {"geometry": {"coordinates": [lon, lat]}}]}).encode())
+            return _Response(b'{"features": []}')
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = str(Path(folder) / "coords.json")
+            # Standing in Byron Bay, near a (Victorian) suburb also called Richmond.
+            found = stops_near(stops, -28.64, 153.60, {"Byron Bay", "Richmond"},
+                               cache_path=path, opener=photon)
+        self.assertEqual([s["code"] for s in found], ["BYR"])
+
+    def test_departures_from_a_stop_combine_searches_towards_each_terminus(self):
+        stops = _normalise_stops([
+            {"Code": "CFS", "Description": "COFFS HARBOUR", "Address": "PACIFIC HWY"},
+            {"Code": "BNE", "Description": "BRISBANE", "Address": "ROMA ST"},
+            {"Code": "SYD", "Description": "SYDNEY", "Address": "CENTRAL"},
+        ])
+        coffs = next(stop for stop in stops if stop["code"] == "CFS")
+        day = dt.date(2026, 9, 17)
+
+        def service(number, stop_times):
+            return {"Service": number, "Stops": [
+                {"StopName": name, "StopCode": code, "DepartureTime": f"2026-09-{when}"}
+                for name, code, when in stop_times]}
+
+        north = service("GX244", [("Coffs Harbour", "CFS", "17 05:10"),
+                                  ("Brisbane", "BNE", "17 13:30")])
+        south = service("GX422", [("Brisbane", "BNE", "17 16:00"),
+                                  ("Coffs Harbour", "CFS", "17 22:10"),
+                                  ("Sydney", "SYD", "18 07:00")])
+        ends_here = service("GX999", [("Sydney", "SYD", "17 09:00"),
+                                      ("Coffs Harbour", "CFS", "17 18:00")])
+        calls = []
+
+        def loader(origin, destination, when):
+            calls.append(destination)
+            if destination == "BNE":
+                # The same northbound service can come back in several routes.
+                return {"Routes": [{"Services": [north]}, {"Services": [north, ends_here]}]}
+            if destination == "SYD":
+                return {"Routes": [{"Services": [south]}]}
+            raise OSError("offline")
+
+        greyhound._departures_cache.clear()
+        departures = greyhound.departures_from(coffs, stops, day, loader=loader, now=0)
+        self.assertEqual(sorted(calls), ["BNE", "SYD"])
+        self.assertEqual([(d["service"], d["depart"].strftime("%H:%M"), d["towards"])
+                          for d in departures],
+                         [("GX244", "05:10", "Brisbane"), ("GX422", "22:10", "Sydney")])
+        self.assertEqual(greyhound.format_departure_stops(departures[1]),
+                         "Greyhound GX422 towards Sydney\nCoffs Harbour: 22:10\nSydney: 07:00")
+
+        def no_network(*args):
+            raise AssertionError("cached result should be used")
+
+        self.assertEqual(greyhound.departures_from(coffs, stops, day, loader=no_network, now=60),
+                         departures)
+
+    def test_failed_departure_searches_are_not_cached(self):
+        stops = _normalise_stops([
+            {"Code": "CFS", "Description": "COFFS HARBOUR", "Address": ""},
+            {"Code": "BNE", "Description": "BRISBANE", "Address": ""},
+        ])
+
+        def offline(*args):
+            raise OSError("offline")
+
+        greyhound._departures_cache.clear()
+        day = dt.date(2026, 9, 17)
+        self.assertEqual(greyhound.departures_from(stops[0], stops, day, loader=offline, now=0), [])
+        self.assertEqual(greyhound._departures_cache, {})
 
     def test_availability_submission_is_for_one_adult(self):
         captured = []

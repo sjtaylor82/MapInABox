@@ -12,6 +12,43 @@ from world_map_panel import _IS_LAND
 
 
 class StreetSurveyMixin:
+    def _street_survey_forward_heading(self, street):
+        """Return the stable forward heading used by the street arrow layout."""
+        axis = self._street_survey_address_axis(street)
+        if axis:
+            _lat0, _lon0, ux, uy, _scale_x = axis
+            return (math.degrees(math.atan2(ux, uy)) + 360.0) % 360.0
+        best = None
+        for segment in self._street_survey_segments_for(street):
+            coords = segment.get("coords", [])
+            for index in range(len(coords) - 1):
+                a_lat, a_lon = coords[index]
+                b_lat, b_lon = coords[index + 1]
+                snap_lat, snap_lon = nearest_point_on_segment(
+                    self.lat, self.lon, a_lat, a_lon, b_lat, b_lon)
+                distance = dist_metres(
+                    self.lat, self.lon, snap_lat, snap_lon)
+                if best is None or distance < best[0]:
+                    best = (distance, bearing_deg(
+                        a_lat, a_lon, b_lat, b_lon) % 180.0)
+        if best:
+            return best[1]
+        return 0.0
+
+    def _street_survey_sideways_target(self, side, distance_m):
+        """Return a small cursor step perpendicular to the current street."""
+        street = self._street_survey_current_street()
+        if not street:
+            return None
+        heading = self._street_survey_forward_heading(street)
+        sideways = math.radians(heading + (-90.0 if side < 0 else 90.0))
+        north_m = math.cos(sideways) * distance_m
+        east_m = math.sin(sideways) * distance_m
+        lat = self.lat + north_m / 111000.0
+        scale = 111000.0 * max(abs(math.cos(math.radians(self.lat))), 1e-9)
+        lon = self.lon + east_m / scale
+        return lat, ((lon + 180.0) % 360.0) - 180.0
+
     def _street_survey_bare(self, name):
         suffixes = {
             "street", "st", "road", "rd", "avenue", "ave", "drive", "dr",
@@ -469,6 +506,90 @@ class StreetSurveyMixin:
             pass
         return None
 
+    def _street_survey_intersection_context_street(self, street_name):
+        """Return the nearest roughly perpendicular road for X at a POI.
+
+        A POI's postal street can be well away from its mapped point (large
+        hotels and legacy addresses are common examples).  Keep that postal
+        street for address browsing.  For X, select only a nearby road whose
+        direction crosses the address street's direction; a merely nearby
+        parallel road is not useful as a cross-street answer.
+        """
+        poi = self._current_street_survey_poi()
+        if not isinstance(poi, dict):
+            return street_name
+        try:
+            lat = float(poi.get("lat"))
+            lon = float(poi.get("lon"))
+        except (TypeError, ValueError):
+            return street_name
+
+        postal_projection = self._street_survey_project(street_name, lat, lon)
+        if postal_projection and postal_projection[0] <= 60.0:
+            return street_name
+
+        axis = self._street_survey_address_axis(street_name)
+        if axis:
+            _lat0, _lon0, ux, uy, _scale_x = axis
+            street_heading = (math.degrees(math.atan2(ux, uy)) + 360) % 360
+        else:
+            return ""
+
+        segments = getattr(self, "_road_segments", [])
+        try:
+            ranked = self._street_fetcher.nearest_roads_with_distances(
+                lat, lon, segments)
+        except Exception:
+            return ""
+        if not ranked:
+            return ""
+
+        def road_heading_near(name):
+            best = None
+            for seg in self._street_survey_segments_for(name):
+                coords = seg.get("coords", [])
+                for index in range(len(coords) - 1):
+                    a_lat, a_lon = coords[index]
+                    b_lat, b_lon = coords[index + 1]
+                    p_lat, p_lon = nearest_point_on_segment(
+                        lat, lon, a_lat, a_lon, b_lat, b_lon)
+                    distance = dist_metres(lat, lon, p_lat, p_lon)
+                    if best is None or distance < best[0]:
+                        best = (distance, bearing_deg(
+                            a_lat, a_lon, b_lat, b_lon))
+            return best[1] if best else None
+
+        physical_street = None
+        physical_distance = None
+        own = self._street_survey_bare(street_name)
+        for candidate_name, candidate_distance in ranked:
+            if candidate_distance > 100.0:
+                break
+            if self._street_survey_bare(candidate_name) == own:
+                continue
+            candidate_heading = road_heading_near(candidate_name)
+            if candidate_heading is None:
+                continue
+            angle = abs((candidate_heading - street_heading + 180) % 360 - 180)
+            perpendicular_error = abs(90.0 - angle)
+            if perpendicular_error <= 35.0:
+                physical_street = candidate_name
+                physical_distance = candidate_distance
+                break
+        if not physical_street:
+            return ""
+        miab_log(
+            "verbose",
+            f"X POI road context: postal='{street_name}' physical='{physical_street}' "
+            f"physical_distance={physical_distance:.1f}m "
+            f"postal_distance={postal_projection[0]:.1f}m"
+            if postal_projection else
+            f"X POI road context: postal='{street_name}' physical='{physical_street}' "
+            f"physical_distance={physical_distance:.1f}m postal_distance=unavailable",
+            self.settings,
+        )
+        return physical_street
+
     def _street_survey_infer_unnumbered_parity(
             self, street_name, poi, numbered_addresses, axis):
         """Infer odd/even from the locally consistent physical road side."""
@@ -662,6 +783,9 @@ class StreetSurveyMixin:
         self._jump_street_pin_lon = self.lon
         self._jump_address_number = target["number"] or None
         self._jump_address_street = street
+        self._jump_address_point_lat = self.lat
+        self._jump_address_point_lon = self.lon
+        self._jump_address_point_source = target.get("source", "")
         self._street_survey_current_poi = (
             target.get("poi")
             if address_mode in ("poi_names", "poi_only") and target.get("name")
@@ -955,7 +1079,8 @@ class StreetSurveyMixin:
             self._announce_transient(f"Intersection on {street}.{suffix}")
         return True
 
-    def _street_survey_turn_cross_street(self, turn_back=False):
+    def _street_survey_turn_cross_street(self, turn_back=False,
+                                         turn_direction=None):
         """Ctrl+Shift+Page Down turns onto a cross street; Ctrl+Shift+Page Up turns back."""
         if not self.street_mode:
             return False
@@ -1002,7 +1127,8 @@ class StreetSurveyMixin:
 
         dist_m, nid, nlat, nlon = best
         if dist_m > 35:
-            self._announce_transient("Move to an intersection first with Ctrl+Page Up or Ctrl+Page Down.")
+            self._announce_transient(
+                "Move to an intersection first with Ctrl+Up or Ctrl+Down.")
             return True
 
         cross = self._walk_get_cross_streets(nid, street)
@@ -1012,6 +1138,31 @@ class StreetSurveyMixin:
             return True
 
         target = sorted(cross, key=str.lower)[0]
+        if turn_direction in (-1, 1):
+            heading = self._street_survey_heading_to_node(
+                street, nid, nlat, nlon,
+                getattr(self, "_street_survey_last_direction", 1))
+            choices = []
+            nodes = self._walk_graph.get("nodes", {})
+            for neighbour, branch_name in self._walk_graph.get("edges", {}).get(nid, []):
+                if self._street_survey_bare(branch_name) == self._street_survey_bare(street):
+                    continue
+                if branch_name not in cross or neighbour not in nodes:
+                    continue
+                branch_lat, branch_lon = nodes[neighbour]
+                branch_heading = bearing_deg(
+                    nlat, nlon, branch_lat, branch_lon)
+                relative = ((branch_heading - heading + 180.0) % 360.0) - 180.0
+                if (relative < 0) != (turn_direction < 0):
+                    continue
+                if abs(relative) < 20.0 or abs(relative) > 160.0:
+                    continue
+                choices.append((abs(abs(relative) - 90.0), branch_name))
+            if not choices:
+                word = "left" if turn_direction < 0 else "right"
+                self._announce_transient(f"No {word} turn here.")
+                return True
+            target = min(choices, key=lambda item: (item[0], item[1].lower()))[1]
         self.lat, self.lon = nlat, nlon
         self.street_label = target
         self._jump_street_label = target

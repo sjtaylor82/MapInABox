@@ -1399,12 +1399,13 @@ class StreetFetcher:
             low = name.lower()
             if low in seen:
                 continue
+            if low in INTERNAL_ROAD_LABELS:
+                continue
             # Only suppress if this is a generic fallback label (no real
             # name) — streets genuinely called "Main Road" or "Station Street"
             # must still appear.
             has_real_name = bool(seg.get("raw_name", "").strip())
-            if (not has_real_name and
-                    low in GENERIC_STREET_TYPES | INTERNAL_ROAD_LABELS):
+            if not has_real_name and low in GENERIC_STREET_TYPES:
                 continue
             seen.add(low)
             names.append(name)

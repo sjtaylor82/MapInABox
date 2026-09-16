@@ -3,6 +3,7 @@ import time
 _PROCESS_START_T0 = time.perf_counter()
 
 import csv
+import datetime
 import json
 import math
 import os
@@ -12,6 +13,13 @@ import urllib.parse
 import urllib.request
 
 from logging_utils import miab_log
+
+# Set MIAB_SPEECH_TIMING=1 to trace keypress-to-announcement latency in the
+# verbose log, alongside speech_dispatch's own screen-reader measurements.
+_SPEECH_TIMING = bool(os.environ.get("MIAB_SPEECH_TIMING"))
+# Set MIAB_MODE_LABEL_NO_ACCESSIBLE=1 to drop the mode label's custom MSAA
+# provider and fall back to wx's native one, for screen-reader A/B testing.
+_NO_MODE_ACCESSIBLE = bool(os.environ.get("MIAB_MODE_LABEL_NO_ACCESSIBLE"))
 from i18n import set_language
 from speech_dispatch import SpeechDispatch, braille as _braille, speak as _speak
 from wx_utils import IS_MAC, MSAAListBox, _log_key_event, _primary_down
@@ -89,7 +97,7 @@ from poi_search import (
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '2026.9.3'
+APP_VERSION   = '2026.9.4'
 
 # Bundled read-only resources — inside the executable bundle or source tree.
 BASE_DIR = RESOURCE_DIR
@@ -198,6 +206,9 @@ KNOWN_OCEANS = {
     "Norwegian Sea":      [( 62,  75,   -5,   30)],
     "Barents Sea":        [( 68,  81,   15,   60)],
     "Persian Gulf":   [(  22, 30,   48,   57)],
+    # South of the Sulu Archipelago and east of northern Borneo. Keep this
+    # ahead of the deliberately broad South China Sea fallback below.
+    "Celebes Sea":    [(   2,  6,  119,  127)],
     "South China Sea":[(-5,   23,  105,  121)],
     "Black Sea":          [( 41,  47,   28,   42)],
     "Bay of Bengal":      [(  5,  23,   78,   99)],
@@ -214,6 +225,11 @@ KNOWN_OCEANS = {
 }
 
 
+def _ambient_sound_place(country, on_land):
+    """Choose ambient audio without making open water sound like land."""
+    return country if on_land and country != "Open Water" else "ocean"
+
+
 
 
 DEFAULT_SETTINGS = {
@@ -228,9 +244,7 @@ DEFAULT_SETTINGS = {
     "challenge_direction_mode": "map",  # "map" or "globe"
     "poi_browse_radius_km":    2,
     "suppress_warn_google":    False,
-    "mistral_api_key":         "",
     "google_service_enabled":  True,
-    "mistral_service_enabled": True,
     "here_service_enabled":    True,
     "ors_service_enabled":     True,
     "aviationstack_service_enabled": True,
@@ -267,7 +281,6 @@ DEFAULT_SETTINGS = {
 
 _SERVICE_FLAGS_BY_CREDENTIAL = {
     "google_api_key": "google_service_enabled",
-    "mistral_api_key": "mistral_service_enabled",
     "here_api_key": "here_service_enabled",
     "ors_api_key": "ors_service_enabled",
     "aviationstack_api_key": "aviationstack_service_enabled",
@@ -294,9 +307,11 @@ def load_settings():
                 saved = json.load(f)
             # Credentials from retired integrations are migrated by the
             # secure store.  This public but unused Custom Search identifier
-            # is obsolete and should not linger in the settings file.
+            # is obsolete and should not linger in the settings file, nor
+            # should the switch for Mistral, which the built-in AI replaced.
             saved.pop("serper_api_key", None)
             saved.pop("google_cse_id", None)
+            saved.pop("mistral_service_enabled", None)
             s.update(saved)
         except Exception:
             saved = {}
@@ -519,7 +534,7 @@ from favourites import (
     save_favourites,
 )
 from street_data import StreetFetcher
-from mistral import MistralClient
+from ai_client import AIClient, MAX_SOURCE_CHARS
 from serper import SerperClient
 from opensky import OpenSkyClient
 from aviationstack import AviationStackClient, fmt_dep, fmt_arr
@@ -612,6 +627,16 @@ def load_facts():
 
 
 
+# MSAA role reported for the idle keyboard target.  Override with
+# MIAB_MODE_LABEL_ROLE=statictext|graphic|listitem for screen-reader A/B tests.
+_MODE_LABEL_ROLE = {
+    "statictext": wx.ROLE_SYSTEM_STATICTEXT,
+    "graphic": wx.ROLE_SYSTEM_GRAPHIC,
+    "listitem": wx.ROLE_SYSTEM_LISTITEM,
+}.get(os.environ.get("MIAB_MODE_LABEL_ROLE", "").strip().lower(),
+      wx.ROLE_SYSTEM_LISTITEM)
+
+
 class _ModeStaticAccessible(wx.Accessible):
     """Expose the focused mode through one lightweight MSAA object."""
 
@@ -634,13 +659,21 @@ class _ModeStaticAccessible(wx.Accessible):
 
     def GetRole(self, child_id):
         if child_id == wx.ACC_SELF:
-            return wx.ACC_OK, wx.ROLE_SYSTEM_PANE
+            # A non-text leaf role, mirroring the native listbox that Visual
+            # Assist focuses.  ROLE_SYSTEM_PANE made JAWS rescan this object
+            # for descendant content on every keystroke, and a text role
+            # (STATICTEXT) made it run selection queries on Shift+Arrow, which
+            # JAWS treats as select-text.  Each such query is a COM call back
+            # into this process, which is what stalled key repeat.
+            return wx.ACC_OK, _MODE_LABEL_ROLE
         return wx.ACC_NOT_IMPLEMENTED, None
 
     def GetState(self, child_id):
         if child_id != wx.ACC_SELF:
             return wx.ACC_NOT_IMPLEMENTED, 0
-        state = wx.ACC_STATE_SYSTEM_FOCUSABLE
+        # READONLY tells JAWS there is nothing here to select or edit, so
+        # Shift+Arrow is not treated as a text-selection command.
+        state = wx.ACC_STATE_SYSTEM_FOCUSABLE | wx.ACC_STATE_SYSTEM_READONLY
         if self._window.HasFocus():
             state |= wx.ACC_STATE_SYSTEM_FOCUSED
         return wx.ACC_OK, state
@@ -657,8 +690,9 @@ class _ModeStaticText(wx.StaticText):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._mode_accessible = _ModeStaticAccessible(self)
-        self.SetAccessible(self._mode_accessible)
+        if not _NO_MODE_ACCESSIBLE:
+            self._mode_accessible = _ModeStaticAccessible(self)
+            self.SetAccessible(self._mode_accessible)
 
 
 
@@ -932,10 +966,10 @@ class MapNavigator(
         self._lookup_pending       = False
         self._current_subregion     = ""     # for challenge milestone scoring
         self._current_country_code  = ""
+        self._country_polygon_lock = threading.RLock()
         self._prefetch_in_progress  = False  # Shift+F11 background download
-        # Mistral client — owns all AI queries
-        self._mistral   = MistralClient(script_dir=CACHE_DIR)
-        self._mistral.init(self.settings.get("mistral_api_key", ""))
+        # AI client — owns all AI queries, sent through the Worker proxy
+        self._ai        = AIClient(script_dir=CACHE_DIR)
         self._serper = SerperClient(script_dir=CACHE_DIR)
         self._opensky       = OpenSkyClient(
             base_dir=USER_DIR,
@@ -1280,6 +1314,35 @@ class MapNavigator(
         suffix = positive if val >= 0 else negative
         return f"{abs(val):.5f} {suffix}"
 
+    def _schedule_info_panel_refresh(self, delay_ms: int = 150):
+        """Refresh the info panel once movement settles, not on every keypress.
+
+        The panel is purely visual, but its labels are visible wx.StaticTexts:
+        each SetLabel fires a Win32 EVENT_OBJECT_NAMECHANGE, and JAWS
+        serialises its speech pipeline behind processing those.  Refreshing on
+        every arrow press therefore put a repeatable delay between the movement
+        tone and the announcement, and throttled key repeat while an arrow was
+        held.  NVDA discards name changes on unfocused statics early, which is
+        why only JAWS users saw it.  Visual Assist mode hides this panel
+        outright, which is why the delay vanished there.
+
+        Restarting the timer on each press means a held arrow key updates the
+        panel once, when the user stops.
+        """
+        if not hasattr(self, "_info_place"):
+            return
+        timer = getattr(self, "_info_panel_timer", None)
+        try:
+            if timer is not None and timer.IsRunning():
+                timer.Stop()
+        except Exception:
+            pass
+        try:
+            self._info_panel_timer = wx.CallLater(
+                delay_ms, self._refresh_info_panel)
+        except Exception:
+            self._refresh_info_panel()
+
     def _refresh_info_panel(self):
         """Refresh the visual information panel without speech or focus changes."""
         if not hasattr(self, "_info_place"):
@@ -1334,7 +1397,7 @@ class MapNavigator(
             "zoom_out": new_id(), "zoom_reset": new_id(),
             "poi_address": new_id(), "poi_hours": new_id(),
             "poi_phone": new_id(), "poi_website": new_id(),
-            "poi_mistral": new_id(), "poi_menu": new_id(),
+            "poi_reviews": new_id(), "poi_menu": new_id(),
             "poi_launch_website": new_id(), "personal_poi": new_id(),
             "poi_search": new_id(), "address": new_id(), "street_search": new_id(),
             "nav_address": new_id(), "nav_briefing": new_id(),
@@ -1491,7 +1554,7 @@ class MapNavigator(
             if EDUCATION_EDITION
             else "Open Google &Reviews for Selected POI\tCtrl+Alt+5"
         )
-        add_item(poi_menu, "poi_mistral", reviews_label,
+        add_item(poi_menu, "poi_reviews", reviews_label,
                  lambda e: self._run_after_menu(lambda: self._poi_detail(5)))
         if not EDUCATION_EDITION:
             add_item(poi_menu, "poi_menu", "Find &Food Menu\tCtrl+Alt+6",
@@ -3089,10 +3152,10 @@ class MapNavigator(
             plat = poi.get("lat"); plon = poi.get("lon")
             suppress_travel = poi.get("kind") in {
                 "_shopping_store",
-                "_mistral_stop_seq",
                 "_transit_route",
                 "_transit_stop_seq",
-                "_ask_mistral",
+                "_greyhound_stop",
+                "_greyhound_departure",
                 "sentinel",
             }
             if plat is not None and plon is not None and not suppress_travel:
@@ -3332,13 +3395,34 @@ class MapNavigator(
             )
         else:
             name, kind = self._current_place_favourite_name()
+            meta = {}
+            favourite_lat = float(self.lat)
+            favourite_lon = float(self.lon)
+            if kind == "address":
+                number = getattr(self, "_jump_address_number", None)
+                street = getattr(self, "_jump_address_street", None)
+                address_lat = getattr(self, "_jump_address_point_lat", None)
+                address_lon = getattr(self, "_jump_address_point_lon", None)
+                if number and street:
+                    if address_lat is not None and address_lon is not None:
+                        favourite_lat = float(address_lat)
+                        favourite_lon = float(address_lon)
+                    meta = {
+                        "address_number": str(number),
+                        "address_street": str(street),
+                        "address_lat": favourite_lat,
+                        "address_lon": favourite_lon,
+                        "address_source": getattr(
+                            self, "_jump_address_point_source", "") or "saved",
+                    }
             entry = make_favourite(
                 name,
-                float(self.lat),
-                float(self.lon),
+                favourite_lat,
+                favourite_lon,
                 "place",
                 kind=kind,
                 source="current_position",
+                meta=meta,
             )
         _, replaced = add_or_replace_favourite(entry)
         action = "Updated" if replaced else "Added"
@@ -3543,6 +3627,30 @@ class MapNavigator(
             "source": entry.get("source", "favourite"),
         }
 
+    def _favourite_address_context(self, entry):
+        """Return saved address metadata, including legacy address favourites."""
+        if str(entry.get("kind") or "").casefold() != "address":
+            return None
+        meta = entry.get("meta") if isinstance(entry.get("meta"), dict) else {}
+        number = str(meta.get("address_number") or "").strip()
+        street = str(meta.get("address_street") or "").strip()
+        if not number or not street:
+            match = re.match(
+                r"^\s*([^\s,]+)\s+([^,]+)",
+                str(entry.get("name") or ""),
+            )
+            if match:
+                number = match.group(1).strip()
+                street = match.group(2).strip()
+        if not number or not street:
+            return None
+        try:
+            lat = float(meta.get("address_lat", entry.get("lat")))
+            lon = float(meta.get("address_lon", entry.get("lon")))
+        except (TypeError, ValueError):
+            return None
+        return number, street, lat, lon
+
     def _jump_to_saved_entry(self, entry, is_personal=False):
         label = "Personal POI" if is_personal else "Favourite"
         try:
@@ -3551,6 +3659,20 @@ class MapNavigator(
         except Exception:
             self._announce_transient_then_return(f"{label} has no valid position.")
             return
+        address = None if is_personal else self._favourite_address_context(entry)
+        if address:
+            number, street, address_lat, address_lon = address
+            poi["lat"], poi["lon"] = address_lat, address_lon
+            poi["street"] = street
+            self._pending_jump_address_number = number
+            self._pending_jump_address_street = street
+            self._pending_jump_address_lat = address_lat
+            self._pending_jump_address_lon = address_lon
+            self._jump_address_number = number
+            self._jump_address_street = street
+            self._jump_address_point_lat = address_lat
+            self._jump_address_point_lon = address_lon
+            self._jump_address_point_source = "favourite"
         self._poi_list = [poi]
         self._poi_index = 0
         self._poi_explore_stack = []
@@ -3602,7 +3724,7 @@ class MapNavigator(
                     idx = dlg._lb.GetSelection() if hasattr(dlg, "_lb") else wx.NOT_FOUND
                     if 0 <= idx < len(items):
                         kind = items[idx].get("kind", "")
-                        if kind in ("_leaf", "_transit_stop_seq", "_mistral_stop_seq"):
+                        if kind in ("_leaf", "_transit_stop_seq"):
                             self._transit_drill_back_one_level = True
                     dlg.EndModal(wx.ID_CANCEL)
                     return
@@ -3711,7 +3833,7 @@ class MapNavigator(
         poi = self._poi_list[self._poi_index]
         kind = poi.get("kind", "")
         
-        # Handle "Ask Mistral for store directory" sentinel
+        # Handle "Ask AI for store directory" sentinel
         if kind == "sentinel" and poi.get("sentinel_type") == "ask_shopping":
             centre_name = poi.get("_centre_name", "")
             lat         = poi.get("lat", 0)
@@ -3740,6 +3862,7 @@ class MapNavigator(
                     directory_url, n
                 )
                 tenants = []
+                ai_reason = ""
                 if source_text:
                     prompt = (
                         f"Extract the tenant/store names from the official shopping-centre page for '{n}'. "
@@ -3747,13 +3870,14 @@ class MapNavigator(
                         f"Do not include phone numbers, parking, trading hours, centre names, headings, or descriptions. "
                         f"Do not guess. If a store name is not clearly supported by the source text, omit it. "
                         f"Return the names in strict alphabetical order.\n\n"
-                        f"SOURCE TEXT:\n{source_text}"
+                        f"SOURCE TEXT:\n{source_text[:MAX_SOURCE_CHARS]}"
                     )
                     cache_key = f"shop_extract_{mall_directory._CACHE_VERSION}_{mall_directory._normalise(centre_address or n)}_{la:.4f}_{lo:.4f}"
-                    text = self._mistral.query_text(prompt, cache_key)
-                    names = self._mistral._parse_json_list(text)
-                    clean = self._mistral._clean_store_names(names, n)
-                    clean = self._mistral._retain_evidenced_store_names(
+                    text = self._ai.query_text(prompt, cache_key)
+                    ai_reason = "" if text else self._ai.last_error_message
+                    names = self._ai._parse_json_list(text)
+                    clean = self._ai._clean_store_names(names, n)
+                    clean = self._ai._retain_evidenced_store_names(
                         clean, source_text, existing_names=None
                     )
                     tenants = [{"name": s, "source": "official"} for s in clean]
@@ -3765,6 +3889,8 @@ class MapNavigator(
                 if not tenants:
                     wx.CallAfter(
                         self._announce_transient_then_return,
+                        f"Could not read the store directory for {n}. {ai_reason}"
+                        if ai_reason else
                         f"No official store directory found for {n}.")
                     return
                 child_pois = [
@@ -3806,32 +3932,6 @@ class MapNavigator(
             )
             return
 
-        # Handle "Get times" sentinel
-        if kind == "sentinel" and poi.get("sentinel_type") == "get_times":
-            operator   = poi.get("operator", "")
-            service    = poi.get("service", "")
-            route_name = poi.get("route_name", "")
-            self._transit_nav_announce(f"Fetching timetable for {operator} {service}...")
-            def _fetch_times():
-                text = self._mistral.ask_times(operator, service, route_name)
-                # Push as a single-item explore leaf so screenreader can read
-                # the full text uninterrupted. Backspace returns to the stop list.
-                leaf = [{
-                    "label": text,
-                    "lat":   poi.get("lat", 0),
-                    "lon":   poi.get("lon", 0),
-                    "kind":  "_mistral_stop_seq",
-                }]
-                def _show():
-                    self._poi_explore_stack.append((list(self._poi_list), self._poi_index))
-                    self._poi_list  = leaf
-                    self._poi_index = 0
-                    self._listbox_set_single(text)
-                    self.listbox.SetFocus()
-                wx.CallAfter(_show)
-            threading.Thread(target=_fetch_times, daemon=True).start()
-            return
-        
         if kind == "_shopping_store":
             self._last_shopping_store_poi = dict(poi)
             store_name  = poi.get("_store_name", poi.get("label", ""))
@@ -3867,7 +3967,7 @@ class MapNavigator(
                             start = idx + len(low_name)
                         if spans:
                             detail_text = "\n\n".join(spans[:5])
-                text = self._mistral.ask_store_detail(
+                text = self._ai.ask_store_detail(
                     s,
                     c,
                     centre_address,
@@ -3890,21 +3990,12 @@ class MapNavigator(
             self._explore_transit_route(poi)
         elif kind == "_transit_stop_seq":
             pass   # leaf node
-        elif kind == "_ask_mistral":
-            if not self._mistral.is_configured:
-                miab_log("api_calls", "[Mistral] Not configured — no API key.", getattr(self, "settings", None))
-                self._transit_nav_announce(
-                    "No Mistral API key configured. "
-                    "Add your key in Settings (Ctrl+comma) under Mistral API key.")
-                return
-            self._status_update("Asking Mistral for long-distance services…")
-            threading.Thread(
-                target=self._explore_mistral_transit,
-                args=(poi,), daemon=True).start()
-        elif kind == "_mistral_service":
-            self._explore_mistral_service(poi)
-        elif kind == "_mistral_stop_seq":
-            pass   # leaf node
+        elif kind == "_greyhound_stop":
+            self._tool_greyhound_booking(origin=poi.get("_greyhound_stop"))
+        elif kind == "_greyhound_departure":
+            import greyhound
+            self._show_detail_reader(
+                greyhound.format_departure_stops(poi["_greyhound_departure"]))
         else:
             self._street_confirm_jump()
 
@@ -3914,9 +4005,8 @@ class MapNavigator(
             "_transit_stop",
             "_transit_route",
             "_transit_stop_seq",
-            "_ask_mistral",
-            "_mistral_service",
-            "_mistral_stop_seq",
+            "_greyhound_stop",
+            "_greyhound_departure",
             "_shopping_store",
         }:
             return False
@@ -4023,6 +4113,7 @@ class MapNavigator(
 
         self.lat = plat
         self.lon = plon
+        self._refresh_country_context_after_direct_jump(plat, plon)
 
         # ── Transit hub: check for eateries within walking distance ──────────
         # _check_transit_eateries was never implemented; guard so a transit
@@ -4355,6 +4446,9 @@ class MapNavigator(
         # Uses the same suffix-stripping bare() as _nearest_address_number
         # so "Queen Street" matches "Queen St" in address data.
         number_found = False
+        self._jump_address_point_lat = None
+        self._jump_address_point_lon = None
+        self._jump_address_point_source = None
         if house_number:
             _ADDR_SUFFIXES = {
                 "street", "st", "road", "rd", "avenue", "ave", "drive", "dr",
@@ -4416,6 +4510,9 @@ class MapNavigator(
                     else:
                         miab_log("street", f"[StreetJump] No projection found for #{best_pt['number']}; "
                               f"using address point ({self.lat:.5f},{self.lon:.5f})", None)
+                self._jump_address_point_lat = float(best_pt['lat'])
+                self._jump_address_point_lon = float(best_pt['lon'])
+                self._jump_address_point_source = best_pt.get('source', '')
 
             # Exact match first
             exact = [ap for ap in on_street
@@ -4480,6 +4577,9 @@ class MapNavigator(
         else:
             self._jump_address_number = None
             self._jump_address_street = None
+            self._jump_address_point_lat = None
+            self._jump_address_point_lon = None
+            self._jump_address_point_source = None
 
         wx.CallAfter(self.map_panel.set_position, self.lat, self.lon, True, street_name)
 
@@ -4933,9 +5033,13 @@ class MapNavigator(
             self._status_update("Could not open the website in a browser.")
 
     def _explore_transit_poi(self, poi):
-        """Background: load transit data. Collects all routes across all nearby
-        stops and presents them directly — skipping the intermediate stop level."""
+        """Background: list services leaving nearby stops, in departure order.
+
+        Covers the rest of today (or the next day with services), merging
+        GTFS departures from every nearby stop with Greyhound coaches.
+        """
         name = poi["label"].split(",")[0].strip()
+        now = datetime.datetime.now()
         def status(msg):
             wx.CallAfter(self._status_update, msg)
 
@@ -4954,99 +5058,177 @@ class MapNavigator(
             _primary, stops = self._transit.find_stops_by_name(
                 name, poi["lat"], poi["lon"])
 
+        greyhound_pois = self._greyhound_entries_near(poi, now)
+
         # Stop alarm regardless of outcome
         try:
             self.sound.stop()
         except Exception:
             pass
 
-        if not stops:
-            if self._transit.is_major_station(poi):
-                wx.CallAfter(self._push_transit_routes, [], name, poi)
-            else:
-                wx.CallAfter(self._status_update, f"No transit stops found near {name}.")
+        if not stops and not greyhound_pois:
+            wx.CallAfter(self._status_update, f"No transit stops found near {name}.")
             return
 
-        # Collect all routes across all nearby stops, deduped by (route_id, feed_id)
-        seen_routes: set = set()
-        child_pois  = []
-        for s in stops[:20]:
-            stop_id   = s["stop_id"]
-            feed_id   = s["_feed_id"]
-            stop_name = s["name"]
-            routes_here = self._transit.routes_for_stop(stop_id, feed_id)
-            # If this stop is a named train platform, treat all its routes as trains
-            is_train_platform = "platform" in stop_name.lower()
-
-            for r in routes_here:
-                key = (r["route_id"], feed_id)
-                if key in seen_routes:
-                    continue
-                seen_routes.add(key)
-                long  = r["long"].strip()  if r["long"]  else ""
-                short = r["short"].strip() if r["short"] else ""
-                if long and short and short.lower() not in long.lower():
-                    rname = f"{long} ({short})"
-                else:
-                    rname = long or short
-                headsign, times = self._transit.next_departures(stop_id, r["route_id"], feed_id)
-                # If no headsign from departures, get one from route_stops so
-                # Enter still works even when no more services run today
-                if not headsign:
-                    fallback_stops = self._transit.stops_for_route(r["route_id"], feed_id)
-                    if fallback_stops:
-                        # Pick headsign from route_stops keys for this route
-                        data = self._transit._feeds.get(feed_id, {})
-                        for (rid, hs) in data.get("route_stops", {}):
-                            if rid == r["route_id"] and hs:
-                                headsign = hs
-                                break
-                rtype = "train" if is_train_platform else r["type"]
-                extra = ""
-                if headsign:
-                    extra += f" — towards {headsign}"
-                if times:
-                    extra += f" — next: {', '.join(times)}"
-                child_pois.append({
-                    "label":             f"{rtype}: {rname}{extra} — press Enter for stops",
-                    "lat":               poi["lat"],
-                    "lon":               poi["lon"],
-                    "kind":              "_transit_route",
-                    "_route_id":         r["route_id"],
-                    "_feed_id":          feed_id,
-                    "_route_name":       f"{rtype} {rname}",
-                    "_origin_stop_name": stop_name,
-                    "_headsign":         headsign,
-                })
-
-        wx.CallAfter(self._push_transit_routes, child_pois, name, poi)
-
-    def _push_transit_routes(self, child_pois, parent_name, orig_poi):
-        """Push route list onto explore stack, with Mistral option for major stations."""
-        if orig_poi is not None and self._transit.is_major_station(orig_poi):
+        departures, incomplete = self._transit.upcoming_departures(
+            stops[:20], now=now, limit=self._DEPARTURE_BOARD_LIMIT)
+        stop_names = {dep["stop"].get("name", "") for dep in departures}
+        child_pois = []
+        for dep in departures:
+            stop = dep["stop"]
+            stop_name = stop.get("name", "")
+            route = self._transit._feeds.get(dep["feed_id"], {}).get(
+                "routes", {}).get(dep["route_id"], {})
+            long = (route.get("long") or "").strip()
+            short = (route.get("short") or "").strip()
+            if long and short and short.lower() not in long.lower():
+                rname = f"{long} ({short})"
+            else:
+                rname = long or short
+            rtype = route.get("type") or "service"
+            towards = f" towards {dep['headsign']}" if dep["headsign"] else ""
+            # Stop names already say "busway, platform 2" or "Stop 125"; a bare
+            # platform number is ambiguous where trains and buses share one.
+            where = f", from {stop_name}" if len(stop_names) > 1 else ""
             child_pois.append({
-                "label":      "Ask Mistral for long-distance services…",
-                "lat":        orig_poi["lat"],
-                "lon":        orig_poi["lon"],
-                "kind":       "_ask_mistral",
-                "_poi_name":  parent_name,
+                # Service type first, so first-letter navigation jumps
+                # between trains, buses, coaches and Greyhound.
+                "label":             (f"{rtype.capitalize()} "
+                                      f"{self._departure_time_label(dep['when'], now)}  "
+                                      f"{rname}{towards}{where}"),
+                "lat":               poi["lat"],
+                "lon":               poi["lon"],
+                "kind":              "_transit_route",
+                "_route_id":         dep["route_id"],
+                "_feed_id":          dep["feed_id"],
+                "_route_name":       f"{rtype} {rname}",
+                "_origin_stop_name": stop_name,
+                "_headsign":         dep["headsign"],
+                "_when":             dep["when"],
             })
+
+        child_pois.extend(greyhound_pois)
+        timed = sorted((p for p in child_pois if p.get("_when")), key=lambda p: p["_when"])
+        cutoff_note = None
+        if len(departures) >= self._DEPARTURE_BOARD_LIMIT:
+            # Later departures weren't fetched, so stop the list at the last
+            # one rather than jump ahead to later coaches and leave a gap.
+            cutoff = departures[-1]["when"]
+            timed = [p for p in timed if p["_when"] <= cutoff]
+            cutoff_note = {
+                "label": (f"Showing departures until "
+                          f"{self._departure_time_label(cutoff, now)}. Later services are not listed."),
+                "lat":   poi["lat"],
+                "lon":   poi["lon"],
+                "kind":  "_transit_stop_seq",
+            }
+        child_pois = timed + ([cutoff_note] if cutoff_note else []) + [
+            p for p in child_pois if not p.get("_when")]
+        if not timed:
+            wx.CallAfter(self._status_update,
+                         f"No departures found near {name} in the next week.")
+            if not child_pois:
+                return
+        if incomplete:
+            child_pois.append({
+                "label": "Later departures from this busy stop may be missing.",
+                "lat":   poi["lat"],
+                "lon":   poi["lon"],
+                "kind":  "_transit_stop_seq",
+            })
+
+        if timed and timed[0]["_when"].date() != now.date():
+            summary = (f"No more services today near {name}. {len(timed)} departures "
+                       f"listed, starting {self._departure_time_label(timed[0]['_when'], now)}.")
+        elif timed:
+            summary = (f"Next {len(timed)} departures from {name}. "
+                       f"First: {timed[0]['label']}.")
+        else:
+            summary = ""
+        wx.CallAfter(self._push_transit_routes, child_pois, name, poi, summary)
+
+    _DEPARTURE_BOARD_LIMIT = 300
+
+    @staticmethod
+    def _departure_time_label(when, now) -> str:
+        """Clock time, naming the day when it isn't today and minutes when soon."""
+        label = TransitLookup._spoken_departure(when, now)
+        minutes = int((when - now).total_seconds() // 60)
+        if when.date() == now.date() and minutes < 60:
+            label += ", now" if minutes <= 0 else (
+                f", in {minutes} minute{'s' if minutes != 1 else ''}")
+        return label
+
+    def _greyhound_entries_near(self, poi, now) -> list[dict]:
+        """Departure-list entries for Greyhound stops in the same town as *poi*.
+
+        Today's Greyhound departures (timed, merged with other services) and a
+        fare search per stop.  Pro only (Greyhound booking is never available
+        in Education), and only in Australia, where Greyhound's stop directory
+        applies.
+        """
+        lat, lon = poi.get("lat"), poi.get("lon")
+        if EDUCATION_EDITION or lat is None or lon is None:
+            return []
+        # Greyhound names stops after towns; match them against nearby places.
+        cell_lat, cell_lon = int(math.floor(lat * 10)), int(math.floor(lon * 10))
+        place_names = set()
+        for dlat in range(-2, 3):
+            for dlon in range(-3, 4):
+                for i in self._city_grid.get((cell_lat + dlat, cell_lon + dlon), []):
+                    if (self._city_regions[i][1] == "Australia"
+                            and dist_km(lat, lon, self._city_lats[i], self._city_lons[i]) <= 20):
+                        place_names.add(self._city_names[i])
+        if not place_names:
+            return []
+        try:
+            import greyhound
+            all_stops = greyhound.load_stops()
+            stops = greyhound.stops_near(all_stops, lat, lon, place_names)
+        except Exception as exc:
+            miab_log("errors", f"[Greyhound] Nearby stop lookup failed: {exc}", self.settings)
+            return []
+        entries = []
+        for stop in stops:
+            address = stop.get("address") or ""
+            if not address or address.casefold().startswith("multiple addresses"):
+                address = stop["description"]
+            place = address.split(",")[0].strip().title()
+            try:
+                departures = greyhound.departures_from(stop, all_stops, now.date())
+            except Exception as exc:
+                miab_log("errors", f"[Greyhound] Departures from {stop['code']} failed: {exc}",
+                         self.settings)
+                departures = []
+            for dep in departures:
+                if dep["depart"] < now:
+                    continue
+                entries.append({
+                    "label": (f"Greyhound {self._departure_time_label(dep['depart'], now)}  "
+                              f"{dep['service']} towards {dep['towards']}, from {place}"),
+                    "lat":   lat,
+                    "lon":   lon,
+                    "kind":  "_greyhound_departure",
+                    "_greyhound_departure": dep,
+                    "_when": dep["depart"],
+                })
+            entries.append({
+                "label": f"Search Greyhound fares from {place}",
+                "lat":   lat,
+                "lon":   lon,
+                "kind":  "_greyhound_stop",
+                "_greyhound_stop": stop,
+            })
+        return entries
+
+    def _push_transit_routes(self, child_pois, parent_name, orig_poi, summary=""):
+        """Push the departure list onto the explore stack."""
         self._poi_explore_stack.append((list(self._poi_list), self._poi_index))
         self._poi_list  = child_pois
         self._poi_index = 0
-        self._poi_index = 0
-        # Count excludes the Mistral sentinel if one was added
-        Mistral_added = (orig_poi is not None and 
-                        self._transit.is_major_station(orig_poi))
-        n = len(child_pois) - (1 if Mistral_added else 0)
-        if getattr(self, "_hub_transit_mode", False):
-            self._hub_transit_mode = False
-            wx.CallAfter(self._show_transit_dialog, child_pois, parent_name, n)
-        else:
-            self._show_poi_in_listbox()
-            self._transit_nav_announce(
-                f"{n} routes near {parent_name}.  "
-                f"Arrow to browse, Enter to see stop sequence, Backspace to go back.")
+        self._show_poi_in_listbox()
+        self._transit_nav_announce(
+            f"{summary}  Arrow to browse, Enter for stops, Backspace to go back.".strip())
 
     def _show_transit_drill_dialog(self, child_pois, title, hint, focus_index=0):
         """Show a transit drill level as a modal dialog.
@@ -5099,7 +5281,7 @@ class MapNavigator(
                 idx = lb.GetSelection()
                 if 0 <= idx < len(child_pois):
                     kind = child_pois[idx].get("kind", "")
-                    if kind in ("_leaf", "_transit_stop_seq", "_mistral_stop_seq"):
+                    if kind in ("_leaf", "_transit_stop_seq"):
                         self._transit_drill_back_one_level = True
                 dlg.EndModal(wx.ID_CANCEL)
                 return
@@ -5143,22 +5325,7 @@ class MapNavigator(
                 kind = poi.get("kind", "")
 
                 # Leaf — nothing to drill into, just loop back
-                if kind in ("_leaf", "_transit_stop_seq", "_mistral_stop_seq"):
-                    continue
-
-                # Get times sentinel
-                if kind == "sentinel" and poi.get("sentinel_type") == "get_times":
-                    op = poi.get("operator", "")
-                    svc = poi.get("service", "")
-                    rn  = poi.get("route_name", "")
-                    self._status_update(f"Fetching timetable for {op} {svc}...")
-                    def _fetch_t(op=op, svc=svc, rn=rn):
-                        text = self._mistral.ask_times(op, svc, rn)
-                        wx.CallAfter(self._show_transit_drill_dialog,
-                                     [{"label": text, "kind": "_leaf"}],
-                                     f"{op} {svc} timetable",
-                                     "Backspace to go back  |  Escape to close")
-                    threading.Thread(target=_fetch_t, daemon=True).start()
+                if kind in ("_leaf", "_transit_stop_seq"):
                     continue
 
                 # GTFS route -> stop sequence
@@ -5216,60 +5383,11 @@ class MapNavigator(
                     if back == "back":
                         continue
                     continue
-
-                # Mistral service -> stops + sentinels
-                if kind == "_mistral_service":
-                    op  = poi.get("_operator", "")
-                    svc = poi.get("_service", "")
-                    rn  = poi.get("_route_name", "")
-                    sts = poi.get("_stops", [])
-                    lat = poi.get("lat", 0); lon = poi.get("lon", 0)
-                    sp = [{"label": s, "kind": "_leaf", "lat": lat, "lon": lon}
-                          for s in sts if isinstance(s, str) and s.strip()]
-                    sp.append({
-                        "label": f"Get times for {op} {svc}",
-                        "kind": "sentinel", "sentinel_type": "get_times",
-                        "operator": op, "service": svc,
-                        "route_name": rn, "lat": lat, "lon": lon})
-                    if len(sts) >= 2:
-                        parts = rn.split(" to ", 1)
-                        rev = (f"{parts[1]} to {parts[0]}"
-                               if len(parts) == 2 else rn)
-                        sp.append({
-                            "label": f"Reverse: {rev}",
-                            "kind": "_mistral_service",
-                            "_operator": op, "_service": svc,
-                            "_route_name": rev,
-                            "_stops": list(reversed(sts)),
-                            "lat": lat, "lon": lon})
-                    desc = f"{svc} — {rn}" if rn else svc
-                    back = self._show_transit_drill_dialog(
-                        sp,
-                        f"{op}: {desc}",
-                        "Enter for timetable  |  Backspace to go back  |  Escape to close")
-                    if back == "back":
-                        continue
-                    continue
-
-                # Ask Mistral for long-distance services
-                if kind == "_ask_mistral":
-                    self._hub_transit_mode = True
-                    self._explore_mistral_transit(poi)
-                    continue
         finally:
             self._transit_drill_modal_open = False
             self._active_transit_drill_dlg = None
             self._active_transit_drill_items = []
             miab_log("verbose", f"Transit modal close: title={title!r}", self.settings)
-
-    def _show_transit_dialog(self, child_pois, parent_name, n):
-        """Wrapper — shows routes level via the drill dialog."""
-        self._show_transit_drill_dialog(
-            child_pois,
-            title=f"{parent_name} — {n} route(s)",
-            hint="Enter for stop sequence  |  Backspace to go back  |  Escape to close",
-            focus_index=0,
-        )
 
     def _explore_transit_route(self, poi):
         """Enter on a transit route — push ordered stop sequence as next child level."""
@@ -5335,148 +5453,6 @@ class MapNavigator(
         self._transit_nav_announce(
             f"{len(child_pois)} stops on {route_name}.  "
             f"Arrow to browse.  Backspace to go back.")
-
-    def _explore_mistral_transit(self, poi: dict) -> None:
-        """Background: call Mistral and push a flat route list.
-
-        Level 1 — flat list of routes: "Operator — Service — Route name"
-        Level 2 — stops for that route + Get times sentinel at bottom
-        """
-        name         = poi.get("_poi_name", poi["label"].split(",")[0].strip())
-        display_name = name  # coords in the prompt provide geographic context
-        lat          = poi["lat"]
-        lon          = poi["lon"]
-
-        done_event = threading.Event()
-
-        def _progress():
-            msgs = [
-                f"Searching for regional routes at {name}…",
-                "Checking Greyhound, regional trains, ferries…",
-                "Searching operator websites…",
-                "Processing results…",
-                "Almost there…",
-            ]
-            for msg in msgs:
-                if done_event.wait(timeout=5):
-                    return
-                wx.CallAfter(_speak, msg)
-        threading.Thread(target=_progress, daemon=True).start()
-
-        try:
-            self.sound.play_file(r"c:\windows\media\alarm09.wav", loops=-1)
-        except Exception:
-            pass
-
-        routes = self._mistral.ask_transit(lat, lon, display_name)
-        done_event.set()  # stop progress thread before touching the listbox
-        try:
-            self.sound.stop()
-        except Exception:
-            pass
-
-        if not routes:
-            wx.CallAfter(self._status_update,
-                        f"Mistral found no regional services at {name}.")
-            return
-
-        child_pois = []
-        for r in routes:
-            operator   = r.get("operator",   "")
-            service    = r.get("service",    "")
-            route_name = r.get("route_name", "")
-            stops      = r.get("stops",      [])
-            label = " — ".join(p for p in [operator, service, route_name] if p)
-            child_pois.append({
-                "label":       label,
-                "lat":         lat,
-                "lon":         lon,
-                "kind":        "_mistral_service",
-                "_operator":   operator,
-                "_service":    service,
-                "_route_name": route_name,
-                "_stops":      stops,
-            })
-
-        # Small delay so any in-flight progress CallAfters drain before we push results
-        import time as _time
-        _time.sleep(0.05)
-        wx.CallAfter(self._push_mistral_flat, child_pois, name)
-
-    def _push_mistral_flat(self, child_pois: list, parent_name: str) -> None:
-        """Push flat Mistral route list — dialog if hub mode, listbox otherwise."""
-        if getattr(self, "_hub_transit_mode", False):
-            self._hub_transit_mode = False
-            self._show_transit_drill_dialog(
-                child_pois,
-                title=f"Mistral: {parent_name} — {len(child_pois)} route(s)",
-                hint="Enter for stops  |  Escape to close",
-                focus_index=0,
-            )
-            return
-        self._poi_explore_stack.append((list(self._poi_list), self._poi_index))
-        self._poi_list  = child_pois
-        self._poi_index = 0
-        self._show_poi_in_listbox()
-        self._transit_nav_announce(
-            f"Mistral found {len(child_pois)} regional route(s) at {parent_name}.  "
-            f"Arrow to browse, Enter for stops, Backspace to go back.")
-
-    def _explore_mistral_service(self, poi: dict) -> None:
-        """Enter on a route — show its stops, Get times, and reverse direction sentinel."""
-        operator   = poi.get("_operator",   "")
-        service    = poi.get("_service",    "")
-        route_name = poi.get("_route_name", "")
-        stops      = poi.get("_stops",      [])
-        lat        = poi.get("lat", 0)
-        lon        = poi.get("lon", 0)
-
-        child_pois = []
-        for stop in stops:
-            if not isinstance(stop, str) or not stop.strip():
-                continue
-            child_pois.append({
-                "label": stop,
-                "lat":   lat,
-                "lon":   lon,
-                "kind":  "_mistral_stop_seq",
-            })
-
-        child_pois.append({
-            "label":         f"Get times for {operator} {service}",
-            "lat":           lat,
-            "lon":           lon,
-            "kind":          "sentinel",
-            "sentinel_type": "get_times",
-            "operator":      operator,
-            "service":       service,
-            "route_name":    route_name,
-        })
-
-        # Reverse direction — free, just reverse the stops list
-        if len(stops) >= 2:
-            parts = route_name.split(" to ", 1)
-            rev_name = f"{parts[1]} to {parts[0]}" if len(parts) == 2 else route_name
-            child_pois.append({
-                "label":       f"Reverse: {rev_name}",
-                "lat":         lat,
-                "lon":         lon,
-                "kind":        "_mistral_service",
-                "_operator":   operator,
-                "_service":    service,
-                "_route_name": rev_name,
-                "_stops":      list(reversed(stops)),
-            })
-
-        self._poi_explore_stack.append((list(self._poi_list), self._poi_index))
-        self._poi_list  = child_pois
-        self._poi_index = 0
-        self._show_poi_in_listbox()
-        desc = f"{service} — {route_name}" if route_name else service
-        self._transit_nav_announce(
-            f"{operator}: {desc}.  "
-            f"{len(stops)} stop(s).  "
-            f"Arrow to browse, Backspace to go back.")
 
     def _transit_nav_announce(self, msg):
         """Announce transit navigation context via AO2, then restore POI list focus."""
@@ -5552,13 +5528,17 @@ class MapNavigator(
             updated["label"] = old_label.replace(old_label.split(",")[0], new_name, 1)
         return updated, renamed
 
-    def _report_poi_nonexistent(self):
+    def _report_poi_nonexistent(self, poi=None):
         """Delete key — confirm, suppress locally, and optionally post OSM note."""
-        if not self._poi_list or self._poi_index >= len(self._poi_list):
+        from_open_list = poi is None
+        if from_open_list:
+            if not self._poi_list or self._poi_index >= len(self._poi_list):
+                return
+            self._sync_poi_selection_from_listbox()
+            poi = self._poi_list[self._poi_index]
+        if not poi:
             return
-        self._sync_poi_selection_from_listbox()
-        poi  = self._poi_list[self._poi_index]
-        name = poi["label"].split(",")[0].strip()
+        name = (poi.get("label") or poi.get("name") or "POI").split(",")[0].strip()
 
         dlg = wx.MessageDialog(
             self,
@@ -5575,15 +5555,20 @@ class MapNavigator(
         # ── Option 1: local suppress ──────────────────────────────────
         self._suppress_poi_entry(poi, name)
 
-        # Remove from current list immediately
-        self._poi_list.pop(self._poi_index)
-        self._poi_index = max(0, self._poi_index - 1)
-        if self._poi_list:
-            self._show_poi_in_listbox()
-            wx.CallAfter(self.listbox.SetFocus)
+        # Remove from the active view immediately.
+        if from_open_list:
+            self._poi_list.pop(self._poi_index)
+            self._poi_index = max(0, self._poi_index - 1)
+            if self._poi_list:
+                self._show_poi_in_listbox()
+                wx.CallAfter(self.listbox.SetFocus)
+            else:
+                self._show_mode_surface(focus=True)
+                wx.CallAfter(_speak, "No more points of interest.")
         else:
-            self._show_mode_surface(focus=True)
-            wx.CallAfter(_speak, "No more points of interest.")
+            self._street_survey_current_poi = None
+            self._all_pois = [item for item in self._all_pois if item is not poi]
+            self._clear_street_survey_cache()
 
         # ── Option 2: OSM note (only for OSM-sourced POIs with an ID) ─
         osm_id   = poi.get("osm_id", 0)
@@ -6211,12 +6196,14 @@ class MapNavigator(
         if self.sounds_enabled:
             self._status_update("Sounds on.", force=True)
             self.sound._current = None
+            self.sound._current_path = None
             self.last_country_found = ""
             threading.Thread(target=self._lookup, daemon=True).start()
 
         else:
-            self.sound._ch.fadeout(500)
+            self.sound.fadeout(500)
             self.sound._current = None
+            self.sound._current_path = None
             self._status_update("Sounds off.", force=True)
 
     def on_close(self, event):
@@ -6252,8 +6239,29 @@ class MapNavigator(
             pass
         self._personal_pois = []
 
+    def _defer_to_ui_thread(self, method, *args, **kwargs) -> bool:
+        """Re-run *method* on the UI thread when called from a worker thread.
+
+        wx is not thread-safe: a background lookup reading the window title
+        corrupted the heap and crashed python.exe.  Returns True if deferred.
+        """
+        if wx.IsMainThread():
+            return False
+        import traceback
+        caller = traceback.extract_stack(limit=3)[0]
+        miab_log(
+            "verbose",
+            f"[Thread] {method.__name__} moved to the UI thread "
+            f"(called from {os.path.basename(caller.filename)}:{caller.lineno})",
+            getattr(self, "settings", None),
+        )
+        wx.CallAfter(method, *args, **kwargs)
+        return True
+
     def _status_update(self, msg, force=False):
         """Transient background status (loading, connecting) — AO2 only."""
+        if self._defer_to_ui_thread(self._status_update, msg, force):
+            return
         msg_text = str(msg)
         if getattr(self, "_update_dialog_active", False):
             self._verbose_trace(f"status suppressed while update dialog is active: {msg!r}")
@@ -6285,10 +6293,61 @@ class MapNavigator(
                 and not getattr(self, "_update_dialog_active", False))
 
     def _play_location_sound_if_allowed(self, country, continent="") -> None:
+        if self._defer_to_ui_thread(
+                self._play_location_sound_if_allowed, country, continent):
+            return
         if not self._map_sound_allowed():
             self._verbose_trace("location sound suppressed while update dialog is active.")
             return
         self.sound.play_location_sound(country, continent)
+
+    def _refresh_country_context_after_direct_jump(self, lat, lon) -> None:
+        """Refresh country metadata after a POI jump bypasses map lookup.
+
+        POI jumps enter street mode directly, so the ordinary map lookup may
+        never run. Without this refresh, the previous country's ambience and
+        facts remain active at the new coordinates.
+        """
+        target_lat = float(lat)
+        target_lon = float(lon)
+
+        def _resolve():
+            country = self._country_at_point(target_lat, target_lon)
+            if not country:
+                return
+            canonical = COUNTRY_ALIASES.get(country, country)
+            if country == "Antarctica":
+                continent = "Antarctica"
+            else:
+                continent = CONTINENT_OVERRIDES.get(country, "")
+                if not continent:
+                    for info in self.facts.values():
+                        if info.get("name", "").lower() in (
+                                canonical.lower(), country.lower()):
+                            continent = info.get("continent", "")
+                            break
+            wx.CallAfter(_apply, country, continent)
+
+        def _apply(country, continent):
+            # A later movement/jump wins over this background result.
+            if (abs(float(self.lat) - target_lat) > 0.0002
+                    or abs(float(self.lon) - target_lon) > 0.0002):
+                return
+            changed = country != self.last_country_found
+            self.last_country_found = country
+            self.current_continent = continent
+            self._refresh_info_panel()
+            if getattr(self, "sounds_enabled", True) and not self._game.active:
+                self._play_location_sound_if_allowed(country, continent)
+            if changed:
+                miab_log(
+                    "navigation",
+                    f"Direct jump country refresh: {country}"
+                    + (f" (continent: {continent})" if continent else ""),
+                    self.settings,
+                )
+
+        threading.Thread(target=_resolve, daemon=True).start()
 
     def _play_spatial_tone_if_allowed(self, lat, lon, bounds=None) -> None:
         if not self._map_sound_allowed():
@@ -6304,6 +6363,9 @@ class MapNavigator(
     def _announce_transient(self, msg, braille_msg=None,
                             visual_caption=True) -> None:
         """Speak and braille a transient announcement without touching the listbox."""
+        if self._defer_to_ui_thread(self._announce_transient, msg, braille_msg,
+                                    visual_caption):
+            return
         if getattr(self, "_update_dialog_active", False):
             self._verbose_trace(f"transient suppressed while update dialog is active: {msg!r}")
             return
@@ -6313,6 +6375,9 @@ class MapNavigator(
 
     def _announce_transient_then_return(self, msg, delay_ms=3000, focus_target=None) -> None:
         """Speak through AO2, then restore focus without changing MSAA text."""
+        if self._defer_to_ui_thread(self._announce_transient_then_return, msg,
+                                    delay_ms, focus_target):
+            return
         if getattr(self, "_update_dialog_active", False):
             self._verbose_trace(f"transient-return suppressed while update dialog is active: {msg!r}")
             return
@@ -6413,6 +6478,22 @@ class MapNavigator(
         except Exception:
             return False
 
+    def _speech_timing(self, stage: str) -> None:
+        """Log milliseconds since the last arrow press, for screen-reader timing.
+
+        Enabled with MIAB_SPEECH_TIMING; writes to the verbose log alongside
+        speech_dispatch's own SayString/BrailleString measurements so one trace
+        covers keypress through to the screen reader accepting the string.
+        """
+        if not _SPEECH_TIMING:
+            return
+        try:
+            started = getattr(self, "_move_started_at", None)
+            delta = "%.1fms" % ((time.time() - started) * 1000.0) if started else "n/a"
+            miab_log("verbose", f"[timing +{delta}] {stage}", self.settings)
+        except Exception:
+            pass
+
     def _verbose_trace(self, msg: str) -> None:
         """Write a verbose trace when diagnostics are enabled."""
         try:
@@ -6490,12 +6571,20 @@ class MapNavigator(
         if not msg_text:
             return ""
         self._current_focus_location_label = msg_text
+        # The background location lookup calls this.  Reading the title from
+        # that thread crashed python.exe with heap corruption (0xc0000374).
+        if wx.IsMainThread():
+            self._keep_app_title()
+        else:
+            wx.CallAfter(self._keep_app_title)
+        return msg_text
+
+    def _keep_app_title(self) -> None:
         try:
             if self.GetTitle() != APP_NAME:
                 self.SetTitle(APP_NAME)
         except Exception:
             pass
-        return msg_text
 
     def _update_location_focus(self, msg):
         """Update the focused location row, for real position changes."""
@@ -6513,8 +6602,14 @@ class MapNavigator(
             self._verbose_trace(f"_update_location_focus suppressed within jump display window: {msg!r}")
             return
         self._verbose_trace(f"_update_location_focus applied: {msg!r}")
-        self._refresh_info_panel()
+        self._speech_timing("lookup result reached _update_location_focus")
+        # Announce first, then let the visual panel catch up.  Refreshing it
+        # before the announcement put a burst of MSAA name-change events
+        # directly ahead of the speech, which is what JAWS turned into a delay.
         self._announce_location(msg_text)
+        self._speech_timing("announce: handed to screen reader")
+        self._schedule_info_panel_refresh()
+        self._speech_timing("announce: handed to screen reader")
         if getattr(self, "_poi_list", []):
             wx.CallAfter(self.listbox.SetFocus)
 
@@ -6691,20 +6786,44 @@ class MapNavigator(
         wx.CallAfter(_restore)
 
     def _last_landed_object_label(self) -> str:
-        """Return the most recent landed object without coordinates."""
+        """Return the current landed location without coordinates.
+
+        In movement modes this is resolved from the live cursor, matching the
+        cache-only part of A, rather than repeating a stale focus/POI label.
+        """
         if getattr(self, "_walking_mode", False) and getattr(self, "_walk_street", None):
-            label = self._walk_street
+            street = self._walk_street
+            number = self._walk_nearest_address_number(
+                self.lat, self.lon, street,
+                getattr(self, "_walk_heading", 0.0), radius=200)
+            label = f"{number} {street}" if number else street
         elif getattr(self, "_free_mode", False):
-            label = getattr(self._free_engine, "street_name", "") or getattr(self, "street_label", "")
+            street = (getattr(self._free_engine, "street_name", "")
+                      or getattr(self, "street_label", ""))
+            number = self._nearest_address_number(
+                self.lat, self.lon, street, radius=200) if street else None
+            label = f"{number} {street}" if number else street
         elif getattr(self, "street_mode", False):
-            label = getattr(self, "_current_focus_location_label", "")
-            if not label:
-                number = getattr(self, "_jump_address_number", "")
-                street = getattr(self, "_jump_address_street", "") or getattr(self, "street_label", "")
-                if number and street:
-                    label = f"{number} {street}"
+            number = getattr(self, "_jump_address_number", "")
+            street = getattr(self, "_jump_address_street", "")
+            pin_lat = getattr(self, "_jump_street_pin_lat", None)
+            pin_lon = getattr(self, "_jump_street_pin_lon", None)
+            pin_active = (
+                number and street and pin_lat is not None and pin_lon is not None
+                and dist_metres(self.lat, self.lon, pin_lat, pin_lon) <= 150.0)
+            if pin_active:
+                label = f"{number} {street}"
+            else:
+                street, cross = self._nearest_road(self.lat, self.lon)
+                invalid = ("", "Unknown", "No street data", "No street data nearby")
+                if street not in invalid:
+                    street = re.sub(r"\s*\(.*?\)", "", street).strip()
+                    number = self._nearest_address_number(
+                        self.lat, self.lon, street, radius=500)
+                    label = (f"{number} {street}" if number else
+                             street + (f", near {cross}" if cross else ""))
                 else:
-                    label = street or getattr(self, "last_location_str", "")
+                    label = getattr(self, "_current_focus_location_label", "")
         else:
             label = (
                 getattr(self, "last_location_str", "")
@@ -7303,7 +7422,6 @@ class MapNavigator(
             set_unit_system(self.settings.get("distance_unit", "metric"))
             self.settings["_log_path"] = os.path.join(USER_DIR, "miab.log")
             self._free_engine.log_settings = self.settings
-            self._mistral.init(self.settings.get("mistral_api_key", ""))
             self._poi_fetcher.set_here_key(self.settings.get("here_api_key", ""))
             self._nav.update_settings(self.settings)
             self._here = HerePoi(
@@ -7441,52 +7559,7 @@ class MapNavigator(
             self._announce_transient(msg)
             return True
 
-        # Bare F in street mode toggles free mode when there is no POI list.
-        if no_mod and (key == ord('F') or key == ord('f')):
-            if self.street_mode and not bool(self._poi_list):
-                self._toggle_free_mode()
-            return True
-
         return False
-
-    def _handle_free_mode_shortcuts(self, key, shift, primary, alt, no_mod):
-        if not getattr(self, '_free_mode', False):
-            return False
-        if key == wx.WXK_UP:
-            self._free_step(1); return True
-        if key == wx.WXK_DOWN:
-            self._free_step(-1); return True
-        if primary and key == wx.WXK_LEFT:
-            self._free_snap_cross(); return True
-        if primary and key == wx.WXK_RIGHT:
-            self._free_snap_cross(); return True
-        if key == wx.WXK_LEFT:
-            text, pois = self._free_engine.describe_left_with_pois()
-            self._free_last_side_pois = pois
-            self._free_last_side      = "left"
-            self._announce_transient_then_return(text if text else "Nothing on the left."); return True
-        if key == wx.WXK_RIGHT:
-            text, pois = self._free_engine.describe_right_with_pois()
-            self._free_last_side_pois = pois
-            self._free_last_side      = "right"
-            self._announce_transient_then_return(text if text else "Nothing on the right."); return True
-        if no_mod and (key == ord('A') or key == ord('a')):
-            self._announce_address(); return True
-        if no_mod and (key == ord('H') or key == ord('h')):
-            self._free_heading(); return True
-        if no_mod and (key == ord('X') or key == ord('x')):
-            self._free_describe_intersection(); return True
-        if no_mod and (key == ord('R') or key == ord('r')):
-            self._free_turnaround(); return True
-        if key in (wx.WXK_DELETE, wx.WXK_F2):
-            self._free_poi_action(key); return True
-        # Let system key combos (Alt+F4, etc.) and the shared function keys
-        # fall through to the normal handlers below.
-        if alt or key in (wx.WXK_F1, wx.WXK_F7, wx.WXK_F11,
-                                           wx.WXK_F2, wx.WXK_F3, wx.WXK_F4,
-                                           wx.WXK_F5, wx.WXK_F6):
-            return False
-        return True
 
     def _handle_global_function_keys(self, key, shift, primary, alt, no_mod):
         if primary and shift and not alt and (key == ord('S') or key == ord('s')):
@@ -7726,7 +7799,7 @@ class MapNavigator(
         self._jump_street_pin_lon = None
         self._jump_address_number = None
         self._jump_address_street = None
-        self._record_jump(label, self.lat, self.lon)
+        # Pole jumps are a fixed shortcut, so they stay out of Ctrl+H history.
         miab_log(
             "navigation",
             f"Key: Ctrl+{'Home' if north else 'End'} ({label}) at longitude {self.lon:.5f}",
@@ -7756,7 +7829,7 @@ class MapNavigator(
 
         if getattr(self, '_nav_active', False):
             # Briefing step-through takes priority over normal nav stepping
-            # while a Mistral briefing is loaded.
+            # while an AI briefing is loaded.
             if getattr(self, '_nav_briefing_mode', False):
                 if key == wx.WXK_UP:
                     self._nav_briefing_next(); return True
@@ -7868,6 +7941,13 @@ class MapNavigator(
         if no_mod and (key == ord('S') or key == ord('s')):
             self._street_search()
             return True
+        if no_mod and key == wx.WXK_DELETE:
+            poi = getattr(self, "_street_survey_current_poi", None)
+            if poi:
+                self._report_poi_nonexistent(poi)
+            else:
+                self._announce_transient("No POI selected.")
+            return True
         if primary and (key == ord('G') or key == ord('g')):
             self._nav_to_address()
             return True
@@ -7952,23 +8032,17 @@ class MapNavigator(
         if self._handle_user_map_shortcuts(key, shift, primary, alt):
             return
 
-        # Free mode owns a dense, purpose-built keyboard layer. Keep it ahead
-        # of user mappings so route/side exploration cannot be disrupted.
-        if not getattr(self, '_free_mode', False):
-            key_contexts = (("Street", "Global") if self.street_mode
-                            else ("Map", "Global"))
-            custom_bindings = self.settings.get("key_bindings", {})
-            custom_action = action_for_event(event, custom_bindings, key_contexts)
-            if custom_action and self._run_custom_keystroke_action(custom_action):
-                return
-            if disabled_default_for_event(event, custom_bindings, key_contexts):
-                return
+        key_contexts = (("Street", "Global") if self.street_mode
+                        else ("Map", "Global"))
+        custom_bindings = self.settings.get("key_bindings", {})
+        custom_action = action_for_event(event, custom_bindings, key_contexts)
+        if custom_action and self._run_custom_keystroke_action(custom_action):
+            return
+        if disabled_default_for_event(event, custom_bindings, key_contexts):
+            return
 
         if self._handle_preface_shortcuts(event, key, shift, primary, alt, no_mod):
             return
-        if self._handle_free_mode_shortcuts(key, shift, primary, alt, no_mod):
-            return
-
         if self.street_mode:
             if primary:
                 step = 0.0027      # ~300m — jump to next block
@@ -7997,16 +8071,37 @@ class MapNavigator(
         if self._handle_street_mode_shortcuts(key, shift, primary, alt, no_mod, event):
             return
 
+        # Street mode gives the arrow keys a consistent street-relative model.
+        # The Page-key commands remain available as compatibility shortcuts.
+        if (self.street_mode and not alt
+                and key in (wx.WXK_UP, wx.WXK_DOWN,
+                            wx.WXK_LEFT, wx.WXK_RIGHT)):
+            if not shift and not primary:
+                if key in (wx.WXK_UP, wx.WXK_DOWN):
+                    self._street_survey_go_address(
+                        1 if key == wx.WXK_UP else -1)
+                    return
+                self._street_survey_cycle_same_address_poi(
+                    -1 if key == wx.WXK_LEFT else 1)
+                return
+            if primary and not shift:
+                if key in (wx.WXK_UP, wx.WXK_DOWN):
+                    self._street_survey_go_block(
+                        1 if key == wx.WXK_UP else -1)
+                else:
+                    self._street_survey_turn_cross_street(
+                        turn_direction=-1 if key == wx.WXK_LEFT else 1)
+                return
+
         moved = False
         new_lat = self.lat
         new_lon = self.lon
         lon_step = step
-        if not self.street_mode:
-            # Longitude lines converge toward the poles.  Cap the angular
-            # change at half the globe, where east/west distance is inherently
-            # ambiguous, rather than allowing one press to circle repeatedly.
-            latitude_scale = abs(math.cos(math.radians(self.lat)))
-            lon_step = min(180.0, step / max(latitude_scale, 1e-9))
+        # Longitude lines converge toward the poles. Cap the angular change at
+        # half the globe, where east/west distance is inherently ambiguous,
+        # rather than allowing one press to circle repeatedly.
+        latitude_scale = abs(math.cos(math.radians(self.lat)))
+        lon_step = min(180.0, step / max(latitude_scale, 1e-9))
         # Block map movement when hub list is open
         if (not self.street_mode and bool(self._poi_list)
                 and key in (wx.WXK_UP, wx.WXK_DOWN,
@@ -8020,18 +8115,50 @@ class MapNavigator(
             self.listbox.SetSelection(self._poi_index)
             return
 
-        # On any named road, Up/Down follow its actual geometry. Applying a
-        # north/south offset and snapping afterwards can otherwise leave the
-        # road or return to the same point forever where it curves.
-        if (self.street_mode
-                and key in (wx.WXK_UP, wx.WXK_DOWN)):
-            moved = self._step_along_pinned_street(
-                1 if key == wx.WXK_UP else -1,
+        # Shift+Up/Down follows the current street. Shift+Left/Right takes a
+        # small perpendicular step, so all four keys remain street-relative.
+        shift_axis = self._street_shift_follow_axis() if (
+            self.street_mode and shift
+            and key in (wx.WXK_UP, wx.WXK_DOWN,
+                        wx.WXK_LEFT, wx.WXK_RIGHT)
+        ) else None
+        shift_follows_street = bool(
+            shift_axis and key in (wx.WXK_UP, wx.WXK_DOWN)
+        )
+        shift_sideways_target = None
+        if (self.street_mode and shift and not primary and not alt
+                and key in (wx.WXK_LEFT, wx.WXK_RIGHT)):
+            shift_sideways_target = self._street_survey_sideways_target(
+                -1 if key == wx.WXK_LEFT else 1,
                 step * 111000.0,
             )
+        if shift_follows_street:
+            direction = 1 if key == wx.WXK_UP else -1
+            heading_hint = 0.0 if shift_axis == "vertical" else 90.0
+            moved = self._step_along_pinned_street(
+                direction,
+                step * 111000.0,
+                heading_hint=heading_hint,
+            )
+            if not moved:
+                self._announce_transient(
+                    f"End of {getattr(self, 'street_label', '') or 'street'}."
+                )
+                return
             new_lat, new_lon = self.lat, self.lon
 
-        if not moved:
+        street_grid_move = (
+            self.street_mode
+            and key in (wx.WXK_UP, wx.WXK_DOWN,
+                        wx.WXK_LEFT, wx.WXK_RIGHT)
+            and not shift_follows_street
+        )
+        if street_grid_move:
+            self._release_street_pin_for_grid_move()
+
+        if not moved and shift_sideways_target:
+            new_lat, new_lon = shift_sideways_target
+        elif not moved:
             if key == wx.WXK_UP:
                 new_lat = min(90, self.lat + step)
             elif key == wx.WXK_DOWN:
@@ -8098,15 +8225,21 @@ class MapNavigator(
             self._street_survey_current_poi = None
             # Keep the visual map and coordinate panel responsive while the
             # slower place/country lookup runs in the background.
+            self._move_started_at = time.time()
+            self._speech_timing("move: arrow handled")
             self.map_panel.set_position(
                 self.lat, self.lon, self.street_mode, self.street_label)
-            self._refresh_info_panel()
+            # Debounced: see _schedule_info_panel_refresh.  Updating the
+            # visible panel labels here fired MSAA name-change events that
+            # JAWS put ahead of the movement announcement.
+            self._schedule_info_panel_refresh()
 
             # Spatial tone only for world map, not street/walking mode
             if not self._game.active and not self.street_mode and not getattr(self, '_walking_mode', False):
                 self._play_spatial_tone_if_allowed(
                     self.lat, self.lon, self._spatial_tone_bounds())
-            
+                self._speech_timing("move: tone played")
+
             # Street mode: check cache validity and trigger fetch if needed
             if self.street_mode:
                 self._check_cache_validity()
@@ -8136,6 +8269,7 @@ class MapNavigator(
                 if self.street_mode:
                     threading.Thread(target=self._query_street, daemon=True).start()
                 else:
+                    self._speech_timing("move: lookup thread started")
                     threading.Thread(target=self._lookup, daemon=True).start()
             if self.street_mode:
                 self._prev_lat = self.lat
@@ -8568,10 +8702,13 @@ class MapNavigator(
             else:
                 self._pinned_jump_label = ""
                 self._pinned_jump_label_until = 0
-                cached_label = self._nearby_cached_place_label(self.lat, self.lon)
-                display_base = cached_label or label
+                # Online jump results belong to the search cache only.  A
+                # point result has no boundary, so treating its label as the
+                # ambient place within five kilometres overwrites real city,
+                # suburb, and feature labels across the surrounding grid.
+                display_base = label
                 display = display_base
-                if (not cached_label and close_place
+                if (close_place
                         and display_base == getattr(self, "_last_location_base", "")):
                     try:
                         context = self._close_place_position_context(
@@ -8617,7 +8754,8 @@ class MapNavigator(
                 self._prefetch_geo_features_for_point(self.lat, self.lon)
                 if getattr(self, 'sounds_enabled', True) and not self._game.active:
                     self._play_location_sound_if_allowed(
-                        country if country != "Open Water" else "ocean", continent)
+                        _ambient_sound_place(country, on_land),
+                        continent)
                 miab_log("navigation",
                          f"Entered country: {country}"
                          + (f" (continent: {continent})" if continent else ""),
@@ -8859,7 +8997,7 @@ class MapNavigator(
             "Shift+Alt+M: compare distances and directions between all saved marks.",
             "G: nearby geographic features.",
             "P: POI search.",
-            "POI menu: selected POI address, hours, phone, website, Mistral, menu lookup, and website launch.",
+            "POI menu: selected POI address, hours, phone, website, Google reviews, menu lookup, and website launch.",
             "T: local time.",
             "Z: timezone.",
             "S: sunrise and sunset.",
@@ -8878,31 +9016,7 @@ class MapNavigator(
 
     def show_help(self):
         """F1 — show keyboard help in a read-only scrollable dialog."""
-        if getattr(self, '_free_mode', False):
-            title = "FREE MODE HELP"
-            lines = [
-                "Up: move forward.",
-                "Down: move backward.",
-                "Left: describe POIs on the left.",
-                "Right: describe POIs on the right.",
-                "Ctrl+Left: snap to nearest cross street.",
-                "Ctrl+Right: snap to nearest cross street.",
-                "H: current heading.",
-                "X: nearest intersection.",
-                "G: nearby features.",
-                "A: address lookup.",
-                "R: reverse direction.",
-                "F: leave free mode.",
-                "Ctrl+Alt+P: refresh POIs.",
-                "Ctrl+F: favourites.",
-                "Ctrl+Shift+F: add selected POI or current place to favourites.",
-                "Ctrl+J: jump to a saved mark.",
-                "Ctrl+Shift+P: save current position as a personal POI.",
-                "Delete: Delete POI.",
-                "F2: Rename POI.",
-                "F1: help.",
-            ]
-        elif getattr(self, '_walking_mode', False):
+        if getattr(self, '_walking_mode', False):
             title = "WALKING MODE HELP"
             lines = [
                 "Up: walk forward.",
@@ -8927,9 +9041,12 @@ class MapNavigator(
         elif self.street_mode:
             title = "STREET MODE HELP"
             lines = [
-                "Arrow keys: move along the street map.",
-                "Shift+arrows: fine movement.",
-                "Ctrl+arrows: larger movement.",
+                "Up or Down: next or previous known address on the current street.",
+                "Left or Right: previous or next POI sharing the current address.",
+                "Shift+Up or Shift+Down: move forward or backward along the current street in fine steps.",
+                "Shift+Left or Shift+Right: fine sideways movement across the street.",
+                "Ctrl+Up or Ctrl+Down: next or previous intersection.",
+                "Ctrl+Left or Ctrl+Right: turn left or right at an intersection.",
                 "Page Up: previous known number.",
                 "Page Down: next known number.",
                 "Shift+Page Up or Shift+Page Down: browse multiple POIs at the current address.",
@@ -8947,12 +9064,12 @@ class MapNavigator(
                 "G: nearby features.",
                 "I: street summary.",
                 "W: walking mode.",
-                "F: free mode.",
                 "Ctrl+G: navigate to address.",
                 "Ctrl+F: favourites.",
                 "Ctrl+Shift+F: add selected POI or current place to favourites.",
                 "Ctrl+J: jump to a saved mark.",
                 "Ctrl+Shift+P: save current position as a personal POI.",
+                "Delete: report the current POI as no longer existing.",
                 "Enter: jump to selected POI.",
                 "Ctrl+Enter: transit info or explore selected POI.",
                 "Space: nearest intersection for selected POI.",
@@ -9394,6 +9511,22 @@ _CORE_LOADED_AT = time.perf_counter()
 if __name__ == "__main__":
     import atexit, sys
     _startup_t0 = _PROCESS_START_T0
+
+    # Native crashes (e.g. heap corruption, 0xc0000374) end the process with
+    # no Python traceback.  faulthandler writes every thread's Python stack
+    # to this file when Windows raises a fatal exception, so an intermittent
+    # crash leaves a trail.  The handle must stay open for the whole run.
+    import faulthandler
+    try:
+        _crash_trace_file = open(
+            os.path.join(USER_DIR, "miab_crash_trace.log"), "a", encoding="utf-8")
+        _crash_trace_file.write(
+            f"\n=== Map in a Box {APP_VERSION} started "
+            f"{time.strftime('%Y-%m-%d %H:%M:%S')}, pid {os.getpid()} ===\n")
+        _crash_trace_file.flush()
+        faulthandler.enable(file=_crash_trace_file, all_threads=True)
+    except Exception:
+        pass
 
     # Keep this object alive until MainLoop exits; releasing it also releases
     # the native per-user instance lock. Installed and portable editions use

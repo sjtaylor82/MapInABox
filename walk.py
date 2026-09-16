@@ -11,7 +11,7 @@ import threading
 import wx
 
 from geo import (GENERIC_STREET_TYPES, bearing_between_nodes, bearing_deg,
-                 compass_name, dist_metres)
+                 compass_name, dist_metres, INTERNAL_ROAD_LABELS)
 from logging_utils import miab_log
 
 
@@ -32,7 +32,7 @@ class WalkMixin:
         few metres apart. Interior bend points are not merged this way.
         """
 
-        GENERIC = GENERIC_STREET_TYPES
+        GENERIC = GENERIC_STREET_TYPES | INTERNAL_ROAD_LABELS
         ENDPOINT_SNAP_M = 18.0
 
         # Step 1: collect all coordinate points with their street names
@@ -220,7 +220,10 @@ class WalkMixin:
         edges = graph["edges"]
         nodes = graph["nodes"]
 
-        branches = len(set(n for n, s in edges.get(node_id, [])))
+        branches = len(set(
+            n for n, s in edges.get(node_id, [])
+            if (s or "").casefold() not in INTERNAL_ROAD_LABELS
+        ))
         cross = self._walk_get_cross_streets(node_id, street_name)
         heading_name = self._walk_compass_name(heading)
 
@@ -324,6 +327,8 @@ class WalkMixin:
 
         for neighbour, street_name in node_edges:
             label = (street_name or "").strip() or "unnamed road"
+            if label.casefold() in INTERNAL_ROAD_LABELS:
+                continue
             bearing = self._walk_bearing(node_id, neighbour)
             rel = (bearing - heading + 180) % 360 - 180
             abs_rel = abs(rel)

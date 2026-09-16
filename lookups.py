@@ -846,10 +846,18 @@ class LookupsMixin:
 
     def _country_at_point(self, lat, lon):
         """Return the country polygon containing lat/lon, or empty string."""
+        lock = getattr(self, "_country_polygon_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._country_polygon_lock = lock
+        with lock:
+            return self._country_at_point_locked(lat, lon)
+
+    def _country_at_point_locked(self, lat, lon):
         try:
             from shapely.geometry import Point, shape
             if not hasattr(self, "_country_polygon_cache"):
-                from core import GEOJSON_PATH
+                from world_map_panel import GEOJSON_PATH
                 countries = []
                 if os.path.exists(GEOJSON_PATH):
                     with gzip.open(GEOJSON_PATH, 'rt', encoding="utf-8") as f:
@@ -891,11 +899,9 @@ class LookupsMixin:
         self._forced_country_lon = lon
         self._forced_country_until = time.time() + 5.0
         self.last_country_found = ""
-        try:
-            self.sound.stop()
-            self.sound._current = None
-        except Exception:
-            pass
+        # Keep the current ambience playing until the destination lookup
+        # resolves. SoundEngine will then crossfade it into the new country's
+        # loop; stopping here made every nearest-country transition abrupt.
         self.lat = lat
         self.lon = lon
         self._status_update(msg, force=True)
