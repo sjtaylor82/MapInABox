@@ -343,6 +343,50 @@ class WorldMapPanel(wx.Panel):
         gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(wx.Colour(20, 20, 20)).Width(3)))
         gc.DrawPath(path)
 
+    def _classroom_hud_bottom(self, w, h):
+        """Lowest y of the Visual Assist header band, or 0 when it is hidden."""
+        if not self._classroom_mode_active() or w < 240 or h < 160:
+            return 0
+        font_size = max(13, min(24, int(h / 32)))
+        pad = max(10, int(font_size * .65))
+        return pad + int(font_size * 2.7)
+
+    def _visual_assist_caption_layout(self, gc, w, h):
+        """Wrapped lines and box of the Visual Assist caption, or None.
+
+        Shared by the caption itself and by the location callout, which must
+        stay clear of it.
+        """
+        text = self._visual_assist_caption
+        if not self._classroom_mode_active() or not text or w < 240 or h < 160:
+            return None
+        font_size = max(14, min(24, int(h / 27)))
+        pad = max(12, int(font_size * .7))
+        max_width = max(100, w - pad * 4)
+        gc.SetFont(gc.CreateFont(
+            wx.Font(font_size, wx.FONTFAMILY_SWISS,
+                    wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD),
+            wx.Colour(255, 255, 255)))
+        lines = []
+        current = ""
+        for word in text.split():
+            candidate = f"{current} {word}".strip()
+            if current and gc.GetTextExtent(candidate)[0] > max_width:
+                lines.append(current)
+                current = word
+            else:
+                current = candidate
+        if current:
+            lines.append(current)
+        max_lines = max(2, min(6, int((h * .38) / (font_size * 1.35))))
+        if len(lines) > max_lines:
+            lines = lines[:max_lines]
+            lines[-1] = lines[-1].rstrip(" .") + "…"
+        line_h = int(font_size * 1.35)
+        box_h = pad * 2 + line_h * len(lines)
+        return {"lines": lines, "pad": pad, "line_h": line_h,
+                "x": pad, "y": h - box_h - pad, "w": w - pad * 2, "h": box_h}
+
     def _draw_classroom_hud(self, gc, w, h):
         if not self._classroom_mode_active() or w < 240 or h < 160:
             return
@@ -389,43 +433,17 @@ class WorldMapPanel(wx.Panel):
 
     def _draw_visual_assist_caption(self, gc, w, h):
         """Draw the temporary visual equivalent of requested speech."""
-        text = self._visual_assist_caption
-        if not self._classroom_mode_active() or not text or w < 240 or h < 160:
+        layout = self._visual_assist_caption_layout(gc, w, h)
+        if not layout:
             return
-        font_size = max(14, min(24, int(h / 27)))
-        pad = max(12, int(font_size * .7))
-        max_width = max(100, w - pad * 4)
-        gc.SetFont(gc.CreateFont(
-            wx.Font(font_size, wx.FONTFAMILY_SWISS,
-                    wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD),
-            wx.Colour(255, 255, 255)))
-        lines = []
-        current = ""
-        for word in text.split():
-            candidate = f"{current} {word}".strip()
-            if current and gc.GetTextExtent(candidate)[0] > max_width:
-                lines.append(current)
-                current = word
-            else:
-                current = candidate
-        if current:
-            lines.append(current)
-        max_lines = max(2, min(6, int((h * .38) / (font_size * 1.35))))
-        if len(lines) > max_lines:
-            lines = lines[:max_lines]
-            lines[-1] = lines[-1].rstrip(" .") + "…"
-        line_h = int(font_size * 1.35)
-        box_h = pad * 2 + line_h * len(lines)
-        box_x = pad
-        box_y = h - box_h - pad
-        box_w = w - pad * 2
         gc.SetBrush(gc.CreateBrush(wx.Brush(wx.Colour(3, 10, 22, 238))))
         gc.SetPen(gc.CreatePen(
             wx.GraphicsPenInfo(wx.Colour(255, 215, 50)).Width(3)))
-        gc.DrawRoundedRectangle(box_x, box_y, box_w, box_h, 10)
-        for index, line in enumerate(lines):
-            gc.DrawText(line, box_x + pad,
-                        box_y + pad + index * line_h)
+        gc.DrawRoundedRectangle(layout["x"], layout["y"],
+                                layout["w"], layout["h"], 10)
+        for index, line in enumerate(layout["lines"]):
+            gc.DrawText(line, layout["x"] + layout["pad"],
+                        layout["y"] + layout["pad"] + index * layout["line_h"])
 
     def set_flash(self, name, rings_idx, centroid_lon, centroid_lat):
         self._country_visual_generation += 1
@@ -1106,8 +1124,21 @@ class WorldMapPanel(wx.Panel):
             if value and value.lower() not in {item.lower() for item in parts}:
                 parts.append(value)
         text = ", ".join(parts) or "Unknown"
+        # Just after a jump the location lookup is held back, so city, state
+        # and country still describe the previous place. Show the jump's own
+        # label until the lookup catches up, rather than, say, "Great Barrier
+        # Reef, California, United States of America".
+        jump_label = str(getattr(owner, "_last_jump_display_label", "") or "").strip()
+        if jump_label and time.time() < getattr(owner, "_last_jump_display_until", 0):
+            text = jump_label
         if len(text) > 80:
             text = text[:77].rstrip() + "..."
+        # The header band and the caption box are drawn after this, on top.
+        # Keep the callout in the clear space between them, or at the poles
+        # it sat underneath one or the other and could not be read.
+        caption = self._visual_assist_caption_layout(gc, w, h)
+        clear_top = self._classroom_hud_bottom(w, h) + 6 or 4
+        clear_bottom = (caption["y"] - 6) if caption else h - 4
         font_size = max(12, min(17, int(h / 34)))
         font = wx.Font(font_size, wx.FONTFAMILY_SWISS,
                        wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
@@ -1118,9 +1149,18 @@ class WorldMapPanel(wx.Panel):
         box_h = int(text_h + pad * 2)
         box_x = px + 22 if px + 22 + box_w <= w - 4 else px - 22 - box_w
         box_x = max(4, min(box_x, w - box_w - 4))
-        box_y = max(4, min(py - box_h - 18, h - box_h - 4))
+        above = py - box_h - 18
+        below = py + 18
+        if above >= clear_top:
+            box_y = above
+        elif below + box_h <= clear_bottom:
+            box_y = below              # near the top edge: hang it underneath
+        else:
+            box_y = above
+        box_y = max(clear_top, min(box_y, clear_bottom - box_h))
         line_x = box_x if box_x > px else box_x + box_w
-        line_y = box_y + box_h
+        # Join the leader to whichever edge faces the cursor.
+        line_y = box_y + box_h if box_y + box_h / 2 <= py else box_y
         gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(wx.Colour(0, 235, 255)).Width(3)))
         gc.StrokeLine(px, py, line_x, line_y)
         gc.SetBrush(gc.CreateBrush(wx.Brush(wx.Colour(5, 16, 30, 240))))

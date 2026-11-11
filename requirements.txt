@@ -14,6 +14,15 @@ certifi
 beautifulsoup4
 curl_cffi
 keyring
+pyserial
+# Windows' built-in OCR for reading labels on map pictures
+winrt-runtime; sys_platform == "win32"
+winrt-Windows.Media.Ocr; sys_platform == "win32"
+winrt-Windows.Graphics.Imaging; sys_platform == "win32"
+winrt-Windows.Storage; sys_platform == "win32"
+winrt-Windows.Storage.Streams; sys_platform == "win32"
+winrt-Windows.Globalization; sys_platform == "win32"
+winrt-Windows.Foundation; sys_platform == "win32"
 
 # ── Build-only (needed to produce release binaries, not to run from source) ──
 pyinstaller

@@ -11,6 +11,7 @@ import urllib.request
 import wx
 
 from app_paths import CACHE_DIR
+from geo import dist_metres
 from geo_features import GeoFeatures
 from logging_utils import miab_log
 from speech_dispatch import speak as _speak
@@ -360,6 +361,127 @@ class JumpSearchMixin:
         # Confirm the landing once the lookup has had a moment to resolve.
         self._return_focus_to_map(repeat=True, delay_ms=250)
 
+    # ------------------------------------------------------------------
+    # Address history (Ctrl+A)
+    # ------------------------------------------------------------------
+
+    ADDRESS_HISTORY_CAP = 10
+    # An address reached again within this distance replaces its old entry.
+    ADDRESS_HISTORY_LOC_TOL = 3e-4
+    # Within this distance of the loaded street data, an address is re-found
+    # on its street; further away it is a jump like Ctrl+H.
+    ADDRESS_HISTORY_LOADED_M = 2500.0
+
+    def _record_address(self, number, street, lat, lon, name=""):
+        """Remember an address landed on with S or reached at a route's end.
+
+        Entries are {label, name, number, street, lat, lon}: "7 Napier
+        Street, North Sydney" or "Vibe Hotel North Sydney, 171 Pacific
+        Highway, North Sydney".  The same address (by number and street, or
+        by location) moves to the top; the list keeps ADDRESS_HISTORY_CAP.
+        """
+        try:
+            lat = float(lat); lon = float(lon)
+        except (TypeError, ValueError):
+            return
+        number = str(number or "").strip()
+        street = re.sub(r"\s*\(.*?\)", "", str(street or "")).strip()
+        name = str(name or "").strip()
+        address = f"{number} {street}".strip()
+        if not address and not name:
+            return
+        suburb = str(getattr(self, "_current_suburb", "") or "").strip()
+        parts = [p for p in (name if name.casefold() != address.casefold() else "",
+                             address, suburb) if p]
+        label = ", ".join(parts)
+
+        def _same(entry):
+            if not isinstance(entry, dict):
+                return False
+            if (address and str(entry.get("number", "")).strip().casefold() == number.casefold()
+                    and str(entry.get("street", "")).strip().casefold() == street.casefold()):
+                return True
+            try:
+                return (abs(float(entry["lat"]) - lat) < self.ADDRESS_HISTORY_LOC_TOL
+                        and abs(float(entry["lon"]) - lon) < self.ADDRESS_HISTORY_LOC_TOL)
+            except (TypeError, ValueError, KeyError):
+                return False
+
+        history = [h for h in (self.settings.get("address_history") or []) if not _same(h)]
+        history.insert(0, {"label": label, "name": name, "number": number,
+                           "street": street, "lat": lat, "lon": lon})
+        del history[self.ADDRESS_HISTORY_CAP:]
+        self.settings["address_history"] = history
+        save_settings(self.settings)
+        miab_log("navigation", f"Address history: {label}", self.settings)
+
+    def show_address_history(self) -> None:
+        """Ctrl+A — revisit an address landed on with S or reached by a route."""
+        history = [h for h in (self.settings.get("address_history") or [])
+                   if isinstance(h, dict) and h.get("label")]
+        if not history:
+            self._announce_transient(
+                "No address history yet. Addresses you jump to with S, and "
+                "route destinations, are kept here.")
+            return
+        dlg = wx.SingleChoiceDialog(
+            self, "", "Address History", [str(h["label"]) for h in history])
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy()
+            self._return_focus_to_map(repeat=True)
+            return
+        idx = dlg.GetSelection()
+        dlg.Destroy()
+        if not 0 <= idx < len(history):
+            self._return_focus_to_map(repeat=True)
+            return
+        self._go_to_address_history_entry(history[idx])
+
+    def _go_to_address_history_entry(self, entry):
+        try:
+            lat = float(entry["lat"]); lon = float(entry["lon"])
+        except (TypeError, ValueError, KeyError):
+            self._announce_transient("Selected history entry is invalid.")
+            return
+        street = str(entry.get("street") or "")
+        number = str(entry.get("number") or "")
+        miab_log("navigation", f"Address from history: {entry.get('label')}", self.settings)
+        fetch_lat = getattr(self, "_road_fetch_lat", None)
+        fetch_lon = getattr(self, "_road_fetch_lon", None)
+        loaded_here = (
+            getattr(self, "street_mode", False) and street
+            and fetch_lat is not None and fetch_lon is not None
+            and dist_metres(lat, lon, fetch_lat, fetch_lon) <= self.ADDRESS_HISTORY_LOADED_M
+            and self._street_survey_segments_for(street))
+        if loaded_here:
+            # The street is loaded: land on the address as S would, so the
+            # house number, pin and street browsing all work at once.
+            self._jump_to_street(street, number)
+            return
+        # Elsewhere, land in map mode like Ctrl+H; F11 then loads the streets
+        # and the pending address places the cursor on it.
+        if getattr(self, "street_mode", False):
+            self._exit_street_mode(repeat_location=False)
+        self.lat, self.lon = lat, lon
+        self.street_label = ""
+        self._jump_street_label = None
+        self._jump_street_pin_lat = None
+        self._jump_street_pin_lon = None
+        self._pending_jump_address_number = number or None
+        self._pending_jump_address_street = street or None
+        self._pending_jump_address_lat = lat if number and street else None
+        self._pending_jump_address_lon = lon if number and street else None
+        self._jump_address_number = number or None
+        self._jump_address_street = street or None
+        label = str(entry.get("label") or f"{lat:.4f}, {lon:.4f}")
+        self.last_location_str = label
+        self._set_current_location_title(label)
+        self._last_jump_display_label = label
+        self._last_jump_display_until = time.time() + 1.5
+        wx.CallAfter(self.map_panel.set_position, self.lat, self.lon, False, "")
+        threading.Thread(target=self._lookup, daemon=True).start()
+        self._return_focus_to_map(repeat=True, delay_ms=250)
+
     def show_jump_dialog(self, initial_value=""):
         # Suppress background location announcements for the entire jump session,
         # including the retry wait. Cleared at every real exit point.
@@ -459,6 +581,8 @@ class JumpSearchMixin:
                 return match_rank * 2
             if source == "local":
                 return match_rank * 2  # exact=0, prefix=2, contains=4 — always above features
+            if source == "postal":
+                return match_rank * 2  # suburb fallback has the same priority as bundled cities
             if source == "feature":
                 if match_rank <= 1:   # 0 = nearby exact, 1 = country-level exact (+1 penalty)
                     return 1          # above substring cities (4), below prefix cities (2)
@@ -498,6 +622,32 @@ class JumpSearchMixin:
                 seen_labels.add(label)
                 candidates.append((label, float(row['lat']), float(row['lng']),
                                    _sort_key(str(row['city'])), "local"))
+
+        # The world-cities dataset omits many genuine suburbs (for example
+        # Carina in Brisbane).  The bundled postcode catalogue is more
+        # complete at suburb level, so search the current country there too.
+        postal_lookup = getattr(self, "_postal_codes", None)
+        if postal_lookup is not None:
+            country_code = (getattr(self, "_current_country_code", "") or "").strip()
+            if not country_code:
+                country_code = postal_lookup.country_code_near(self.lat, self.lon)
+            country_codes = [country_code] if country_code else []
+            country_name = (getattr(self, "last_country_found", "") or
+                            (country_codes[0] if len(country_codes) == 1 else ""))
+            for postal_country_code in country_codes:
+                for place, admin, postcode, plat, plon in postal_lookup.search_places(
+                        q, postal_country_code, limit=100):
+                    parts = [place]
+                    if admin and admin.casefold() != place.casefold():
+                        parts.append(admin)
+                    if country_name and country_name.casefold() not in {
+                            part.casefold() for part in parts}:
+                        parts.append(country_name)
+                    label = ", ".join(parts)
+                    if label not in seen_labels:
+                        seen_labels.add(label)
+                        candidates.append((label, float(plat), float(plon),
+                                           _sort_key(place), "postal"))
 
         # Composite city/state/country search: handles input like
         # "burwood nsw" -> "burwood new south wales" matching

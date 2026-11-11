@@ -56,6 +56,11 @@ RATE_LIMIT_COOLDOWN_SECS = 120.0
 
 TRANSIENT_FAIL_COOLDOWN_SECS = 30.0
 
+# A server that timed out is usually overloaded for a while: Germany timed out
+# on a Hawthorn street fetch, was retried 35 s later for a search and timed
+# out again.  Keep requests away from it for longer than an HTTP error.
+TIMEOUT_COOLDOWN_SECS = 300.0
+
 
 class OverpassRequestCancelled(RuntimeError):
     """Raised before more network work when a caller supersedes a request."""
@@ -267,7 +272,9 @@ class OverpassClient:
                     continue
                 except Exception as exc:
                     # Socket timeouts, connection errors, etc. — also
-                    until = time.time() + TRANSIENT_FAIL_COOLDOWN_SECS
+                    timed_out = isinstance(exc, TimeoutError) or "timed out" in str(exc).lower()
+                    until = time.time() + (TIMEOUT_COOLDOWN_SECS if timed_out
+                                           else TRANSIENT_FAIL_COOLDOWN_SECS)
                     if custom_mirrors:
                         self._rate_limited_until[index] = until
                     else:
@@ -289,8 +296,11 @@ class OverpassClient:
         query_data: bytes,
         timeout: int = 15,
     ) -> dict | None:
-        start_index = 1 if len(self._mirrors) > 1 else 0
-        return self.request(query_data, timeout=timeout, start_index=start_index)
+        # Start from the last server that worked, like street requests; a
+        # concurrent street request still pushes this to another operator.
+        # Always starting on Germany (CDN) re-tried a cluster that had just
+        # timed out while France was answering.
+        return self.request(query_data, timeout=timeout)
 
     def large_request(
         self,

@@ -29,6 +29,7 @@ from typing import Optional
 from geo import (dist_metres, bearing_deg, bearing_between_nodes, compass_name,
                  GENERIC_STREET_TYPES, INTERNAL_ROAD_LABELS)
 from distance_units import format_distance
+from route_pois import join_names
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +67,9 @@ class NavigationEngine:
         self.google_mode    : bool        = False  # True for Google/HERE (no OSM path)
         self.route_mode     : str         = "walking"
         self.total_min      : int         = 0
+        # Distinct ways to the same destination, shortest first. Each entry
+        # is a dict from _route_option(); use_alternative() switches route.
+        self.alternatives   : list[dict]  = []
 
     # ------------------------------------------------------------------
     # Graph management
@@ -103,6 +107,7 @@ class NavigationEngine:
         self.google_mode    = False
         self.route_mode     = "walking"
         self.total_min      = 0
+        self.alternatives   = []
 
     # ------------------------------------------------------------------
     # OSM / Dijkstra routing
@@ -144,8 +149,18 @@ class NavigationEngine:
         to_lon: float,
         dest_name: str,
         travel_mode: str = "walking",
+        from_street: Optional[str] = None,
+        alternatives: bool = False,
     ) -> tuple[str, bool]:
         """Calculate an OSM pedestrian route and set navigation state.
+
+        ``from_street`` is the street the walker is on. The start is placed on
+        that street when it is close, rather than at whichever graph point is
+        nearest: beside a building, a laneway behind it can be nearer than the
+        street out the front, and the route then began by walking out the back.
+
+        With ``alternatives``, up to two clearly different routes that are not
+        much longer are kept in ``self.alternatives`` after the shortest.
 
         Returns
         -------
@@ -155,6 +170,11 @@ class NavigationEngine:
             return "Walk graph not available.", False
 
         start_nid, start_snap_m = self._find_nearest_node_with_distance(from_lat, from_lon)
+        if from_street:
+            on_street, on_street_m = self._find_nearest_node_with_distance(
+                from_lat, from_lon, street_filter=from_street)
+            if on_street is not None and on_street_m <= self.START_ON_STREET_M:
+                start_nid, start_snap_m = on_street, on_street_m
         end_nid, end_snap_m     = self._find_nearest_node_with_distance(to_lat, to_lon)
         if start_nid is None or end_nid is None:
             return "Could not place start or destination on the street graph.", False
@@ -178,52 +198,190 @@ class NavigationEngine:
             return f"No walkable route found to {dest_name}.", False
 
         approximate_dest = end_snap_m > 250
-        instructions = self._build_instructions(
-            path,
-            dest_name,
-            approximate=approximate_dest,
-        )
-        nodes = self._graph["nodes"]
-        total_m = sum(
-            dist_metres(
-                nodes[path[i-1]][0], nodes[path[i-1]][1],
-                nodes[path[i]][0],   nodes[path[i]][1],
-            )
-            for i in range(1, len(path))
-        )
-        n_turns  = sum(
-            1 for inst in instructions
-            if "arriving" not in inst[2].lower()
-            and not inst[2].lower().startswith("continue across ")
-        )
-        n_steps  = len(instructions)
-        first    = instructions[0][2] if instructions else ""
-        total_min = max(1, int(round(total_m / 80.0))) if total_m > 0 else 0
+        options = [self._route_option(path, dest_name, approximate_dest)]
+        if alternatives:
+            options += self._alternative_options(
+                start_nid, end_nid, options[0], dest_name, approximate_dest)
+        self.alternatives = options if len(options) > 1 else []
 
-        self.active         = True
-        self.route          = path
-        self.instructions   = instructions
-        self.step           = 1
         self.dest_name      = dest_name
         self.dest_lat       = to_lat
         self.dest_lon       = to_lon
+        self._approx_snap_m = end_snap_m if approximate_dest else 0.0
+        return self.use_alternative(0) if self.alternatives else self._apply_option(options[0]), True
+
+    # How far the walker can be from their own street for the start to stay
+    # on it; further than this the nearest graph point is used instead.
+    START_ON_STREET_M = 60.0
+    # An alternative may be at most this much longer than the shortest route,
+    # and at least this share of it must be on streets no route already
+    # offered uses. Routes to one place often share the last stretch, so
+    # this is deliberately not higher.
+    ALT_MAX_DETOUR = 1.3
+    ALT_MIN_DIFFERENT = 0.30
+    ALT_MAX_OPTIONS = 3
+
+    def _path_length(self, path: list[int]) -> float:
+        nodes = self._graph["nodes"]
+        return sum(
+            dist_metres(nodes[a][0], nodes[a][1], nodes[b][0], nodes[b][1])
+            for a, b in zip(path, path[1:]))
+
+    def _edge_streets(self) -> dict:
+        lookup = {}
+        for a, neighbours in self._graph["edges"].items():
+            for b, street in neighbours:
+                lookup[(a, b)] = street
+        return lookup
+
+    def _route_via(self, path: list[int]) -> str:
+        """The streets a route mostly follows, in walking order: 'Charles
+        Street and Pacific Highway'. Short connecting pieces are left out."""
+        nodes = self._graph["nodes"]
+        streets = self._edge_streets()
+        lengths, first_seen = {}, {}
+        for i, (a, b) in enumerate(zip(path, path[1:])):
+            name = streets.get((a, b)) or streets.get((b, a)) or ""
+            if not name:
+                continue
+            lengths[name] = lengths.get(name, 0.0) + dist_metres(
+                nodes[a][0], nodes[a][1], nodes[b][0], nodes[b][1])
+            first_seen.setdefault(name, i)
+        top = sorted(lengths, key=lengths.get, reverse=True)[:2]
+        top.sort(key=first_seen.get)
+        return " and ".join(top)
+
+    def _route_option(self, path: list[int], dest_name: str, approximate: bool) -> dict:
+        instructions = self._build_instructions(path, dest_name, approximate=approximate)
+        total_m = self._path_length(path)
+        n_turns = sum(
+            1 for inst in instructions
+            if "arriving" not in inst[2].lower()
+            and not inst[2].lower().startswith(("continue across ", "continue past "))
+        )
+        return {
+            "path": path,
+            "instructions": instructions,
+            "total_m": total_m,
+            "n_turns": n_turns,
+            "total_min": max(1, int(round(total_m / 80.0))) if total_m > 0 else 0,
+            "via": self._route_via(path),
+        }
+
+    def _shortest_tree(self, source: int, limit_m: float):
+        """Distances and predecessors from *source* to every point within
+        *limit_m* along the walk graph."""
+        nodes, edges = self._graph["nodes"], self._graph["edges"]
+        dist, prev, done = {source: 0.0}, {}, set()
+        heap = [(0.0, source)]
+        while heap:
+            d, nid = heapq.heappop(heap)
+            if nid in done:
+                continue
+            done.add(nid)
+            if d > limit_m:
+                break
+            for nb, _street in edges.get(nid, []):
+                nd = d + dist_metres(nodes[nid][0], nodes[nid][1],
+                                     nodes[nb][0], nodes[nb][1])
+                if nd < dist.get(nb, float("inf")):
+                    dist[nb], prev[nb] = nd, nid
+                    heapq.heappush(heap, (nd, nb))
+        return dist, prev
+
+    @staticmethod
+    def _tree_path(prev: dict, source: int, node: int) -> list[int]:
+        path = [node]
+        while path[-1] != source:
+            path.append(prev[path[-1]])
+        return path[::-1]
+
+    def _alternative_options(self, start_nid, end_nid, best, dest_name, approximate):
+        """Clearly different routes that are not much longer.
+
+        Via-point method: for every point, the shortest route that passes
+        through it is the shortest way there plus the shortest way on. The
+        shortest of those that are mostly on different streets from every
+        route already offered, and do not double back, become alternatives.
+        """
+        limit = best["total_m"] * self.ALT_MAX_DETOUR
+        from_start, prev_start = self._shortest_tree(start_nid, limit)
+        from_end, prev_end = self._shortest_tree(end_nid, limit)
+        candidates = sorted(
+            (from_start[v] + from_end[v], v) for v in from_start
+            if v in from_end and from_start[v] + from_end[v] <= limit)
+        offered, found = [best], []
+        for _length, via_node in candidates:
+            if len(offered) >= self.ALT_MAX_OPTIONS:
+                break
+            there = self._tree_path(prev_start, start_nid, via_node)
+            onward = self._tree_path(prev_end, end_nid, via_node)[::-1]
+            if set(there[:-1]) & set(onward[1:]):
+                continue                      # goes out and comes back
+            path = there + onward[1:]
+            if any(self._shared_share(path, o["path"]) > 1 - self.ALT_MIN_DIFFERENT
+                   for o in offered):
+                continue
+            option = self._route_option(path, dest_name, approximate)
+            if not option["via"] or any(option["via"] == o["via"] for o in offered):
+                continue
+            offered.append(option)
+            found.append(option)
+        return found
+
+    def _shared_share(self, path: list[int], other: list[int]) -> float:
+        """Share of *path*'s length that also lies on *other*."""
+        other_edges = set(zip(other, other[1:])) | set(zip(other[1:], other))
+        nodes = self._graph["nodes"]
+        shared = total = 0.0
+        for a, b in zip(path, path[1:]):
+            d = dist_metres(nodes[a][0], nodes[a][1], nodes[b][0], nodes[b][1])
+            total += d
+            if (a, b) in other_edges:
+                shared += d
+        return shared / total if total else 1.0
+
+    def _apply_option(self, option: dict) -> str:
+        instructions = option["instructions"]
+        n_steps = len(instructions)
+        self.active         = True
+        self.route          = option["path"]
+        self.instructions   = instructions
+        self.step           = 1
         self.google_mode    = False
         self.route_mode     = "walking"
-        self.total_min      = total_min
-
+        self.total_min      = option["total_min"]
+        n_turns = option["n_turns"]
+        first = instructions[0][2] if instructions else ""
         msg = (
-            f"Route to {dest_name}.  "
-            f"{int(total_m)}m, {n_turns} turn{'s' if n_turns != 1 else ''}, "
+            f"Route to {self.dest_name}.  "
+            f"{int(option['total_m'])}m, {n_turns} turn{'s' if n_turns != 1 else ''}, "
             f"{n_steps} step{'s' if n_steps != 1 else ''}.  "
-            f"Step 1 of {n_steps}: {first}  "
-            f"Up for next, Down for previous, I to repeat."
+            f"Step 1 of {n_steps}: {first}"
         )
-        if approximate_dest:
+        snap = getattr(self, "_approx_snap_m", 0.0)
+        if snap:
             msg += (
-                f"  The destination is about {int(end_snap_m)}m from the nearest "
+                f"  The destination is about {int(snap)}m from the nearest "
                 "loaded street, so the final approach is approximate."
             )
-        return msg, True
+        return msg
+
+    def use_alternative(self, index: int) -> str:
+        """Switch to one of ``self.alternatives`` and return its announcement."""
+        return self._apply_option(self.alternatives[index])
+
+    def describe_alternatives(self) -> list[str]:
+        """One line per alternative, for a list the walker chooses from."""
+        lines = []
+        for i, o in enumerate(self.alternatives):
+            turns = f"{o['n_turns']} turn{'s' if o['n_turns'] != 1 else ''}"
+            extra = o["total_m"] - self.alternatives[0]["total_m"]
+            lead = "shortest" if i == 0 else f"{format_distance(extra)} longer"
+            lines.append(
+                f"Via {o['via']}: {format_distance(o['total_m'])}, about "
+                f"{o['total_min']} min, {turns} ({lead})")
+        return lines
 
     # ------------------------------------------------------------------
     # Google Maps routing
@@ -245,6 +403,7 @@ class NavigationEngine:
         (announcement_str, success)
         Raises RuntimeError on network failure so the caller can fall back.
         """
+        self.alternatives = []
         api_key = self._settings.get("google_api_key", "").strip()
         if not api_key:
             raise RuntimeError("No Google API key configured.")
@@ -300,8 +459,7 @@ class NavigationEngine:
             f"Google route to {dest_name}.  "
             f"About {total_m}m, {total_min} min, "
             f"{n_turns} turn{'s' if n_turns != 1 else ''}.  "
-            f"Step 1 of {n_steps}: {first}  "
-            f"Up for next, Down for previous, I to repeat."
+            f"Step 1 of {n_steps}: {first}"
         )
         return msg, True
 
@@ -322,6 +480,7 @@ class NavigationEngine:
 
         Raises RuntimeError on failure so the caller can fall back to OSM.
         """
+        self.alternatives = []
         api_key = self._settings.get("here_api_key", "").strip()
         if not api_key:
             raise RuntimeError("No HERE API key configured.")
@@ -391,8 +550,7 @@ class NavigationEngine:
             f"HERE route to {dest_name}.  "
             f"About {total_m}m, {total_min} min, "
             f"{n_turns} turn{'s' if n_turns != 1 else ''}.  "
-            f"Step 1 of {n_steps}: {first}  "
-            f"Up for next, Down for previous, I to repeat."
+            f"Step 1 of {n_steps}: {first}"
         )
         return msg, True
 
@@ -542,6 +700,65 @@ class NavigationEngine:
         if a < 165:  return f"sharp {side}"
         return "U-turn"
 
+    # Road classes worth naming when the walker crosses one (OSM highway=*).
+    _ROAD_CLASS_NOUNS = {
+        "motorway": "motorway",
+        "trunk": "highway",
+        "primary": "major road",
+        "secondary": "main road",
+    }
+
+    def _road_description(self, node: int, street: str) -> str:
+        """', a 6-lane major road' for a big road at ``node``, else ''.
+
+        Lanes are only given for two-way ways: a one-way way is one
+        carriageway of a divided road, and its lanes are not the road's.
+        """
+        graph = self._graph or {}
+        edge_info = graph.get("edge_info", {})
+        infos = [edge_info.get(frozenset((node, neighbour)))
+                 for neighbour, name in graph.get("edges", {}).get(node, [])
+                 if name == street]
+        infos = [info for info in infos if info]
+        noun = next((self._ROAD_CLASS_NOUNS[kind] for kind in self._ROAD_CLASS_NOUNS
+                     if any(info.get("kind") == kind for info in infos)), "")
+        lanes = {info["lanes"] for info in infos
+                 if info.get("lanes") and not info.get("oneway")}
+        lane_text = ""
+        if len(lanes) == 1 and next(iter(lanes)) >= 4:
+            lane_text = f"{next(iter(lanes))}-lane "
+            noun = noun or "road"
+        return f", a {lane_text}{noun}" if noun else ""
+
+    def _side_streets_at(self, prev: int, node: int, route_streets: set) -> tuple:
+        """Streets meeting the route at ``node``, other than the route's own.
+
+        Returns (through, passed): ``through`` lists streets that carry on
+        across the route, so the walker crosses them, each with its road
+        description; ``passed`` lists (street, side) for streets that end
+        here on one side.  A street ending nearly straight ahead or behind
+        has no clear side and is left out.
+        """
+        graph = self._graph
+        nodes, edges = graph["nodes"], graph["edges"]
+        route_names = {s.casefold() for s in route_streets if s}
+        heading = bearing_between_nodes(nodes, prev, node)
+        through, passed = [], []
+        for street in sorted(graph["node_streets"].get(node, set()), key=str.casefold):
+            folded = street.casefold()
+            if (not street or folded in route_names
+                    or folded in GENERIC_STREET_TYPES | INTERNAL_ROAD_LABELS):
+                continue
+            ways = [nb for nb, name in edges.get(node, []) if name == street]
+            if len(ways) >= 2:
+                through.append(street + self._road_description(node, street))
+            elif len(ways) == 1:
+                relative = (bearing_between_nodes(nodes, node, ways[0]) - heading
+                            + 180) % 360 - 180
+                if 30 <= abs(relative) <= 150:
+                    passed.append((street, "right" if relative > 0 else "left"))
+        return through, passed
+
     def _build_instructions(
         self,
         node_path: list[int],
@@ -583,29 +800,44 @@ class NavigationEngine:
             turn         = self._turn_word(diff)
             next_street  = _street_between(node_path[i], node_path[i + 1])
 
+            incoming_street = _street_between(node_path[i - 1], node_path[i])
             if turn != "straight":
                 onto = f" onto {next_street}" if next_street else ""
+                text = f"{turn}{onto}."
+                through = []
+                if (node_path[i] in intersections and next_street
+                        and incoming_street.casefold() == next_street.casefold()):
+                    # A jog in the street where it crosses another one, as
+                    # First Avenue does at Aerodrome Road: the walker crosses
+                    # that road rather than turning onto anything new.
+                    through, _passed = self._side_streets_at(
+                        node_path[i - 1], node_path[i], {incoming_street})
+                if through:
+                    text = (f"cross {join_names(through)}, then {turn} "
+                            f"to stay on {next_street}.")
                 wlat, wlon = nodes[node_path[i]]
                 instructions.append((
                     i, leg_dist,
-                    f"{turn}{onto}.",
+                    text,
                     wlat, wlon,
                 ))
                 leg_dist = 0.0
             elif node_path[i] in intersections:
-                incoming_street = _street_between(node_path[i - 1], node_path[i])
-                route_names = {incoming_street.casefold(), next_street.casefold()}
-                crosses = sorted({
-                    name for name in node_streets.get(node_path[i], set())
-                    if name and name.casefold() not in route_names
-                    and name.casefold() not in GENERIC_STREET_TYPES | INTERNAL_ROAD_LABELS
-                }, key=str.casefold)
-                if crosses:
-                    cross_text = ", ".join(crosses)
+                through, passed = self._side_streets_at(
+                    node_path[i - 1], node_path[i], {incoming_street, next_street})
+                sentences = []
+                if through:
+                    sentences.append(f"Continue across {join_names(through)}.")
+                for street, side in passed:
+                    if sentences:
+                        sentences.append(f"{street} is on your {side}.")
+                    else:
+                        sentences.append(f"Continue past {street} on your {side}.")
+                if sentences:
                     wlat, wlon = nodes[node_path[i]]
                     instructions.append((
                         i, leg_dist,
-                        f"Continue across {cross_text}.",
+                        "  ".join(sentences),
                         wlat, wlon,
                     ))
                     leg_dist = 0.0
@@ -1036,6 +1268,7 @@ import wx
 from dialogs import POICategoryDialog, StreetSearchDialog
 from logging_utils import miab_log
 from poi_fetch import filter_pois_by_category
+from route_pois import describe_pois_along, describe_sides
 
 _NAV_ARRIVAL_CONTEXT_DELAY_MS = 2500
 
@@ -1118,6 +1351,114 @@ class NavMixin:
         else:
             heading = f"{prefix} {category}"
         return f"{heading}: " + "; ".join(labels) + "."
+
+    def _nav_step_leg(self, idx):
+        """The stretch walked for route step ``idx``: from the previous step's
+        point to this one.  Returns (path, polyline, streets, graph), or None
+        when the route keeps no node path (Google and HERE routes)."""
+        route = getattr(self, "_nav_route", []) or []
+        graph = getattr(getattr(self, "_nav", None), "_graph", None) \
+            or getattr(self, "_walk_graph", None) or {}
+        nodes = graph.get("nodes", {})
+        instructions = getattr(self, "_nav_instructions", [])
+        if not route or not nodes:
+            return None
+        try:
+            start = int(instructions[idx - 1][0]) if idx > 0 else 0
+            path = route[start:int(instructions[idx][0]) + 1]
+        except (TypeError, ValueError, IndexError):
+            return None
+        if len(path) < 2 or any(node not in nodes for node in path):
+            return None
+        polyline = [tuple(nodes[node]) for node in path]
+        edges = graph.get("edges", {})
+        streets = [next((name for neighbour, name in edges.get(a, []) if neighbour == b), "")
+                   for a, b in zip(path, path[1:])]
+        return path, polyline, streets, graph
+
+    def _nav_leg_pois(self, polyline):
+        """Loaded POIs near a stretch.  Samples every 50 m; a 60 m search
+        radius then covers the 40 m either side that route_pois considers."""
+        pois, seen = [], set()
+        for (alat, alon), (blat, blon) in zip(polyline, polyline[1:]):
+            samples = max(1, int(dist_metres(alat, alon, blat, blon) // 50) + 1)
+            for k in range(samples + 1):
+                t = k / samples
+                for poi in self._poi_grid_nearby(alat + (blat - alat) * t,
+                                                 alon + (blon - alon) * t, 60):
+                    if id(poi) not in seen:
+                        seen.add(id(poi))
+                        pois.append(poi)
+        return pois
+
+    def _nav_step_poi_text(self, idx, entry):
+        """Places passed during a route step, in order and by side.
+
+        MIAB's own walking routes keep the node path between turns, so the
+        step says "You'll pass KFC on your left, then ..." and leaves out any
+        place whose order or side is doubtful.  Google and HERE routes keep
+        no step geometry, so they keep the nearby list at the step's point.
+        """
+        leg = self._nav_step_leg(idx)
+        if leg is None:
+            if len(entry) >= 5 and self._nav_valid_coord(entry[3], entry[4]):
+                return self._nearby_walk_poi_text(entry[3], entry[4], prefix="Nearby")
+            return ""
+        if not self.settings.get("walk_announce_pois"):
+            return ""
+        _path, polyline, streets, _graph = leg
+        pois = self._nav_leg_pois(polyline)
+        category = (self.settings.get("walk_poi_category", "all") or "all").lower()
+        if category != "all":
+            pois = filter_pois_by_category(pois, category)
+        return describe_pois_along(polyline, streets, pois,
+                                   getattr(self, "_address_points", []))
+
+    def _nav_stretch_summary(self, idx):
+        """Shift+I — a description of one stretch from MIAB's own data.
+
+        "First Avenue, a main road, 108 metres from Aerodrome Road to George
+        Street.  On your left: KFC.  On your right: ...  At the end, right
+        onto George Street."  Empty for routes without a node path.
+        """
+        leg = self._nav_step_leg(idx)
+        if leg is None:
+            return ""
+        path, polyline, streets, graph = leg
+        entry = self._nav_instructions[idx]
+        names = []
+        for street in streets:
+            if street and (not names or names[-1].casefold() != street.casefold()):
+                names.append(street)
+        excluded = {n.casefold() for n in names} | GENERIC_STREET_TYPES | INTERNAL_ROAD_LABELS
+
+        def others(node):
+            return sorted((s for s in graph.get("node_streets", {}).get(node, set())
+                           if s and s.casefold() not in excluded), key=str.casefold)
+
+        length = sum(dist_metres(a[0], a[1], b[0], b[1])
+                     for a, b in zip(polyline, polyline[1:]))
+        road = self._nav._road_description(path[0], names[0]) if names else ""
+        opening = f"{' then '.join(names) or 'This stretch'}{road}, {format_distance(int(round(length)))}"
+        arrival = "arriv" in str(entry[2]).lower()
+        if idx == 0:
+            opening += " from your start"
+        elif others(path[0]):
+            opening += " from " + join_names(others(path[0]))
+        if arrival:
+            opening += f" to {getattr(self, '_nav_dest_name', '') or 'your destination'}"
+        elif others(path[-1]):
+            opening += " to " + join_names(others(path[-1]))
+        sides = describe_sides(polyline, streets, self._nav_leg_pois(polyline),
+                               getattr(self, "_address_points", []))
+        if not sides:
+            sides = "No places are recorded along this stretch."
+        text = NavigationEngine._clean_provider_instruction(str(entry[2]))
+        if arrival:
+            ending = f"Then you arrive at {getattr(self, '_nav_dest_name', '') or 'your destination'}."
+        else:
+            ending = f"At the end, {text[:1].lower() + text[1:]}"
+        return f"{opening}.  {sides}  {ending}"
 
     def _nav_to_address(self):
         """G key in street mode — choose destination type then start navigation."""
@@ -1230,23 +1571,17 @@ class NavMixin:
         """Pick a destination from the loaded POI list, fetching first if needed."""
         pois = getattr(self, '_poi_list', [])
         if not pois:
-            sources = ["osm"]
-            if self.settings.get("here_api_key", "").strip():
-                sources.append("here")
-            if self.settings.get("google_api_key", "").strip():
-                sources.append("google")
-            dlg = POICategoryDialog(self, available_sources=sources)
+            dlg = POICategoryDialog(self)
             if dlg.ShowModal() != wx.ID_OK or not dlg.selected_key:
                 dlg.Destroy()
                 self.listbox.SetFocus()
                 return
             category = dlg.selected_key
             name     = dlg.selected_name
-            source   = dlg.selected_source
             dlg.Destroy()
             self._status_update("Loading points of interest...")
             def _fetch_then_pick():
-                self._fetch_pois(category, name_filter=name, source=source)
+                self._fetch_pois(category, name_filter=name)
                 wx.CallAfter(self._nav_to_poi_pick)
             threading.Thread(target=_fetch_then_pick, daemon=True).start()
             return
@@ -1381,19 +1716,50 @@ class NavMixin:
         self._nav.set_graph(self._walk_graph)
         self._nav.update_settings(self.settings)
         wx.CallAfter(self._nav_status, "Calculating route...")
+        from_street = (getattr(self, "street_label", "") or "").strip() or None
         msg, ok = self._nav.find_route_osm(
-            self.lat, self.lon, dest_lat, dest_lon, dest_name)
+            self.lat, self.lon, dest_lat, dest_lon, dest_name,
+            from_street=from_street, alternatives=True)
         if ok:
             self._sync_nav_state_from_engine()
             miab_log(
                 "navigation",
-                f"OSM route started: target={dest_name!r} steps={len(self._nav_instructions)}",
+                f"OSM route started: target={dest_name!r} from_street={from_street!r} "
+                f"steps={len(self._nav_instructions)} "
+                f"options={len(self._nav.alternatives) or 1}",
                 self.settings,
             )
         else:
             fail(str(msg or "No route was returned."), detail=msg)
             return
+        if len(self._nav.alternatives) > 1:
+            wx.CallAfter(self._nav_choose_route, dest_name)
+            return
         wx.CallAfter(self._nav_begin_route, dest_name, "Route")
+
+    def _nav_choose_route(self, dest_name):
+        """More than one sensible way: let the walker pick before step one.
+
+        Enter takes the highlighted route; Escape takes the shortest, so
+        dismissing the list never leaves the walker without directions.
+        """
+        lines = self._nav.describe_alternatives()
+        dlg = wx.SingleChoiceDialog(
+            self,
+            f"There are {len(lines)} ways to {dest_name}. Choose one, or press "
+            "Escape for the shortest.",
+            "Choose a route", lines)
+        dlg.SetSelection(0)
+        try:
+            index = dlg.GetSelection() if dlg.ShowModal() == wx.ID_OK else 0
+        finally:
+            dlg.Destroy()
+        self._nav.use_alternative(max(0, index))
+        self._sync_nav_state_from_engine()
+        miab_log("navigation",
+                 f"OSM route chosen: option {index + 1} of {len(lines)}: {lines[index]}",
+                 self.settings)
+        self._nav_begin_route(dest_name, "Route")
 
     def _nav_start_google(self, dest_lat, dest_lon, dest_name,
                           allow_osm_fallback=True, travel_mode="walking",
@@ -1493,7 +1859,7 @@ class NavMixin:
         n_turns = sum(
             1 for inst in instructions
             if "arriving" not in inst[2].lower()
-            and not inst[2].lower().startswith("continue across ")
+            and not inst[2].lower().startswith(("continue across ", "continue past "))
         )
         first = self._nav_format_instruction(0, instructions[0])
         dist_part = f"{total_m}m, " if total_m > 0 else ""
@@ -1505,8 +1871,7 @@ class NavMixin:
             f"{first}  {provider} to {dest_name}.  "
             f"{mode_label}, {dist_part}{time_part}"
             f"{n_turns} turn{'s' if n_turns != 1 else ''}, "
-            f"{n_steps} step{'s' if n_steps != 1 else ''}.  "
-            f"Up for next, Down for previous, I to repeat."
+            f"{n_steps} step{'s' if n_steps != 1 else ''}."
         )
 
     def _nav_begin_route(self, dest_name, provider="Route"):
@@ -1534,22 +1899,11 @@ class NavMixin:
         self._nav_step = 1
         self._nav.step = 1
         message = self._nav_route_summary(dest_name, provider=provider)
-        # A route commonly starts while focus is still on the POI used as the
-        # destination.  Direct speech can then be interrupted (or never read)
-        # by that list's native selection event.  Replace the POI list with a
-        # focused, native navigation row so screen readers have one stable
-        # object containing instruction one.
-        if hasattr(self, "_replace_poi_action_item"):
-            # Any background/live POI request that began before navigation is
-            # now stale.  Prevent its completion callback from restoring the
-            # destination POI over instruction one.
-            self._poi_context_generation = getattr(
-                self, "_poi_context_generation", 0) + 1
-            self._replace_poi_action_item(message, clear_model=True)
-        elif hasattr(self, "_announce_transient"):
-            self._announce_transient(message)
-        else:
-            self._nav_status(message)
+        # Any background/live POI request that began before navigation is now
+        # stale; its completion must not re-announce the destination POI.
+        self._poi_context_generation = getattr(
+            self, "_poi_context_generation", 0) + 1
+        self._nav_say_first_instruction(message)
 
     def _nav_next_instruction_str(self) -> str:
         """Delegate to NavigationEngine."""
@@ -1577,65 +1931,44 @@ class NavMixin:
             else:
                 self._nav_update_ui(f"Heading to {self._nav_dest_name}.")
 
-    def _nav_request_narrative_briefing(self):
-        """Kick off narrative briefing after the current UI event returns."""
-        wx.CallAfter(self._nav_narrative_briefing)
+    def _nav_request_route_summary(self):
+        """Run the stretch summary after the current UI event returns."""
+        wx.CallAfter(self._nav_shift_i_summary)
 
-    def _nav_narrative_briefing(self):
-        """Shift+I — load an AI-generated full pedestrian briefing and
-        enter step-through briefing mode.
+    def _nav_shift_i_summary(self):
+        """Shift+I — describe the stretch you are on, from MIAB's own data.
 
-        Only available for OSM routes (where we have a node path with named
-        cross streets). Falls back to the deterministic step list if the AI
-        is not available, fails, or returns invented street names.
-
-        Once loaded, Up/Down walk through briefing steps, I repeats the
-        current step, and Escape exits briefing mode (back to normal nav
-        step-through, with the route still active).
+        Pressing again on the same stretch steps through the whole route,
+        stretch by stretch: Up/Down move, I repeats, Escape closes and the
+        route stays active.  Only MIAB walking routes keep the street shape
+        this needs.
         """
-        from accessible_route import start_narrative_briefing
-        start_narrative_briefing(self)
+        instructions = getattr(self, "_nav_instructions", []) or []
+        if not getattr(self, "_nav_active", False) or not instructions:
+            self._announce_transient("No route is active.")
+            return
+        if not getattr(self, "_nav_route", None):
+            self._announce_transient(
+                "Stretch summaries need a Map in a Box walking route. "
+                "Google and HERE routes do not include the street shape.")
+            return
+        idx = max(0, min(getattr(self, "_nav_step", 1) - 1, len(instructions) - 1))
+        shown = (idx, id(instructions))
+        if getattr(self, "_nav_summary_shown_for", None) == shown:
+            self._nav_summary_shown_for = None
+            steps = [self._nav_stretch_summary(i) for i in range(len(instructions))]
+            self._nav_briefing_enter([step for step in steps if step], title="Route summary")
+            return
+        text = self._nav_stretch_summary(idx)
+        if not text:
+            self._announce_transient("No summary is available for this stretch.")
+            return
+        self._nav_summary_shown_for = shown
+        self._nav_update_ui(text)
 
-    @staticmethod
-    def _parse_briefing_steps(text: str) -> list[str]:
-        """Split the AI's numbered narrative into discrete steps.
-
-        The system prompt asks for each numbered step on its own line, so we
-        split on lines beginning with `<digits>.` and re-join any wrapped
-        continuation lines back onto their parent step.
-        """
-        import re as _re
-        lines = [ln.rstrip() for ln in (text or "").splitlines()]
-        steps: list[str] = []
-        cur: list[str] = []
-        for ln in lines:
-            if not ln.strip():
-                if cur:
-                    cur.append("")
-                continue
-            m = _re.match(r"^\s*(\d+)[.)]\s+(.*)$", ln)
-            if m:
-                if cur:
-                    steps.append(" ".join(s for s in cur if s).strip())
-                    cur = []
-                cur.append(m.group(2).strip())
-            else:
-                # Continuation of the current step.
-                if cur:
-                    cur.append(ln.strip())
-                # If we haven't seen a numbered line yet, ignore preamble lines.
-        if cur:
-            steps.append(" ".join(s for s in cur if s).strip())
-        # Drop empties and trim runs of whitespace inside each step.
-        cleaned = []
-        for s in steps:
-            s2 = _re.sub(r"\s{2,}", " ", s).strip()
-            if s2:
-                cleaned.append(s2)
-        return cleaned
-
-    def _nav_briefing_enter(self, steps: list[str]):
+    def _nav_briefing_enter(self, steps: list[str], title: str = "Briefing"):
         """Begin step-through of a freshly loaded briefing."""
+        self._nav_briefing_title = title
         self._nav_briefing_mode  = True
         self._nav_briefing_steps = steps
         self._nav_briefing_step  = 0
@@ -1659,11 +1992,8 @@ class NavMixin:
             return
         idx = max(0, min(idx, len(steps) - 1))
         self._nav_briefing_step = idx
-        prefix = "Briefing.  " if intro else ""
-        suffix = "  Up for next, Down for previous, I to repeat, Escape to close."
+        prefix = f"{getattr(self, '_nav_briefing_title', 'Briefing')}.  " if intro else ""
         msg = f"{prefix}Step {idx + 1} of {len(steps)}.  {steps[idx]}"
-        if intro or idx == 0:
-            msg += suffix
         self._nav_update_ui(msg)
 
     def _nav_briefing_next(self):
@@ -1672,7 +2002,7 @@ class NavMixin:
             return
         if self._nav_briefing_step >= len(steps) - 1:
             self._announce_transient(
-                "End of briefing. Down for previous, Escape to close.")
+                "End of briefing.")
             return
         self._nav_briefing_step += 1
         self._nav_briefing_announce_current()
@@ -1683,7 +2013,7 @@ class NavMixin:
             return
         if self._nav_briefing_step <= 0:
             self._announce_transient(
-                "Start of briefing. Up for next, Escape to close.")
+                "Start of briefing.")
             return
         self._nav_briefing_step -= 1
         self._nav_briefing_announce_current()
@@ -1691,7 +2021,6 @@ class NavMixin:
     def _play_arrival_sound(self):
         """Play a distinct sound on arriving at navigation destination."""
         import numpy as np
-        import pygame
         def _gen():
             sr = 44100
             # Three rising tones — celebratory but brief
@@ -1703,8 +2032,7 @@ class NavMixin:
             full = np.concatenate(segments)
             audio = (full * 14000).astype(np.int16)
             stereo = np.ascontiguousarray(np.stack([audio, audio], axis=-1))
-            snd = pygame.sndarray.make_sound(stereo)
-            pygame.mixer.Channel(1).play(snd)
+            self.sound.play_array_on_channel(stereo, 1)
         threading.Thread(target=_gen, daemon=True).start()
 
     def _nav_arrival_context(self):
@@ -1729,17 +2057,40 @@ class NavMixin:
             self._nav_arrival_provider_mode = False
             self._nav_update_ui(msg)
             return
+        self._nav_update_ui(self._nav_arrival_street_text())
+
+    def _nav_arrival_street_text(self):
+        """'Arrived. Near George Street and Maud Street.' for a MIAB route."""
         label, cross = self._nearest_road(self.lat, self.lon)
         no_data = ("No street data nearby", "No street data", "Unknown", "")
         if label in no_data:
-            msg = "Arrived. Street position unknown."
-        elif cross:
-            msg = f"Arrived. Near {label} and {cross}."
-        else:
-            msg = f"Arrived. On {label}."
-        self._nav_update_ui(msg)
+            return "Arrived. Street position unknown."
+        if cross:
+            return f"Arrived. Near {label} and {cross}."
+        return f"Arrived. On {label}."
 
-    def _nav_finish_arrival(self):
+    def _nav_record_destination(self):
+        """Add the route's destination to the address history (Ctrl+A)."""
+        record = getattr(self, "_record_address", None)
+        if record is None:
+            return
+        name = getattr(self, "_nav_dest_name", "") or ""
+        lat = getattr(self, "_nav_dest_lat", None)
+        lon = getattr(self, "_nav_dest_lon", None)
+        if not self._nav_valid_coord(lat, lon):
+            lat, lon = self.lat, self.lon
+        pin = getattr(self, "_nav_street_pin", None)
+        street = pin[2] if pin and (pin[0], pin[1]) == (self.lat, self.lon) else ""
+        if not street and getattr(self, "street_mode", False):
+            label, _cross = self._nearest_road(float(lat), float(lon))
+            if label not in ("", "Unknown", "No street data", "No street data nearby"):
+                street = label
+        number = ""
+        if street and hasattr(self, "_nearest_address_number"):
+            number = self._nearest_address_number(float(lat), float(lon), street, radius=60) or ""
+        record(number, street, lat, lon, name=name)
+
+    def _nav_finish_arrival(self, context_later=True):
         """Fire arrival sound + final context the first time the user reaches
         the destination. Navigation stays active so the user can keep stepping
         back and forward through the route; Escape exits."""
@@ -1749,6 +2100,7 @@ class NavMixin:
             return
         self._nav_arrived = True
         self._nav_arrival_provider_mode = getattr(self, "_nav_google_mode", False)
+        self._nav_record_destination()
         dest_name = getattr(self, "_nav_dest_name", "") or "destination"
         dest_lat = getattr(self, "_nav_dest_lat", None)
         dest_lon = getattr(self, "_nav_dest_lon", None)
@@ -1768,10 +2120,10 @@ class NavMixin:
             )
             threading.Thread(target=self._lookup, daemon=True).start()
         wx.CallAfter(self._play_arrival_sound)
-        # Let the final turn instruction finish speaking before the secondary
-        # GPS/street context uses the same speech channel.
-        wx.CallLater(_NAV_ARRIVAL_CONTEXT_DELAY_MS, self._nav_arrival_context)
-        wx.CallLater(3500, self._nav_arrival_streetview)
+        if context_later:
+            # Let the final turn instruction finish speaking before the
+            # secondary GPS/street context uses the same speech channel.
+            wx.CallLater(_NAV_ARRIVAL_CONTEXT_DELAY_MS, self._nav_arrival_context)
 
     def _nav_check_progress(self, current_nid) -> str:
         """Delegate to NavigationEngine. Syncs state and fires arrival sound."""
@@ -1785,13 +2137,14 @@ class NavMixin:
         self._nav_active         = self._nav.active
         if arrived:
             wx.CallAfter(self._play_arrival_sound)
+            self._nav_record_destination()
         if announced:
             idx = max(0, min(self._nav_step - 1, len(self._nav_instructions) - 1))
             announced = self._nav_format_instruction(idx, self._nav_instructions[idx])
             if not arrived:
                 entry = self._nav_instructions[idx]
                 if len(entry) >= 5 and self._nav_valid_coord(entry[3], entry[4]):
-                    poi_text = self._nearby_walk_poi_text(entry[3], entry[4], prefix="Nearby")
+                    poi_text = self._nav_step_poi_text(idx, entry)
                     if poi_text:
                         announced = f"{announced}  {poi_text}"
         return announced
@@ -2040,51 +2393,61 @@ class NavMixin:
             else:
                 self._status_update("Cross street information not available.", force=True)
 
-    def _nav_arrival_streetview(self):
-        """Announce a Street View description at the destination after arrival.
-
-        Only fires when Google StreetView and AI vision are both available.
-        Runs text-only (no dialog) so it doesn't interrupt the user's workflow.
-        """
+    def _nav_route_street_at(self, idx):
+        """The street the route follows from step ``idx``'s point: the edge
+        leaving it, or for the last step the edge arriving.  "" for routes
+        without a node path."""
+        route = getattr(self, "_nav_route", []) or []
+        graph = getattr(getattr(self, "_nav", None), "_graph", None) \
+            or getattr(self, "_walk_graph", None) or {}
+        edges = graph.get("edges", {})
         try:
-            from streetview import lookup_streetview_description
-        except ImportError:
-            return
-        google_key = self.settings.get("google_api_key", "").strip()
-        ai = getattr(self, "_ai", None)
-        if not google_key or not ai or not getattr(ai, "is_configured", False):
-            return
-        dest_lat = getattr(self, "_nav_dest_lat", None)
-        dest_lon = getattr(self, "_nav_dest_lon", None)
-        if not self._nav_valid_coord(dest_lat, dest_lon):
-            return
+            i = int(self._nav_instructions[idx][0])
+        except (TypeError, ValueError, IndexError, AttributeError):
+            return ""
+        if not route or not 0 <= i < len(route):
+            return ""
+        a, b = (route[i], route[i + 1]) if i + 1 < len(route) else (route[i - 1], route[i])
+        return next((name for neighbour, name in edges.get(a, []) if neighbour == b), "")
 
-        import os, sys
-        _base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-        cache_path = os.path.join(_base, "streetview_cache.json")
+    def _nav_sync_street_position(self, instruction_text="", idx=None):
+        """Keep street mode on the route position as steps move it.
 
-        def _fetch():
-            try:
-                result = lookup_streetview_description(
-                    float(dest_lat), float(dest_lon),
-                    google_api_key=google_key,
-                    ai_client=ai,
-                    street_heading=None,
-                    cache_path=cache_path,
-                    include_images=False,
-                    mode="navigation",
-                )
-                if result:
-                    _, desc = result
-                    if desc:
-                        wx.CallAfter(
-                            self._announce_transient,
-                            f"Street View at destination: {desc}",
-                        )
-            except Exception as exc:
-                miab_log("errors", f"[Nav] Arrival StreetView failed: {exc}", None)
-
-        threading.Thread(target=_fetch, daemon=True).start()
+        Page Up/Down, X, A and the street display read ``street_label``.
+        Left alone it stays on the street where navigation started.  A step's
+        point is a turn or crossing, where the nearest road is as likely the
+        cross street ("continue across Lindsay Street" sits on Lindsay
+        Street), so use the street the route takes from there; failing that
+        the street the instruction names ("onto First Avenue"), then the
+        nearest road.  ``_nav_street_pin`` records it for this position.
+        """
+        if not getattr(self, "street_mode", False):
+            return
+        label = ""
+        if idx is not None:
+            route_street = self._nav_route_street_at(idx)
+            if route_street and self._street_survey_segments_for(route_street):
+                label = route_street
+        match = re.search(r"\b(?:onto|on)\s+([^.]+?)\s*\.?\s*$", instruction_text or "")
+        if not label and match:
+            hint = match.group(1).strip()
+            if self._street_survey_segments_for(hint):
+                label = hint
+        if not label:
+            label, _cross = self._nearest_road(self.lat, self.lon)
+        self.street_label = label
+        self._nav_street_pin = (self.lat, self.lon, label)
+        # The step moved the position, so an address chosen earlier with S
+        # or Page Up/Down no longer describes it.  A trusts that pin within
+        # 150 m: at Vibe Hotel North Sydney it still said "8-20 Napier
+        # Street", where the route began.
+        self._jump_street_label = None
+        self._jump_street_pin_lat = None
+        self._jump_street_pin_lon = None
+        self._jump_address_number = None
+        self._jump_address_street = None
+        self._clear_street_survey_cache()
+        wx.CallAfter(self.map_panel.set_position, self.lat, self.lon, True, label)
 
     def _nav_step_forward(self):
         """Up arrow during navigation — announce next instruction, silently move position."""
@@ -2095,8 +2458,7 @@ class NavMixin:
             # user the route is finished; Down still steps back, Escape exits.
             if getattr(self, '_nav_arrived', False):
                 self._nav_update_ui(
-                    f"End of route at {self._nav_dest_name}. "
-                    "Down arrow to step back, Escape to exit navigation.")
+                    f"End of route at {self._nav_dest_name}.")
             else:
                 self._nav_update_ui(f"You have arrived at {self._nav_dest_name}.")
                 self._nav_finish_arrival()
@@ -2114,16 +2476,25 @@ class NavMixin:
                     self.settings,
                 )
         self._nav_step += 1
-        msg = self._nav_format_instruction(step, entry)
+        self._nav_sync_street_position(text, step)
+        # The arrival step lists its stretch too (23 George Street sits
+        # between the final turn and 19 George Street).
+        msg = self._nav_step_message(step, entry)
 
         arrived = "arriving" in text.lower() or self._nav_step >= len(instructions)
-        if not arrived and len(entry) >= 5 and self._nav_valid_coord(entry[3], entry[4]):
-            poi_text = self._nearby_walk_poi_text(entry[3], entry[4], prefix="Nearby")
-            if poi_text:
-                msg = f"{msg}  {poi_text}"
 
         if arrived:
-            self._nav_finish_arrival()
+            # A timed "Arrived. Near ..." cut off a longer arrival step (one
+            # listing the places on the last stretch), so say it as part of
+            # this message instead.  Provider routes' context only repeated
+            # the final instruction.
+            first_arrival = not getattr(self, "_nav_arrived", False)
+            self._nav_finish_arrival(context_later=False)
+            if first_arrival and getattr(self, "street_mode", False):
+                if getattr(self, "_nav_arrival_provider_mode", False):
+                    self._nav_arrival_provider_mode = False
+                else:
+                    msg = f"{msg}  {self._nav_arrival_street_text()}"
         self._nav_update_ui(msg)
 
     def _nav_step_back(self):
@@ -2132,7 +2503,7 @@ class NavMixin:
         if step <= 1:
             instructions = getattr(self, '_nav_instructions', [])
             if instructions:
-                self._nav_update_ui(self._nav_format_instruction(0, instructions[0]))
+                self._nav_say_first_instruction(self._nav_step_message(0, instructions[0]))
             else:
                 self._nav_update_ui("No previous instruction.")
             return
@@ -2147,5 +2518,35 @@ class NavMixin:
                     f"Ignored invalid route coordinate: lat={entry[3]!r} lon={entry[4]!r}",
                     self.settings,
                 )
-        self._nav_update_ui(
-            self._nav_format_instruction(self._nav_step - 1, entry))
+        self._nav_sync_street_position(entry[2] if len(entry) > 2 else "",
+                                       self._nav_step - 1)
+        message = self._nav_step_message(self._nav_step - 1, entry)
+        if self._nav_step == 1:
+            self._nav_say_first_instruction(message)
+        else:
+            self._nav_update_ui(message)
+
+    def _nav_say_first_instruction(self, message):
+        """Speak step one without leaving it anywhere.
+
+        Written to the status line it stuck there, and written into the
+        focused row it replaced what the user had (Insert+Tab still read the
+        route summary long after).  Spoken after focus settles, it cannot be
+        cut off by the list's own selection announcement either.
+        """
+        if hasattr(self, "_announce_transient_then_return"):
+            self._announce_transient_then_return(message)
+        elif hasattr(self, "_announce_transient"):
+            self._announce_transient(message)
+        else:
+            self._nav_update_ui(message)
+
+    def _nav_step_message(self, idx, entry):
+        """A step as spoken when moving through the route: the instruction
+        and, the same both ways, the places passed on its stretch."""
+        msg = self._nav_format_instruction(idx, entry)
+        if len(entry) >= 5 and self._nav_valid_coord(entry[3], entry[4]):
+            poi_text = self._nav_step_poi_text(idx, entry)
+            if poi_text:
+                msg = f"{msg}  {poi_text}"
+        return msg

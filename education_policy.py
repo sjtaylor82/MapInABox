@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 EDUCATION_TOOL_CHOICES = (
+    ("Journey AudioGraph", "journey_audiograph"),
     ("Detour Calculator", "detour_calculator"),
     ("Suburb Lister", "route_explorer"),
     ("Shared Journey", "rendezvous_point"),
@@ -30,6 +31,7 @@ EDUCATION_NEVER_AVAILABLE = frozenset({
 # A missing or damaged policy enables only straightforward information tools.
 # Schools can enable the other permitted tools with administrator approval.
 DEFAULT_EDUCATION_TOOLS = frozenset({
+    "journey_audiograph",
     "detour_calculator",
     "route_explorer",
     "toll_compare",

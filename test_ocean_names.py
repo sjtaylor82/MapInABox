@@ -8,3 +8,10 @@ def test_southern_philippine_water_is_celebes_sea():
 def test_open_water_uses_ocean_sound_despite_nearby_country_context():
     assert _ambient_sound_place("Philippines", on_land=False) == "ocean"
     assert _ambient_sound_place("Philippines", on_land=True) == "Philippines"
+
+
+def test_water_east_of_sydney_is_tasman_sea():
+    assert MapNavigator._ocean_name(None, -33.84, 155.0) == "Tasman Sea"
+    assert MapNavigator._ocean_name(None, -36.5, 165.0) == "Tasman Sea"
+    # East of New Zealand's North Island is still the Pacific.
+    assert MapNavigator._ocean_name(None, -36.5, 179.0) != "Tasman Sea"

@@ -80,6 +80,7 @@ a = Analysis(
         ('languages_data.json',  '.'),
         ('gtfs_overrides.json',  '.'),
         ('manual.html',          '.'),
+        ('download_qr.png',      '.'),   # Help, Show Download Link
         ('LICENSE',              '.'),
         ('THIRD_PARTY_NOTICES.txt', '.'),
         ('TRADEMARKS.md',        '.'),
@@ -100,6 +101,13 @@ a = Analysis(
         'wx.lib.agw',
         # tzfpy (Rust extension) — make sure the compiled module is found
         'tzfpy',
+        # pyserial — Dot Pad tactile display over USB
+        'serial.tools.list_ports_windows',
+        # Windows' built-in OCR, used to read labels on traced map pictures
+        'winrt.windows.media.ocr', 'winrt.windows.graphics.imaging',
+        'winrt.windows.storage', 'winrt.windows.storage.streams',
+        'winrt.windows.globalization', 'winrt.windows.foundation',
+        'winrt.windows.foundation.collections',
     ],
     hookspath=[],
     hooksconfig={},

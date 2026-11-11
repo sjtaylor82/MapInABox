@@ -783,7 +783,7 @@ class LookupsMixin:
     # ------------------------------------------------------------------
 
     def _jump_nearest_land(self, direction):
-        """Ctrl+Alt+Arrow — jump along a compass line to the next country."""
+        """Alt+Arrow — jump along a compass line to the next country."""
         if getattr(self, '_nearest_land_searching', False):
             return
         self._nearest_land_searching = True

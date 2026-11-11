@@ -26,6 +26,7 @@ project remain applicable.
 - accessible-output2 — MIT
 - Google Gen AI SDK, Google API Core, and proto-plus — Apache-2.0
 - certifi — MPL-2.0
+- pySerial — BSD-3-Clause
 - PyInstaller bootloader — GPL-2.0-or-later with the PyInstaller exception
 
 Bundled and downloaded data

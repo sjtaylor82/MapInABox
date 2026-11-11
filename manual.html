@@ -25,7 +25,7 @@
 <body>
 
 <h1>Map in a Box — User Manual</h1>
-<p><strong>Version 2026.9.4</strong> &nbsp;|&nbsp; Windows &amp; macOS</p>
+<p><strong>Version 2026.11.0</strong> &nbsp;|&nbsp; Windows &amp; macOS</p>
 
 
 <nav aria-label="Table of contents">
@@ -86,7 +86,7 @@
 
 <p>Map mode is the starting point for world exploration. The arrow keys move your position across a two-dimensional map. As you move, Map in a Box announces the current country, city or suburb and nearby landmarks, borders, and bodies of water.</p>
 
-<p>Use the arrow keys for normal movement, <code>Shift+Arrow</code> for smaller steps, and <code>Ctrl+Arrow</code> for larger steps. Use <code>Ctrl+Alt+Arrow</code> to jump to the nearest foreign country in that direction.</p>
+<p>Use the arrow keys for normal movement, <code>Shift+Arrow</code> for smaller steps, and <code>Ctrl+Arrow</code> for larger steps. Use <code>Alt+Arrow</code> to jump to the nearest foreign country in that direction.</p>
 
 <p>If demonstrating to a visual learner or educator, press <code>Shift+F8</code> to switch the map display between <strong>World</strong> and <strong>Country</strong> modes. World mode is the default global view, while Country mode fits the current country to the map. Use <code>Ctrl+Plus</code> and <code>Ctrl+Minus</code> for geographic visual zoom from 1x through 128x; <code>Ctrl+0</code> returns to 1x. Closer Country views progressively show populated places, but never load or draw streets.</p>
 
@@ -118,9 +118,45 @@
 
 <p>The creator decides which paths are connected and which places are announced. This is useful for teaching a specific safe or permitted route without unrelated map detail. Multi-floor maps can represent different levels of a building, and the portable <code>.miabmap</code> file can be shared with another Map in a Box user.</p>
 
-<p>Select <strong>File, Create Map File</strong> to draw a simple map. Begin with a blank page or import a JPG, PNG, or PDF as a visual guide. A multi-page PDF can be imported as separate floors. Use the floor selector in the builder, draw the paths students may travel, select <strong>Add a place</strong>, click its position, and enter its name. Test a route, then save the portable <code>.miabmap</code> file. Select <strong>File, Edit Map File</strong> to change an existing map made from any supported source.</p>
+<p>Teachers, orientation and mobility instructors and parents can make a map of a classroom, school, campus or building for students to explore. Select <strong>File, Create Map File</strong>. It works fully with a screen reader and keyboard, or with a mouse.</p>
 
-<p>Select <strong>File, Open Map File</strong> to explore one. The arrow keys move only along connected drawn paths with spatial sound and announce nearby labelled entrances and places. Press <code>Ctrl+Page Up</code> or <code>Ctrl+Page Down</code> to explore another floor. Press <code>Ctrl+Home</code> or <code>Ctrl+End</code> for the top or bottom accessible point. Press <code>Ctrl+R</code> to choose two places, hear their crow-flight relationship, calculate a route that follows only the connected drawn paths, or explore that route with Journey Planner sound. Nearby but unconnected paths—such as parallel shopping-centre aisles—are never treated as connected. Press <code>Escape</code> to close the map file.</p>
+<ol>
+  <li><strong>Choose how to start.</strong> <em>Create from scratch</em> needs no picture: draw the map with a mouse, or build it with the keyboard by naming places and their distances, as these steps describe. <em>Import PDF</em> makes the whole map for you from a floor plan PDF or a picture of one; see <a href="#import-pdf">Making a map from a PDF</a> below.</li>
+  <li><strong>Name the map.</strong></li>
+  <li><strong>Add places.</strong> Choose <strong>Add place</strong> and type its name, and optionally a description that students hear when they reach it. For every place after the first, say where it is: the place to measure from, the distance, and a compass direction, for example 12 metres north-east of the Office. Leave <em>Join it to that place with a path</em> ticked and directions work straight away. Distances are typed and spoken in metres, or in feet and inches if Distance units is set to Imperial in Settings; you can also type units, such as 6 feet 4 inches.</li>
+  <li><strong>Add paths automatically</strong> (imported floors; Import PDF already does this). Map in a Box finds the corridors and concourses on the picture, by the shade they are drawn in, and joins every place to them, so directions work without drawing. It reports how many places it joined, then offers to delete the labels it could not join, which are usually legend or title text. Shops named from the key are never in that offer; any it could not join are named so you can join them yourself. Check map and Test as a student then show where it needs help, and Undo removes everything it added. It works best on plans that draw walkways in their own shade; outdoor areas drawn in the same shade, such as roads, can be included, so test the routes.</li>
+  <li><strong>Join places.</strong> Use <strong>Join two places</strong> for any other walkway, such as a second corridor.</li>
+  <li><strong>Drawing with a mouse.</strong> Choose a tool in the <em>Mouse</em> box. On a floor with no picture, Map in a Box first asks how wide the area is, such as 10 metres for a classroom or 200 metres for a shopping centre, so the drawing stays the same size and every distance is real. A light grid and a scale bar show the size, and the window can be maximised for more room.
+    <ul>
+      <li><em>Draw</em>: click an empty spot to add a place there, or click a place to select it. Drag to draw a path, such as a mall or corridor; its length is shown as you drag. Start or finish a path on a place or another path and it joins them, and places beside it are joined too. Click beside a path to add a place joined to it.</li>
+      <li><em>Move</em>: drag a place to a new spot. Its paths follow, and it joins the path it is dropped beside.</li>
+      <li><em>Walls</em>: drag to draw a wall or barrier students hear when they cross.</li>
+      <li>Right-click a place to rename or describe it, delete it, or make it the start; right-click a path or wall to delete it.</li>
+    </ul>
+    A place drawn as a hollow circle is not joined yet; Check map names it.</li>
+  <li><strong>Fix anything.</strong> The Places and Paths lists show every place, with its distance and direction from the start, and every path with its length. Select one to edit its name or description, move it, delete it (or press Delete), or make a place the start. <kbd>Ctrl+Z</kbd> undoes any change.</li>
+  <li><strong>Check and test.</strong> <strong>Check map</strong> lists any place directions cannot reach yet. <strong>Test as a student</strong> gives directions between two places and lets you explore the route with sound.</li>
+  <li><strong>Save</strong> (<kbd>Ctrl+S</kbd>) as a portable <code>.miabmap</code> file to share with students. If you close the builder with unsaved changes, Map in a Box asks whether to save them.</li>
+</ol>
+
+<h4 id="import-pdf">Making a map from a PDF</h4>
+
+<p>Choose <strong>File, Create Map File</strong>, then <em>Import PDF</em>, and pick a floor plan PDF or a picture of one. You can also pick the PDF in <strong>File, Open Map File</strong>. Map in a Box then does the rest:</p>
+
+<ol>
+  <li>It reads the labels printed on the map, such as shop names, gates, rooms and toilets, using the PDF's text and the text recognition built into Windows 10 and 11. A PDF with several pages can become several floors.</li>
+  <li>When the map numbers its shops and lists them in a key, as airport maps do, each number is named from the key, such as Mi Casa. It asks whether to say the key numbers too, such as Mi Casa (key 50); the answer is No unless you choose Yes, because the numbers are easily confused with gate or room numbers, but they help a sighted helper match places to the paper map. When a chain has several outlets with the same number, each is named by its nearest neighbour, such as news@bne by Mi Casa.</li>
+  <li>It finds the symbols the map draws for toilets, lifts, stairs, exits, water stations and the like, by matching each symbol in the map's key against the rest of the map, and adds each one as a place named from the key. Where there are several, each is named by the nearest shop or gate, such as Public Toilet by LEGO, or Lift east of Train Station when two are by the same place. This works on maps whose key shows each symbol beside its name, as airport and shopping centre maps usually do.</li>
+  <li>It asks how wide the area is in real life, from left edge to right edge, and offers its own estimate: from the scale when the PDF prints one, such as Scale 1:500, or otherwise from how closely the labels are spaced, since neighbouring shops, gates and rooms are usually about 12 metres apart. Press Enter to accept it, or type a better width if you know one.</li>
+  <li>It asks what the map is called, offering the title printed on the PDF, with any place the file name adds, such as Brisbane Airport.</li>
+  <li>It finds the corridors and concourses, joins every place to them, and leaves out the map's title, date and key text. It saves the map beside the PDF, with the same name ending in <code>.miabmap</code>, and says how many places it joined and names any it could not, for example "Made the map Brisbane Airport Domestic Terminal Level 2 Central: 106 places joined by walkways, including 5 accessible toilets, 4 escalators, 4 lifts... 3 could not be joined". Choose <strong>Explore it now</strong> to try it as a student, or <strong>Edit in the map builder</strong> to join or rename places.</li>
+</ol>
+
+<p>Picking the same PDF again opens the map already made from it. From Create Map File, Map in a Box asks first, so you can make it again instead. If the walkways cannot be found, for example on a hand-drawn plan, the map builder opens so you can join the places yourself.</p>
+
+<p>Use <strong>Add a floor</strong> for another level, then join the floors with <strong>Add stairs or lift</strong>: choose stairs, lift, ramp or escalator, the place on this floor where it is, and the floor it leads to. It can arrive at a place already on that floor, or Map in a Box adds a matching place at the same spot for you to join to a path there. Directions then go between floors, for example "Take the stairs to Level 1". Students hear "Stairs to Level 1" at a linked place; pressing <code>Ctrl+Page Up</code> or <code>Ctrl+Page Down</code> there takes them to where the stairs or lift arrives. Elsewhere, those keys move to the next floor's starting place. Select <strong>File, Edit Map File</strong> to change an existing map.</p>
+
+<p>Select <strong>File, Open Map File</strong> to explore one. The arrow keys move a step at a time across the map with spatial sound, a thirtieth of its width per press. They name any place on that step; on an empty step they say whether you are on a walkway and the nearest place, with its distance and direction, such as Near Mi Casa, 15 metres north-east. <code>Ctrl</code> with an arrow jumps to the next labelled place that way. Press <code>R</code> (or <code>C</code> or <code>A</code>) for where you are: the map, the floor, what is here and the places around you. World map keys, such as weather and country information, are not used while a map file is open, and say so. Press <code>Ctrl+Page Up</code> or <code>Ctrl+Page Down</code> to explore another floor. Press <code>Ctrl+Home</code> or <code>Ctrl+End</code> for the top or bottom accessible point. Press <code>Ctrl+R</code> for directions. From starts on the place you are at, or the nearest one; choose To, press Enter, and the directions are read out, ready to review line by line with the arrows. From there you can also choose two other places, hear their crow-flight relationship, calculate a route that follows only the connected drawn paths, or explore that route with Journey Planner sound. Nearby but unconnected paths—such as parallel shopping-centre aisles—are never treated as connected. Press <code>Escape</code> to close the map file.</p>
 
 <p>Closing the map file restores the previous world-map position. Street and Walking modes do not operate inside an instructor-created map.</p>
 
@@ -128,9 +164,27 @@
 
 <p>Visual Assist lets a sighted teacher, family member, orientation specialist, or support person follow while a blind user controls Map in a Box. Its larger, high-contrast map can also help low-vision users.</p>
 
-<p>Press <code>F9</code> to turn Visual Assist on or off. It enlarges the map and reduces competing information around it. The current position has a high-contrast halo that pulses after movement, while a subdued trail shows recent movement. A persistent callout names the current location.</p>
+<p>Visual Assist is on when Map in a Box starts. Press <code>F9</code> to turn it on or off; Map in a Box remembers your choice for next time. It enlarges the map and reduces competing information around it. The current position has a high-contrast halo that pulses after movement, while a subdued trail shows recent movement. A persistent callout names the current location.</p>
 
-<p>The display also shows coordinates, the map view and zoom level, north, and any destination marker. When you ask for information such as your location or country facts, it appears as a large high-contrast caption for seven seconds. Visual Assist does not change the keyboard controls or screen-reader announcements.</p>
+<p>The display also shows coordinates, the map view and zoom level, north, and any destination marker. When you ask for information such as your location or country facts, it appears as a large high-contrast caption for seven seconds. To show people how to get Map in a Box, for example at the end of a presentation, choose <strong>Help, Show Download Link</strong>: the download link and a QR code fill the window, and <code>Escape</code> returns to the map. Visual Assist does not change the keyboard controls or screen-reader announcements.</p>
+
+<h3 id="dot-pad">3.4 Dot Pad tactile display</h3>
+
+<p>If a Dot Pad is connected by USB, Map in a Box uses it directly. Press <code>F8</code> and the current country's shape is raised on the Dot Pad's graphics area, scaled to fill it, while the country name appears in uncontracted braille on the braille line. The shape stays up until another country replaces it, so you can take your time exploring it.</p>
+
+<p><strong>Follow mode</strong> is on by default. As you move around the map, the Dot Pad shows whichever country you are in, without pressing <code>F8</code>. A new country appears once you have been in it for about half a second, so skimming quickly across several borders does not keep the pins changing. Over open water the last country stays up. A small square marker shows where you are within the country and moves as you do: it is a gap of lowered pins in a filled shape, or a raised square in an outline. Press <code>F2</code> on the Dot Pad to turn follow mode off or on; Map in a Box remembers your choice.</p>
+
+<p>The Dot Pad belongs to Map in a Box, not to your screen reader. Before starting, set your screen reader to use another braille display or none: in NVDA, choose a different display under Braille settings or remove the Dot Pad from automatic detection; in JAWS, do not add the Dot Pad as a braille display. Map in a Box says "Dot Pad connected" when it takes over the device.</p>
+
+<p>Keys on the Dot Pad:</p>
+<ul>
+  <li><code>F1</code>: switch between a filled shape and an outline.</li>
+  <li><code>F2</code>: turn follow mode on or off.</li>
+  <li><code>F4</code>: clear the Dot Pad.</li>
+  <li>Pan left and pan right: scroll a long country name on the braille line.</li>
+</ul>
+
+<p>Both options are also in Settings: clear <strong>Dot Pad follows the current country as you move</strong> to turn off follow mode, or clear <strong>Show F8 country shapes on a connected Dot Pad</strong> to stop using the Dot Pad altogether.</p>
 
 
 <h2 id="jumping">4. Jumping to a place</h2>
@@ -151,6 +205,8 @@
 
 <p>Press <code>Ctrl+H</code> to revisit any of your last five jumps without typing the search again.</p>
 
+<p>Press <code>Ctrl+A</code> for your address history: the last ten addresses you jumped to with <code>S</code> in street mode, and the destinations of walking routes you reached, such as "Vibe Hotel North Sydney, 171 Pacific Highway, North Sydney". Choose one to go back to it. If its street is already loaded, you land on the address in street mode; otherwise you land on the map there, and <code>F11</code> loads the streets and places you at the address.</p>
+
 
 <h2 id="marks">5. Marks</h2>
 
@@ -170,6 +226,8 @@
 <h2 id="pois">7. Points of interest</h2>
 
 <p>Points of interest — POIs — cover businesses, transport stops, parks, medical services, accommodation, and landmarks. OpenStreetMap supplies the standard results. A HERE API key can add opening hours, phone numbers, and ratings.</p>
+
+<p>Choose where places come from under <strong>POI sources</strong> in Settings: OpenStreetMap, HERE, and Google Places, each a checkbox. Every search asks all the ticked sources together and combines the results, so a place missing from one can still be found in another; a place listed by more than one source appears once. A name search first lists matching places Map in a Box already has saved, then adds anything new the live sources find, so a slow or busy OpenStreetMap server does not keep you waiting. Google Places is off by default because Google charges for every search; it is used only for searches, never for the places loaded in street mode.</p>
 
 <p>In map mode, POIs tell you what is nearby. In street mode, you can inspect them one at a time and hear any available address, phone number, opening hours, or website.</p>
 
@@ -232,7 +290,7 @@
 
 <h3>10.2 Intersections and turns</h3>
 
-<p>Press <code>Up</code> or <code>Down</code> for the next or previous known address on the current street. If several POIs share that address, press <code>Left</code> or <code>Right</code> to hear the previous or next one. Press <code>Shift+Up</code> or <code>Shift+Down</code> to move along the street in small steps, even when it bends. Press <code>Shift+Left</code> or <code>Shift+Right</code> for a small sideways cursor step.</p>
+<p>Press <code>Up</code> or <code>Down</code> for the next or previous known address on the current street. If several POIs share that address, press <code>Left</code> or <code>Right</code> to hear the previous or next one. Press <code>Shift+Up</code> or <code>Shift+Down</code> to move along the street in small steps, even when it bends. Press <code>Shift+Left</code> or <code>Shift+Right</code> for a small sideways cursor step. Press <code>Alt+Up</code>, <code>Alt+Down</code>, <code>Alt+Left</code> or <code>Alt+Right</code> to move about 80 metres north, south, west or east by compass, regardless of the street; Map in a Box then names the nearest street. This is useful for crossing into a park, plaza or the next street over.</p>
 
 <p>Press <code>Ctrl+Up</code> or <code>Ctrl+Down</code> for the next or previous intersection. At an intersection, press <code>Ctrl+Left</code> or <code>Ctrl+Right</code> to turn in that direction. The existing Page-key commands remain available as compatibility shortcuts.</p>
 
@@ -240,7 +298,13 @@
 
 <h3>10.3 Walking directions</h3>
 
-<p>After requesting walking directions with <code>Ctrl+G</code>, move through the turn instructions one at a time. Press <code>Shift+I</code> for a more conversational, AI-generated description of the walk. Use <code>Up</code> and <code>Down</code> to move through it and <code>I</code> to repeat the current part. Press <code>Escape</code> to return to the ordinary turn list without cancelling the route. If the description cannot be created, the ordinary directions remain available.</p>
+<p>After requesting walking directions with <code>Ctrl+G</code>, move through the turn instructions one at a time. Map in a Box walking routes start on the street you are on. When there is more than one sensible way, for example along a main road or through back streets, Map in a Box first lists the choices, each with the streets it mainly follows, its distance, time and turns, and how much longer it is than the shortest. Press <code>Enter</code> to take the highlighted route, or <code>Escape</code> for the shortest. Press <code>Shift+I</code> for a summary of the stretch you are on, built from Map in a Box's own street and place data, for example: "First Avenue, a main road, 109 metres from Aerodrome Road to George Street. On your left: KFC. On your right: Moon and Pearl Bridal Sunshine Coast. At the end, right onto George Street." Press <code>Shift+I</code> again for the whole route, stretch by stretch: use <code>Up</code> and <code>Down</code> to move through it and <code>I</code> to repeat the current stretch, and press <code>Escape</code> to return to the turn list without cancelling the route. Stretch summaries are available for Map in a Box walking routes; Google and HERE routes do not include the street shape they need. Instructions are spoken without key reminders; press <code>F1</code> during directions to hear these keys.</p>
+
+<p>When you announce places while walking, each turn instruction on a Map in a Box walking route also names the places you will pass before that turn, in the order you reach them and on which side, for example: "In 103 metres, cross Aerodrome Road, a major road, then slight left to stay on First Avenue. On your left, you'll pass KFC. On your right, Busy Health and Battery World." Each side is described once, side first and in walking order, for example "On your left, you'll pass KFC. On your right, Moon and Pearl Bridal Sunshine Coast." A place's house number follows its name in brackets when it is recorded on the street you are walking, for example "Dosa Cafe (35)". Up to six places are named per instruction, places to eat and drink first, with their cuisine when it is known, such as "the Thai restaurant Samila Gaeng"; if a busy street has more eateries, the instruction says how many and <code>Shift+I</code> lists them all. A building with several businesses is named once with its tenants, led by the building itself where it has a name: "the Northern Star Hotel, with Finn McCools Eatery and Super Cellars", or "23 George Street, with Nourish Espresso &amp; Catering, Samila Gaeng, ...". The arrival instruction also names what you pass on the last stretch, followed by where you have arrived. A place is left out if its side of the street or its position along the way is uncertain, for example right at a corner or on the road's centre line. Google and HERE routes do not provide the street shape this needs, so their instructions list nearby places instead.</p>
+
+<p>Map in a Box walking routes also name the streets you meet along the way. Where you cross a road, the instruction says so and describes major roads, for example "In 103 metres, cross Aerodrome Road, a major road, then slight left to stay on First Avenue." When OpenStreetMap records the number of lanes, it is included, such as "a 6-lane major road". A side street that ends on one side of you is announced as "Continue past Gaba Lane on your left."</p>
+
+<p>When you arrive, Map in a Box announces where you are but does not describe the scene automatically. Press <code>Ctrl+Shift+S</code> at any time for a Street View description of where you are.</p>
 
 <h3>10.4 Australian address data</h3>
 
@@ -285,7 +349,19 @@
 
 <p>In Education, a computer administrator chooses which planning tools students can use. Hotel Search, Virgin Australia Booking, Accor Booking, Expedia Booking, Booking.com Booking, and Order an Uber are not included. Students also cannot open food websites, reviews, or menu links from Map in a Box.</p>
 
-<h3 id="tool-detour">13.1 Detour Calculator</h3>
+<h3 id="tool-journey-audiograph">13.1 Journey AudioGraph</h3>
+
+<p>Journey AudioGraph gives you an audio overview of a journey's shape on the world map.</p>
+
+<ol>
+  <li>Choose <strong>Add location</strong>, then select a mark, favourite, current position, or type an address as in Journey Planner.</li>
+  <li>Repeat for each location in travel order, then choose <strong>Finish</strong>.</li>
+  <li>Map in a Box speaks each resolved location, plays its journey-relative position tone, waits one second, and continues. From the second location onward, it also speaks the distance and compass direction from the preceding location.</li>
+</ol>
+
+<p>Press <code>Escape</code> during playback to cancel. Pitch represents latitude and stereo position represents longitude. Nearby journey locations share a regional audio scale. A conspicuously longer inter-city leg starts a new regional scale so that one distant location does not compress all the local tones into the same sound. A location is never left alone on a scale because a single centred tone would convey no spatial relationship. Map in a Box says <strong>Rescaling audio map</strong> before the first location on the new scale; the spoken distance and direction describe the transition between regions.</p>
+
+<h3 id="tool-detour">13.2 Detour Calculator</h3>
 
 <p>Compares a direct driving trip with a trip containing one or more stops. The result shows the extra distance and time added by the stops.</p>
 
@@ -297,7 +373,7 @@
 
 <p>You do not need a Google key. Without one, Map in a Box uses a free open routing service, which may provide fewer turn-by-turn details.</p>
 
-<h3 id="tool-suburb">13.2 Suburb Lister</h3>
+<h3 id="tool-suburb">13.3 Suburb Lister</h3>
 
 <p>Use Suburb Lister to understand the broad geography of a drive or compare alternatives without reading every turn. It lists the suburbs or areas each route passes through and identifies toll roads.</p>
 
@@ -306,7 +382,7 @@
   <li>Enter your destination.</li>
 </ol>
 
-<h3 id="tool-rendezvous">13.3 Shared Journey</h3>
+<h3 id="tool-rendezvous">13.4 Shared Journey</h3>
 
 <p>Shared Journey helps two people decide where to meet before an event or where to part after it. The best choices are shown first.</p>
 
@@ -336,11 +412,11 @@
 
 <p>Sometimes both routes stay apart until close to the event. In that case, Map in a Box keeps the event as the simplest choice and may also offer nearby alternatives when each person can reach the meeting area with a modest detour.</p>
 
-<h3 id="tool-toll">13.4 Toll Compare</h3>
+<h3 id="tool-toll">13.5 Toll Compare</h3>
 
 <p>Compares toll and toll-free driving routes between the same start and destination. Results show distance and travel time. Toll pricing requires a Google API key.</p>
 
-<h3 id="tool-journey">13.5 Journey Planner</h3>
+<h3 id="tool-journey">13.6 Journey Planner</h3>
 
 <p>Compares ways to travel between two addresses, stops, cities, or coordinates. In Settings, choose either <strong>Rome2Rio</strong> or <strong>Google Maps</strong> as the transport source. Driving has a separate source setting.</p>
 
@@ -358,17 +434,17 @@
 
 <p>For a driving or walking result, Tab to <strong>Explore Path</strong> to follow its geographic shape. Up and Down move along the route; Home and End jump to the endpoints. In driving routes, Page Up and Page Down move by larger sections. In walking routes, they jump between turn instructions and the path is sampled at walking scale. The optional spatial-audio checkbox tracks progress across the route. Escape stops the path audio, restores the previous map position, and returns to the journey results.</p>
 
-<h3 id="tool-departures">13.6 Departure Board</h3>
+<h3 id="tool-departures">13.7 Departure Board</h3>
 
 <p>Enter a country and a location, such as a suburb, stop name, or address. Departure Board lists stops near that location. Choose a stop to hear its upcoming services, destinations, and departure times. You can also press <code>Ctrl+Enter</code> on a transit stop in the POI list to list the services leaving nearby stops, in departure order, for the rest of today. Each entry starts with the type of service, such as Bus, Train or Greyhound, so you can press its first letter to move between them. It then gives the time, how many minutes away it is when that is under an hour, the service, where it is heading, and which stop or platform it leaves from. Press <code>Enter</code> on a service to hear its stops. If nothing else runs today, the list shows the next day with services. At very busy stations the list covers roughly the next hour and says where it stops. In Australia, the list also includes Greyhound coaches leaving today from a Greyhound stop in the same town, and ends with a Greyhound fare search from that stop. Greyhound is not available in Education.</p>
 
 <p>Choose the source in Settings. GTFS finds nearby stops from downloaded timetable data and requires no API key. Google Places requires a Google API key and can find a wider selection of station names; Map in a Box then matches the selected station to a downloaded GTFS timetable for its departures.</p>
 
-<h3 id="tool-flights">13.7 Flight Search</h3>
+<h3 id="tool-flights">13.8 Flight Search</h3>
 
 <p>Use Flight Search to compare possible flights and connections without opening several airline sites. Search by airport name or three-letter IATA code. Results show up to 15 itineraries, shortest first, with airlines, departure and arrival times, and connections. It requires a RapidAPI key and a subscription to the Timetable Lookup API.</p>
 
-<h3 id="tool-hotels">13.8 Hotel Search</h3>
+<h3 id="tool-hotels">13.9 Hotel Search</h3>
 
 <p>Hotel Search lets you compare accommodation in an accessible list instead of working through a visual booking site. It gives the names and addresses of hotels in a city, then opens the selected hotel's website for details or booking.</p>
 
@@ -382,7 +458,7 @@
 
 <p>To read TripAdvisor reviews, use the same RapidAPI key and subscribe to the <a href="https://rapidapi.com/ntd119/api/tripadvisor-com1">Tripadvisor COM API</a>. You can then choose <strong>Get TripAdvisor Reviews</strong> for a selected hotel.</p>
 
-<h3 id="tool-find-food">13.9 Find Food</h3>
+<h3 id="tool-find-food">13.10 Find Food</h3>
 
 <p>Find Food searches for food and drink venues within 300 metres (about 980 feet) of a route and lists them in travel order.</p>
 
@@ -395,7 +471,7 @@
 <p>If a GTFS transit route is active, press <code>Ctrl+Alt+F</code> to find food near that transit journey instead of a road route.</p>
 
 
-<h3 id="tool-virgin-booking">13.10 Virgin Australia Booking</h3>
+<h3 id="tool-virgin-booking">13.11 Virgin Australia Booking</h3>
 
 <p>Virgin Australia Booking provides a shorter, screen-reader-friendly flight-search form, avoiding the need to find and complete the search fields on the full Virgin Australia website.</p>
 
@@ -408,7 +484,7 @@
 
 <p>Your browser opens the Virgin Australia flight-selection page with the search details filled in. Check the available flights and fares, then complete the booking on the Virgin Australia website. Map in a Box does not purchase a ticket or receive your payment details.</p>
 
-<h3 id="tool-accor-booking">13.11 Accor Booking</h3>
+<h3 id="tool-accor-booking">13.12 Accor Booking</h3>
 
 <p>Accor Booking provides a short, screen-reader-friendly hotel-search form and opens Accor with the search details filled in.</p>
 
@@ -421,7 +497,7 @@
 
 <p>Your browser opens Accor's hotel results. Check the destination, dates, guests, availability, and prices there before selecting a room. Map in a Box does not reserve a room or receive payment details.</p>
 
-<h3 id="tool-expedia-booking">13.12 Expedia Booking</h3>
+<h3 id="tool-expedia-booking">13.13 Expedia Booking</h3>
 
 <p>Expedia Booking provides a short, screen-reader-friendly form for hotels, return flights, or flight-and-hotel packages, and opens Expedia Australia with the search details filled in.</p>
 
@@ -435,7 +511,7 @@
 
 <p>Your browser opens the corresponding Expedia results. Check the locations, dates, travellers, availability, and prices there before selecting anything. Map in a Box does not make a reservation or receive payment details.</p>
 
-<h3 id="tool-booking-com">13.13 Booking.com Booking</h3>
+<h3 id="tool-booking-com">13.14 Booking.com Booking</h3>
 
 <p>Booking.com Booking provides a short, screen-reader-friendly form for stays, return flights, or flight-and-hotel packages.</p>
 
@@ -449,7 +525,7 @@
 
 <p>Your browser opens the corresponding Booking.com results. Check all search details, availability, and prices before selecting anything. Map in a Box does not make a reservation or receive payment details.</p>
 
-<h3 id="tool-order-uber">13.14 Order an Uber</h3>
+<h3 id="tool-order-uber">13.15 Order an Uber</h3>
 
 <p>Order an Uber hands a ride request to Uber with the pick-up point and destination already filled in. Open the Tools menu with <code>F12</code> and pick <strong>Order an Uber</strong>.</p>
 
@@ -504,7 +580,7 @@
   <tr><td>Challenge direction</td><td>Map learning or Shortest globe — controls how the challenge game points you toward the target.</td></tr>
   <tr><td>Weather temperature units</td><td>Automatic (country-based), Celsius, or Fahrenheit.</td></tr>
   <tr><td>Distance units</td><td>Metric (metres and kilometres) or Imperial (feet and miles) for displayed and spoken distances.</td></tr>
-  <tr><td>POI database</td><td>OpenStreetMap or HERE for street-mode POI data.</td></tr>
+  <tr><td>POI sources</td><td>Tick OpenStreetMap, HERE and Google Places, in any combination. Searches ask every ticked source and combine the results; street mode loads places from OpenStreetMap and HERE. A place listed by more than one source is announced once. HERE and Google need their API keys; Google is off by default and charged per search.</td></tr>
   <tr><td>Street-level imagery source</td><td>Use Google Street View with a Google key, or open Mapillary in a browser without a key.</td></tr>
   <tr><td>Journey Planner driving route source</td><td>Choose free OpenStreetMap/OSRM routes or paid Google routes that take traffic into account.</td></tr>
   <tr><td>Journey Planner transport source</td><td>Choose free Rome2Rio results that combine several types of transport, or Google transit results with a Google key.</td></tr>
@@ -581,7 +657,7 @@
   <tr><td>RapidAPI</td><td><a href="https://rapidapi.com/auth/sign-up">rapidapi.com</a></td><td>Flight search (Timetable Lookup API) and hotel search (Priceline API)</td></tr>
 </table>
 
-<p>AI features need no key. Spoken image descriptions, narrative walking briefings, and extra shopping-centre information use Map in a Box's built-in AI service. It is shared by all users and has daily limits, so these features may be briefly unavailable on a busy day.</p>
+<p>AI features need no key. Spoken image descriptions and extra shopping-centre information use Map in a Box's built-in AI service. It is shared by all users and has daily limits, so these features may be briefly unavailable on a busy day.</p>
 
 <h3>16.2 Google and HERE in more detail</h3>
 
@@ -736,6 +812,7 @@
   <tr><td><code>Ctrl+Shift+F</code></td><td>Add favourite</td></tr>
   <tr><td><code>J</code></td><td>Jump to place</td></tr>
   <tr><td><code>Ctrl+H</code></td><td>Jump history — revisit one of your last five jumps</td></tr>
+  <tr><td><code>Ctrl+A</code></td><td>Address history — revisit one of your last ten street addresses and route destinations</td></tr>
   <tr><td><code>Ctrl+J</code></td><td>Jump to saved mark</td></tr>
   <tr><td><code>Ctrl+M</code></td><td>Save current position as mark (prompts for slot 1, 2, or 3)</td></tr>
   <tr><td><code>Ctrl+Shift+P</code></td><td>Save current position as a personal POI</td></tr>
@@ -757,7 +834,7 @@
   <tr><td><code>F5</code></td><td>Continent</td></tr>
   <tr><td><code>F6</code></td><td>Country facts — asks to exit street mode first, since this reports on the world-map country, not your street-level position</td></tr>
   <tr><td><code>Shift+F6</code></td><td>Wikipedia summary — same exit-street-mode prompt as <code>F6</code></td></tr>
-  <tr><td><code>F8</code></td><td>At 1x, subdue the world map and show an enlarged country silhouette. At higher zoom, preserve the magnified viewport so an external visual-description tool can capture it.</td></tr>
+  <tr><td><code>F8</code></td><td>At 1x, subdue the world map and show an enlarged country silhouette, also raised on a connected <a href="#dot-pad">Dot Pad</a>. At higher zoom, preserve the magnified viewport so an external visual-description tool can capture it.</td></tr>
   <tr><td><code>Shift+F8</code></td><td>Toggle map display between World and Country modes</td></tr>
   <tr><td><code>Ctrl+Plus</code></td><td>Increase geographic visual zoom</td></tr>
   <tr><td><code>Ctrl+Minus</code></td><td>Decrease geographic visual zoom</td></tr>
@@ -772,7 +849,7 @@
   <tr><td><code>Arrow keys</code></td><td>Move about 5 km or 3.1 miles</td></tr>
   <tr><td><code>Shift+Arrows</code></td><td>Move in fine steps of about 1 km or 0.6 miles</td></tr>
   <tr><td><code>Ctrl+Arrows</code></td><td>Move in large steps of about 100 km or 62 miles</td></tr>
-  <tr><td><code>Ctrl+Alt+Arrows</code></td><td>Jump to the nearest foreign country in that direction</td></tr>
+  <tr><td><code>Alt+Arrows</code></td><td>Jump to the nearest foreign country in that direction</td></tr>
   <tr><td><code>R</code></td><td>Current region</td></tr>
   <tr><td><code>C</code></td><td>Current country</td></tr>
   <tr><td><code>N</code></td><td>Nearest city only</td></tr>
@@ -800,6 +877,7 @@
   <tr><td><code>Left/Right</code></td><td>Previous or next POI sharing the current address</td></tr>
   <tr><td><code>Shift+Up/Down</code></td><td>Move forward or backward along the current street in fine steps</td></tr>
   <tr><td><code>Shift+Left/Right</code></td><td>Move sideways across the current street in fine steps</td></tr>
+  <tr><td><code>Alt+Arrows</code></td><td>Move about 80 metres north, south, west or east by compass, ignoring the street</td></tr>
   <tr><td><code>Ctrl+Up/Down</code></td><td>Next or previous intersection</td></tr>
   <tr><td><code>Ctrl+Left/Right</code></td><td>Turn left or right at the current intersection</td></tr>
   <tr><td><code>Page Up</code></td><td>Previous number</td></tr>
@@ -816,7 +894,7 @@
   <tr><td><code>X</code></td><td>Nearest cross street</td></tr>
   <tr><td><code>G</code></td><td>Nearby geographic features</td></tr>
   <tr><td><code>I</code></td><td>Street summary, or repeat the current step during walking directions</td></tr>
-  <tr><td><code>Shift+I</code></td><td>Request (or repeat) an AI-narrated walking briefing during walking directions; <code>Escape</code> exits back to normal turn-by-turn</td></tr>
+  <tr><td><code>Shift+I</code></td><td>During walking directions, summarise the stretch you are on; press again to step through the whole route; <code>Escape</code> returns to normal turn-by-turn</td></tr>
   <tr><td><code>P</code></td><td>POI search</td></tr>
   <tr><td><code>Ctrl+Alt+P</code></td><td>Refresh POIs</td></tr>
   <tr><td><code>Ctrl+Shift+P</code></td><td>Save current position as a personal POI</td></tr>

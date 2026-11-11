@@ -477,13 +477,17 @@ class StreetModeMixin:
             wx.CallAfter(self._status_update, f"Downloading streets and POIs for {place}...")
         poi_future = None
         poi_executor = None
-        cached_pois = self._poi_fetcher.load_cached_pois(clat, clon)
+        poi_sources = self._poi_background_sources()
+        if "here" in poi_sources:
+            self._poi_fetcher.set_here_key(self.settings.get("here_api_key", ""))
+        cached_pois = self._poi_fetcher.load_cached_pois(clat, clon, sources=poi_sources)
         if cached_pois is None and not streets_cached:
             import concurrent.futures
             wx.CallAfter(self._status_update, f"Downloading POIs for {place}...")
             poi_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             poi_future = poi_executor.submit(
-                self._poi_fetcher.fetch_all_background, clat, clon, [])
+                self._poi_fetcher.fetch_all_background, clat, clon, [],
+                sources=poi_sources)
 
         try:
             if not streets_cached:
@@ -506,7 +510,8 @@ class StreetModeMixin:
                     pois = poi_future.result()
                 else:
                     wx.CallAfter(self._status_update, f"Downloading POIs for {place}...")
-                    pois = self._poi_fetcher.fetch_all_background(clat, clon, addrs)
+                    pois = self._poi_fetcher.fetch_all_background(
+                        clat, clon, addrs, sources=poi_sources)
                 poi_note = f"{len(pois)} POIs"
             else:
                 poi_note = f"{len(cached_pois)} cached POIs"
@@ -747,7 +752,7 @@ class StreetModeMixin:
         self._nav_dest_lat      = None
         self._nav_dest_lon      = None
         self._nav.reset()
-        self.sound._ch.fadeout(500)
+        self.sound.fadeout_current(500)
         self.sound._current = None
         threading.Thread(target=self._fetch_road_data, daemon=True).start()
         initial_poi_lat = getattr(self, "_street_fetch_lat", None) or request_lat

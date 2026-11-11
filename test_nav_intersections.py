@@ -29,9 +29,61 @@ def test_osm_instructions_include_cross_streets_but_not_internal_labels():
     }
     engine = NavigationEngine(graph)
     instructions = engine._build_instructions([0, 1, 2], "Destination")
-    assert instructions[0][2] == "Continue across Side Street."
+    # Side Street ends here on the north side; heading east, that is the left.
+    assert instructions[0][2] == "Continue past Side Street on your left."
     assert all("trunk_link" not in instruction[2] for instruction in instructions)
     assert instructions[-1][1] > 90
+
+
+def _crossroads(main_jog=0.0, edge_info=None):
+    """Main Road heading east, crossed at node 1 by Big Road running north-south."""
+    return {
+        "nodes": {
+            0: (0.0, 0.0),
+            1: (0.0, 0.0009),
+            2: (main_jog, 0.0018),
+            3: (0.0009, 0.0009),
+            4: (-0.0009, 0.0009),
+        },
+        "edges": {
+            0: [(1, "Main Road")],
+            1: [(0, "Main Road"), (2, "Main Road"), (3, "Big Road"), (4, "Big Road")],
+            2: [(1, "Main Road")],
+            3: [(1, "Big Road")],
+            4: [(1, "Big Road")],
+        },
+        "node_streets": {
+            0: {"Main Road"}, 1: {"Main Road", "Big Road"}, 2: {"Main Road"},
+            3: {"Big Road"}, 4: {"Big Road"},
+        },
+        "intersections": {1},
+        "edge_info": edge_info or {},
+    }
+
+
+def test_crossing_a_through_road_names_its_size():
+    info = {"kind": "primary", "lanes": 6, "oneway": False}
+    graph = _crossroads(edge_info={frozenset((1, 3)): info, frozenset((1, 4)): info})
+    instructions = NavigationEngine(graph)._build_instructions([0, 1, 2], "Destination")
+    assert instructions[0][2] == "Continue across Big Road, a 6-lane major road."
+
+
+def test_one_way_lanes_are_not_claimed_for_the_whole_road():
+    info = {"kind": "primary", "lanes": 3, "oneway": True}
+    graph = _crossroads(edge_info={frozenset((1, 3)): info, frozenset((1, 4)): info})
+    instructions = NavigationEngine(graph)._build_instructions([0, 1, 2], "Destination")
+    assert instructions[0][2] == "Continue across Big Road, a major road."
+
+
+def test_jog_across_a_road_is_a_crossing_not_a_turn():
+    # Main Road carries on slightly to the left after crossing Big Road, as
+    # First Avenue does at Aerodrome Road.
+    info = {"kind": "primary"}
+    graph = _crossroads(main_jog=0.0004,
+                        edge_info={frozenset((1, 3)): info, frozenset((1, 4)): info})
+    instructions = NavigationEngine(graph)._build_instructions([0, 1, 2], "Destination")
+    assert instructions[0][2] == (
+        "cross Big Road, a major road, then slight left to stay on Main Road.")
 
 
 class _MapPanel:
@@ -96,18 +148,18 @@ class _NativeNavHost(_NavHost):
         self.native_rows.append((message, clear_model))
 
 
-def test_route_start_puts_first_instruction_in_focused_native_row():
+def test_route_start_leaves_the_focused_row_alone():
+    # Writing instruction one into the focused row replaced what the user
+    # had there; Insert+Tab still read the route summary long afterwards.
     host = _NativeNavHost()
 
     host._nav_begin_route("Ibis Hotel")
 
-    assert len(host.native_rows) == 1
-    message, clear_model = host.native_rows[0]
-    assert message.startswith("In 37 metres, continue across Title Street.")
-    assert "Step 1 of 2" in message
-    assert clear_model is True
+    assert host.native_rows == []
+    assert host.persistent == []
+    assert host.transient[0].startswith("In 37 metres, continue across Title Street.")
+    assert "Step 1 of 2" in host.transient[0]
     assert host._poi_context_generation == 1
-    assert host.transient == []
 
 
 def test_arrival_context_waits_for_final_instruction():

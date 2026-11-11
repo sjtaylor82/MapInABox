@@ -13,7 +13,7 @@ Classes
 -------
 PoiFetcher
     fetch_pois(lat, lon, category, radius, timeout) → list[dict]
-    fetch_all_background(lat, lon, address_points)  → list[dict]
+    fetch_all_background(lat, lon, address_points, sources)  → list[dict]
     fetch_poi_intersection(lat, lon, road_segments)  → str | None
     fetch_explore_children(lat, lon, osm_type, osm_id, centre_lat, centre_lon) → list[dict]
 """
@@ -768,6 +768,19 @@ _HERE_KIND_MAP: dict[str, str] = {
     "loading dock":                     "services",
 }
 
+def _here_cuisine(item: dict, raw_kind: str) -> str:
+    """A HERE place's cuisine, e.g. "Thai": its primary food type, else the
+    cuisine in its category name ("thai food")."""
+    food_types = item.get("foodTypes") or []
+    primary = [f for f in food_types if f.get("primary")] or food_types
+    name = (primary[0].get("name") or "").strip() if primary else ""
+    if not name and raw_kind.endswith(" food") and raw_kind not in ("fast food",):
+        name = raw_kind[:-len(" food")].strip()
+    if not name or name.lower() in ("restaurant", "food"):
+        return ""
+    return name.title()
+
+
 def _parse_here_item(
     item: dict,
     ref_lat: float,
@@ -825,6 +838,7 @@ def _parse_here_item(
         oh_text = (status + (". " if status and texts else "") + "; ".join(texts)).strip()
 
     here_id = item.get("id") or ""
+    cuisine = _here_cuisine(item, raw_kind)
 
     dist_m  = int(item.get("distance") or dist_metres(ref_lat, ref_lon, elat, elon))
     bearing = compass_name(bearing_deg(ref_lat, ref_lon, elat, elon))
@@ -852,6 +866,7 @@ def _parse_here_item(
         "phone":         phone,
         "website":       website,
         "opening_hours": oh_text,
+        "cuisine":       cuisine,
         "here_id":       here_id,
         "kind":          kind,
         "osm_type":      "node",
@@ -941,6 +956,39 @@ def _save_poi_cache(cache_path: str, cache: dict) -> None:
 def _cache_key(lat: float, lon: float, category: str, radius: int,
                source: str = "osm") -> str:
     return f"{round(lat, 2)}_{round(lon, 2)}_{category}_{radius}_{source}"
+
+
+def _poi_name_key(name) -> str:
+    return re.sub(r"[^0-9a-z]+", "", str(name or "").casefold())
+
+
+def merge_background_sources(lists: list, same_place_metres: float = 100.0) -> list:
+    """Combine background POI lists from several sources.
+
+    A place appearing in more than one source (same name, within
+    ``same_place_metres``) is kept once, from the earliest list.  Unnamed
+    places are always kept.
+    """
+    if len(lists) == 1:
+        return list(lists[0])
+    merged: list = []
+    kept_by_name: dict = {}
+    for index, pois in enumerate(lists):
+        for poi in pois:
+            name_key = _poi_name_key(poi.get("name"))
+            try:
+                lat, lon = float(poi["lat"]), float(poi["lon"])
+            except (KeyError, TypeError, ValueError):
+                merged.append(poi)
+                continue
+            if name_key:
+                earlier = kept_by_name.setdefault(name_key, [])
+                if any(src != index and dist_metres(lat, lon, plat, plon) <= same_place_metres
+                       for src, plat, plon in earlier):
+                    continue
+                earlier.append((index, lat, lon))
+            merged.append(poi)
+    return merged
 
 
 def _get_cached(cache: dict, key: str) -> list | None:
@@ -1238,41 +1286,55 @@ class PoiFetcher:
     def fetch_here_name_search(
         self, lat: float, lon: float, query: str, radius: int = 10000,
         address_points: list | None = None,
-    ) -> list:
-        """Search HERE by name instead of filtering a capped browse result."""
+    ) -> list | None:
+        """Search HERE by name instead of filtering a capped browse result.
+
+        Returns None when the request fails, so callers can tell a failed
+        search from one that found nothing.
+        """
         query = (query or "").strip()
         if not self._here_api_key or not query:
             return []
-        params = {
-            "at": f"{lat},{lon}",
-            "in": f"circle:{lat},{lon};r={radius}",
-            "q": query,
-            "limit": 100,
-            "apiKey": self._here_api_key,
-            "lang": "en",
-        }
-        url = _HERE_DISCOVER_URL + "?" + urllib.parse.urlencode(params, safe=",")
-        req = urllib.request.Request(url, headers={"User-Agent": "MapInABox/1.0"})
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read().decode())
-        except Exception as exc:
-            miab_log("errors", f"[HERE] Name search failed: {exc}",
-                     getattr(self, "settings", None))
-            return []
+        # Discover rejects "at" together with "in=circle" (HTTP 400), and its
+        # relevance ranking varies with the search area: from one spot a 2 km
+        # circle returned only a holiday park while "at" and 1 or 3 km circles
+        # also found the Holiday Inn 300 m away.  Ask both ways, merge, and
+        # keep what lies within the radius.
+        areas = (
+            {"in": f"circle:{lat},{lon};r={radius}"},
+            {"at": f"{lat},{lon}"},
+        )
         pois = []
         seen = set()
-        for item in data.get("items", []):
-            poi = _parse_here_item(item, lat, lon, address_points or [])
-            if poi is None:
+        failures = 0
+        for area in areas:
+            params = dict(area, q=query, limit=100,
+                          apiKey=self._here_api_key, lang="en")
+            url = _HERE_DISCOVER_URL + "?" + urllib.parse.urlencode(params, safe=",")
+            req = urllib.request.Request(url, headers={"User-Agent": "MapInABox/1.0"})
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read().decode())
+            except Exception as exc:
+                failures += 1
+                miab_log("errors", f"[HERE] Name search failed: {exc}",
+                         getattr(self, "settings", None))
                 continue
-            identity = poi.get("here_id") or (
-                f"{poi['name'].casefold()}|{poi.get('number', '')}|"
-                f"{poi.get('street', '').casefold()}")
-            if identity in seen:
-                continue
-            seen.add(identity)
-            pois.append(poi)
+            for item in data.get("items", []):
+                poi = _parse_here_item(item, lat, lon, address_points or [])
+                if poi is None:
+                    continue
+                if dist_metres(lat, lon, poi["lat"], poi["lon"]) > radius:
+                    continue
+                identity = poi.get("here_id") or (
+                    f"{poi['name'].casefold()}|{poi.get('number', '')}|"
+                    f"{poi.get('street', '').casefold()}")
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                pois.append(poi)
+        if failures == len(areas):
+            return None
         miab_log("api_calls", f"[HERE] Name search {query!r} returned "
                  f"{len(pois)} places within {radius}m",
                  getattr(self, "settings", None))
@@ -1580,13 +1642,17 @@ class PoiFetcher:
         pattern = re.escape(query_text)
         ar = f"(around:{radius},{lat},{lon})"
 
-        def _clause(selector: str) -> str:
-            return f'  nwr{selector}["name"~"{pattern}",i]{ar};'
+        # Narrow by feature type and distance before the case-insensitive
+        # name regex.  A bare nwr["name"~...,i] tests every named object in
+        # the circle and timed out (25 s) for "glenferrie hotel" in
+        # Hawthorn; the same search by feature type answered in 5 s.
+        def _clause(selector: str, tag: str = "name") -> str:
+            return f'  nwr{selector}{ar}["{tag}"~"{pattern}",i];'
 
+        place_keys = ("amenity", "shop", "tourism", "leisure", "railway",
+                      "public_transport")
         category_clauses: dict[str, list[str]] = {
-            "all": [
-                f'  nwr["name"~"{pattern}",i]{ar};',
-            ],
+            "all": [_clause(f'["{key}"]') for key in place_keys],
             "food": [
                 _clause('["amenity"~"cafe|restaurant|bar|fast_food|pub|food_court|ice_cream"]'),
                 _clause('["shop"~"bakery|supermarket|convenience|greengrocer|butcher"]'),
@@ -1630,9 +1696,10 @@ class PoiFetcher:
         clauses = category_clauses.get(category_key, category_clauses["all"])
         if category_key == "all" and radius <= 1000:
             clauses = clauses + [
-                f'  nwr["brand"~"{pattern}",i]{ar};',
-                f'  nwr["operator"~"{pattern}",i]{ar};',
-                f'  nwr["official_name"~"{pattern}",i]{ar};',
+                _clause('["amenity"]', "brand"),
+                _clause('["shop"]', "brand"),
+                _clause('["amenity"]', "operator"),
+                _clause('["amenity"]', "official_name"),
             ]
 
         effective_timeout = min(timeout, 10)
@@ -1682,36 +1749,68 @@ class PoiFetcher:
     # Background ambient POI fetch  (fires after road data loads)
     # ------------------------------------------------------------------
 
+    def _background_sources(self, sources) -> list:
+        """Resolve the requested background sources ("osm", "here").
+
+        None keeps the older behaviour of following the HERE key.  HERE is
+        skipped without a key; with nothing usable left, OSM is used.
+        """
+        if sources is None:
+            return ["here" if self._here_api_key else "osm"]
+        resolved = [s for s in dict.fromkeys(sources)
+                    if s == "osm" or (s == "here" and self._here_api_key)]
+        return resolved or ["osm"]
+
+    def _background_cache_key(self, lat: float, lon: float, source: str) -> str:
+        return _cache_key(round(lat, 1), round(lon, 1), "all_background",
+                          POI_BACKGROUND_RADIUS_METRES, source)
+
     def fetch_all_background(
         self,
         lat: float,
         lon: float,
         address_points: list | None = None,
         force_refresh: bool = False,
+        sources: list | None = None,
     ) -> list:
         """Broad POI fetch used to populate self._all_pois for walk-announce.
 
         Returns a list of POI dicts (background format — includes 'name',
-        'kind', 'address', 'bearing' fields used by walk announce).
-        Results are cached for 30 days so HERE and Overpass are not
-        hammered on every street mode entry.
+        'kind', 'address', 'bearing' fields used by walk announce).  Each
+        source in ``sources`` is fetched and cached separately, then merged
+        with places found by more than one source kept once.
         """
+        return merge_background_sources([
+            self._fetch_background_source(
+                source, lat, lon, address_points, force_refresh)
+            for source in self._background_sources(sources)
+        ])
+
+    def _fetch_background_source(
+        self,
+        source: str,
+        lat: float,
+        lon: float,
+        address_points: list | None = None,
+        force_refresh: bool = False,
+    ) -> list:
+        """Fetch one source's background POIs, cached for 30 days so HERE
+        and Overpass are not hammered on every street mode entry."""
         address_points = address_points or []
         radius = POI_BACKGROUND_RADIUS_METRES
-        source = "here" if self._here_api_key else "osm"
 
         # Check cache first — avoids redundant HERE/Overpass calls for
         # recently visited areas.  Key rounded to 1 decimal place (~11 km)
         # so any position within the same suburb hits the same cache entry.
         cache     = _load_poi_cache(self._cache_path)
-        cache_key = _cache_key(round(lat, 1), round(lon, 1), "all_background", radius, source)
+        cache_key = self._background_cache_key(lat, lon, source)
         cached    = None if force_refresh else _get_cached(cache, cache_key)
         if cached is not None:
-            miab_log("verbose", f"[POI] Background cache hit — {len(cached)} places.", getattr(self, "settings", None))
+            miab_log("verbose", f"[POI] Background {source} cache hit — {len(cached)} places.", getattr(self, "settings", None))
             return cached
 
         # ── HERE path ────────────────────────────────────────────────────
-        if self._here_api_key:
+        if source == "here":
             buckets = [
                 ("100",     "food"),
                 ("600",     "shopping"),
@@ -1793,22 +1892,25 @@ class PoiFetcher:
         _save_poi_cache(self._cache_path, cache)
         return pois
 
-    def load_cached_pois(self, lat: float, lon: float) -> list | None:
+    def load_cached_pois(self, lat: float, lon: float,
+                         sources: list | None = None) -> list | None:
         """Return cached background POIs for (lat, lon) if fresh, else None.
 
         Called silently after streets load so _all_pois can be pre-populated
-        from disk without any network call.
+        from disk without any network call.  Every requested source must be
+        cached; otherwise this is a miss, so the missing source gets fetched.
         """
         cache = _load_poi_cache(self._cache_path)
-        source = "here" if self._here_api_key else "osm"
-        key = _cache_key(round(lat, 1), round(lon, 1), "all_background",
-                         POI_BACKGROUND_RADIUS_METRES, source)
-        cached = _get_cached(cache, key)
-        if cached is not None:
-            miab_log("verbose", f"[POI] Background cache preload hit — {len(cached)} places.", getattr(self, "settings", None))
-        else:
-            miab_log("verbose", "[POI] Background cache preload miss.", getattr(self, "settings", None))
-        return cached
+        lists = []
+        for source in self._background_sources(sources):
+            cached = _get_cached(cache, self._background_cache_key(lat, lon, source))
+            if cached is None:
+                miab_log("verbose", f"[POI] Background cache preload miss ({source}).", getattr(self, "settings", None))
+                return None
+            lists.append(cached)
+        merged = merge_background_sources(lists)
+        miab_log("verbose", f"[POI] Background cache preload hit — {len(merged)} places.", getattr(self, "settings", None))
+        return merged
 
     def load_cached_nearby_pois(self, lat: float, lon: float,
                                 radius: float = 2000.0) -> list:
@@ -1850,16 +1952,18 @@ class PoiFetcher:
                 out.append(poi)
         return out
 
-    def cached_background_age_hours(self, lat: float, lon: float) -> float | None:
-        """Return age of the background POI disk cache in hours, or None if absent."""
+    def cached_background_age_hours(self, lat: float, lon: float,
+                                    sources: list | None = None) -> float | None:
+        """Return age in hours of the oldest requested background POI cache,
+        or None if any is absent."""
         cache = _load_poi_cache(self._cache_path)
-        source = "here" if self._here_api_key else "osm"
-        key = _cache_key(round(lat, 1), round(lon, 1), "all_background",
-                         POI_BACKGROUND_RADIUS_METRES, source)
-        entry = cache.get(key)
-        if not isinstance(entry, dict):
-            return None
-        return (time.time() - entry.get("ts", 0)) / 3600
+        ages = []
+        for source in self._background_sources(sources):
+            entry = cache.get(self._background_cache_key(lat, lon, source))
+            if not isinstance(entry, dict):
+                return None
+            ages.append((time.time() - entry.get("ts", 0)) / 3600)
+        return max(ages)
 
     # ------------------------------------------------------------------
     # Intersection lookup for POI announcements

@@ -559,6 +559,20 @@ def _load_road_cache_by_coord(
     return {}
 
 
+def _road_size_tags(tags: dict) -> dict:
+    """Lanes and one-way flag from a way's OSM tags, only when recorded.
+
+    Used to describe roads a walking route crosses ("a 6-lane major road").
+    """
+    out = {}
+    lanes = str(tags.get("lanes", "")).strip()
+    if lanes.isdigit() and int(lanes) > 0:
+        out["lanes"] = int(lanes)
+    if str(tags.get("oneway", "")).strip().lower() in ("yes", "true", "1", "-1"):
+        out["oneway"] = True
+    return out
+
+
 def _load_road_cache(cache_dir: str, lat: float, lon: float,
                      suburb_name: str = None) -> dict:
     """Load cached road data. Tries suburb-based key first if available."""
@@ -1039,7 +1053,8 @@ class StreetFetcher:
                     name  = tags.get("name") or tags.get("ref") or ""
                     label = _make_display(name, kind)
                     segments.append({"name": label, "kind": kind, "coords": coords,
-                                      "way_id": el.get("id", 0), "raw_name": name})
+                                      "way_id": el.get("id", 0), "raw_name": name,
+                                      **_road_size_tags(tags)})
                 
                 # Address interpolation way
                 elif "addr:interpolation" in tags:
@@ -1198,7 +1213,8 @@ class StreetFetcher:
                     continue
                 coords = [(pt["lat"], pt["lon"]) for pt in geom]
                 new_segments.append({"name": label, "kind": kind, "coords": coords,
-                                     "way_id": way_id, "raw_name": name})
+                                     "way_id": way_id, "raw_name": name,
+                                     **_road_size_tags(tags)})
                 if way_id:
                     existing_ids.add(way_id)
 

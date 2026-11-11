@@ -30,6 +30,7 @@ from i18n import _
 from wx_utils import _log_key_event, _primary_down
 from logging_utils import miab_log
 from distance_units import format_distance
+from geo import bearing_deg, compass_name, dist_metres
 
 
 class _ExplicitNameAccessible(getattr(wx, "Accessible", object)):
@@ -337,6 +338,10 @@ class SettingsDialog(wx.Dialog):
         general_vs.Add(self.cb_climate_zones, 0, wx.LEFT | wx.BOTTOM, 8)
         self.cb_suburb_size = wx.CheckBox(self.general_page, label=_("Announce suburb size when streets load"))
         general_vs.Add(self.cb_suburb_size, 0, wx.LEFT | wx.BOTTOM, 8)
+        self.cb_dotpad = wx.CheckBox(self.general_page, label=_("Show F8 country shapes on a connected Dot Pad"))
+        general_vs.Add(self.cb_dotpad, 0, wx.LEFT | wx.BOTTOM, 8)
+        self.cb_dotpad_follow = wx.CheckBox(self.general_page, label=_("Dot Pad follows the current country as you move"))
+        general_vs.Add(self.cb_dotpad_follow, 0, wx.LEFT | wx.BOTTOM, 8)
 
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         general_vs.Add(wx.StaticText(self.general_page, label=_("Spatial tones:")), 0, wx.LEFT, 8)
@@ -370,12 +375,15 @@ class SettingsDialog(wx.Dialog):
         general_vs.Add(self.combo_distance_units, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
 
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        general_vs.Add(wx.StaticText(self.general_page, label=_("POI database (for street mode):")), 0, wx.LEFT, 8)
-        self.combo_poi_source = wx.Choice(
+        general_vs.Add(wx.StaticText(self.general_page, label=_("POI sources:")), 0, wx.LEFT, 8)
+        self.cb_poi_osm = wx.CheckBox(self.general_page, label=_("OpenStreetMap"))
+        general_vs.Add(self.cb_poi_osm, 0, wx.LEFT | wx.BOTTOM, 8)
+        self.cb_poi_here = wx.CheckBox(self.general_page, label=_("HERE (requires a HERE API key)"))
+        general_vs.Add(self.cb_poi_here, 0, wx.LEFT | wx.BOTTOM, 8)
+        self.cb_poi_google = wx.CheckBox(
             self.general_page,
-            choices=[_("OpenStreetMap"), _("HERE")],
-        )
-        general_vs.Add(self.combo_poi_source, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+            label=_("Google Places (P searches only; requires a Google API key and is charged per search)"))
+        general_vs.Add(self.cb_poi_google, 0, wx.LEFT | wx.BOTTOM, 8)
 
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         general_vs.Add(wx.StaticText(
@@ -708,6 +716,8 @@ class SettingsDialog(wx.Dialog):
         self.cb_walk_cat.SetValue(settings.get("walk_announce_category", True))
         self.cb_climate_zones.SetValue(settings.get("announce_climate_zones", True))
         self.cb_suburb_size.SetValue(settings.get("announce_suburb_size", False))
+        self.cb_dotpad.SetValue(settings.get("dotpad_enabled", True))
+        self.cb_dotpad_follow.SetValue(settings.get("dotpad_follow", True))
         self.cb_auto_updates.SetValue(settings.get("check_updates_at_startup", True))
         self.cb_clear_favourites_on_exit.SetValue(
             settings.get("clear_favourites_on_exit", EDUCATION_EDITION))
@@ -727,8 +737,10 @@ class SettingsDialog(wx.Dialog):
         self.combo_nav.SetSelection(nav_idx)
         departure_source = settings.get("departure_board_source", "gtfs")
         self.combo_departure_board.SetSelection(1 if departure_source == "google" else 0)
-        poi_source = settings.get("poi_source", "osm")
-        self.combo_poi_source.SetSelection(1 if poi_source == "here" else 0)
+        poi_sources = settings.get("poi_sources") or ["osm"]
+        self.cb_poi_osm.SetValue("osm" in poi_sources)
+        self.cb_poi_here.SetValue("here" in poi_sources)
+        self.cb_poi_google.SetValue("google" in poi_sources)
         postcode_lookup = settings.get("postcode_lookup", "included")
         self.combo_postcode_lookup.SetSelection(1 if postcode_lookup == "online" else 0)
         self.txt_google_key.SetValue(settings.get("google_api_key", ""))
@@ -903,6 +915,8 @@ class SettingsDialog(wx.Dialog):
             "walk_announce_category": self.cb_walk_cat.GetValue(),
             "announce_climate_zones": self.cb_climate_zones.GetValue(),
             "announce_suburb_size":   self.cb_suburb_size.GetValue(),
+            "dotpad_enabled":         self.cb_dotpad.GetValue(),
+            "dotpad_follow":          self.cb_dotpad_follow.GetValue(),
             "check_updates_at_startup": self.cb_auto_updates.GetValue(),
             "clear_favourites_on_exit": self.cb_clear_favourites_on_exit.GetValue(),
             "spatial_tones_mode":     spatial_mode,
@@ -911,7 +925,11 @@ class SettingsDialog(wx.Dialog):
             "distance_unit":          "imperial" if self.combo_distance_units.GetSelection() == 1 else "metric",
             "nav_provider":           nav_provider,
             "departure_board_source": departure_board_source,
-            "poi_source":             "here" if self.combo_poi_source.GetSelection() == 1 else "osm",
+            # With neither ticked, street mode would have no POIs at all.
+            "poi_sources":            ([s for s, cb in (("osm", self.cb_poi_osm),
+                                                         ("here", self.cb_poi_here),
+                                                         ("google", self.cb_poi_google))
+                                        if cb.GetValue()] or ["osm"]),
             "visual_mapping_source":  "google" if (
                 self.txt_google_key.GetValue().strip()
                 and self.cb_google_service.GetValue()
@@ -983,13 +1001,14 @@ class SettingsDialog(wx.Dialog):
 # ---------------------------------------------------------------------------
 
 class POICategoryDialog(wx.Dialog):
-    """Choose a POI category, optional name, and data source before searching."""
+    """Choose a POI category, optional name and radius before searching.
+
+    The sources searched are the POI sources ticked in Settings.
+    """
 
     def __init__(
         self,
         parent,
-        available_sources: list[str] | None = None,
-        preferred_source: str = "osm",
         initial_key: str = "all",
         initial_name: str = "",
         initial_street: str = "",
@@ -1003,9 +1022,7 @@ class POICategoryDialog(wx.Dialog):
         self.selected_key    = None
         self.selected_name   = ""
         self.selected_street = ""
-        self.selected_source = "osm"
         self.selected_radius = 1000
-        sources = available_sources or ["osm"]
         panel = wx.Panel(self)
         vs = wx.BoxSizer(wx.VERTICAL)
 
@@ -1014,7 +1031,7 @@ class POICategoryDialog(wx.Dialog):
             msg.Wrap(390)
             vs.Add(msg, 0, wx.ALL | wx.EXPAND, 10)
 
-        info = wx.StaticText(panel, label="Search by name or street (optional), then choose category and source.")
+        info = wx.StaticText(panel, label="Search by name or street (optional), then choose a category.")
         info.Wrap(390)
         vs.Add(info, 0, wx.ALL | wx.EXPAND, 10)
 
@@ -1055,17 +1072,6 @@ class POICategoryDialog(wx.Dialog):
         self.combo_radius.SetSelection(radius_idx)
         vs.Add(self.combo_radius, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
 
-        vs.Add(wx.StaticText(panel, label="Source:"), 0, wx.LEFT, 10)
-        source_labels = {"osm": "OpenStreetMap", "here": "HERE", "google": "Google Maps"}
-        self._source_keys = sources
-        self.combo_source = wx.Choice(
-            panel,
-            choices=[source_labels.get(s, s) for s in sources],
-        )
-        default_idx = sources.index(preferred_source) if preferred_source in sources else 0
-        self.combo_source.SetSelection(default_idx)
-        vs.Add(self.combo_source, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
-
         hs = wx.BoxSizer(wx.HORIZONTAL)
         go_btn     = wx.Button(panel, wx.ID_OK,     "Go")
         cancel_btn = wx.Button(panel, wx.ID_CANCEL, "Cancel")
@@ -1083,7 +1089,6 @@ class POICategoryDialog(wx.Dialog):
             self.txt_street,
             self.combo,
             self.combo_radius,
-            self.combo_source,
             go_btn,
             cancel_btn,
         ]
@@ -1114,10 +1119,6 @@ class POICategoryDialog(wx.Dialog):
         self.selected_key    = POI_CATEGORY_CHOICES[idx][0]
         self.selected_name   = self.txt_name.GetValue().strip()
         self.selected_street = self.txt_street.GetValue().strip()
-        src_idx = self.combo_source.GetSelection()
-        self.selected_source = (self._source_keys[src_idx]
-                                if 0 <= src_idx < len(self._source_keys)
-                                else "osm")
         rad_idx = self.combo_radius.GetSelection()
         self.selected_radius = (self._radius_values[rad_idx]
                                 if 0 <= rad_idx < len(self._radius_values)
@@ -1288,6 +1289,7 @@ class ToolsMenuDialog(wx.Dialog):
     """F12 Tools menu — pick an action from a short list."""
 
     TOOLS = [
+        ("Journey AudioGraph", "journey_audiograph"),
         ("Detour Calculator",  "detour_calculator"),
         ("Suburb Lister",      "route_explorer"),
         ("Shared Journey",     "rendezvous_point"),
@@ -1300,7 +1302,7 @@ class ToolsMenuDialog(wx.Dialog):
         ("Accor Booking",      "accor_booking"),
         ("Expedia Booking",    "expedia_booking"),
         ("Booking.com Booking", "booking_com_booking"),
-        ("Greyhound Australia Booking", "greyhound_booking"),
+        ("Long Distance Coach Search", "murrays_search"),
         ("Hotel Search",       "hotel_search"),
         ("Find Food",          "find_food"),
         ("Order an Uber",      "order_uber"),
@@ -1345,6 +1347,278 @@ class ToolsMenuDialog(wx.Dialog):
         if _hook_escape_enter(self, event, on_enter=self._on_choose):
             return
         event.Skip()
+
+
+class JourneyAudioGraphEntryDialog(wx.Dialog):
+    """Show resolved locations and choose whether to add more or finish."""
+
+    def __init__(self, parent, locations=None) -> None:
+        super().__init__(parent, title="Journey AudioGraph",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self._locations = list(locations or [])
+        panel = wx.Panel(self)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+
+        self.locations = wx.ListBox(
+            panel,
+            choices=[item[2] for item in self._locations],
+        )
+        if self._locations:
+            self.locations.SetSelection(len(self._locations) - 1)
+        sizer.Add(self.locations, 1, wx.ALL | wx.EXPAND, 10)
+
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        add_btn = wx.Button(panel, wx.ID_APPLY, "Add location")
+        remove_btn = wx.Button(panel, label="Remove")
+        finish_btn = wx.Button(panel, wx.ID_OK, "Finish")
+        cancel_btn = wx.Button(panel, wx.ID_CANCEL, "Cancel")
+        for button in (add_btn, remove_btn, finish_btn, cancel_btn):
+            buttons.Add(button, 0, wx.RIGHT, 8)
+        sizer.Add(buttons, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        panel.SetSizer(sizer)
+        self.SetSize(500, 360)
+        add_btn.Bind(wx.EVT_BUTTON, lambda event: self.EndModal(wx.ID_APPLY))
+        remove_btn.Bind(wx.EVT_BUTTON, self._remove)
+        finish_btn.Bind(wx.EVT_BUTTON, lambda event: self.EndModal(wx.ID_OK))
+        remove_btn.Enable(bool(self._locations))
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+        wx.CallAfter(add_btn.SetFocus)
+
+    def _remove(self, event=None):
+        selection = self.locations.GetSelection()
+        if selection != wx.NOT_FOUND:
+            del self._locations[selection]
+            self.EndModal(wx.ID_DELETE)
+
+    def GetLocations(self):
+        return list(self._locations)
+
+    def _on_char_hook(self, event):
+        key = event.GetKeyCode()
+        if key == wx.WXK_ESCAPE:
+            _return_parent_focus(self)
+            self.EndModal(wx.ID_CANCEL)
+            return
+        event.Skip()
+
+
+class JourneyAudioGraphPlaybackDialog(wx.Dialog):
+    """Speak and sonify resolved locations in order; Escape cancels."""
+
+    TONE_DURATION_MS = 150
+    BETWEEN_LOCATIONS_MS = 1000
+
+    def __init__(self, parent, locations) -> None:
+        super().__init__(parent, title="Journey AudioGraph",
+                         style=wx.DEFAULT_DIALOG_STYLE)
+        self._owner = parent
+        self._locations = list(locations)
+        self._tone_bounds_by_index = self._cluster_location_bounds(
+            self._locations)
+        self._index = 0
+        self._closed = False
+        self._generation = 0
+
+        panel = wx.Panel(self)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        self.status = wx.TextCtrl(
+            panel, value="", name="Current location",
+            style=wx.TE_READONLY,
+        )
+        _set_explicit_accessible_name(self, self.status, "Current location")
+        sizer.Add(self.status, 0, wx.ALL | wx.EXPAND, 12)
+        cancel_btn = wx.Button(panel, wx.ID_CANCEL, "Cancel")
+        sizer.Add(cancel_btn, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+        panel.SetSizer(sizer)
+        self.SetSize(460, 150)
+
+        cancel_btn.Bind(wx.EVT_BUTTON, self._cancel)
+        self.Bind(wx.EVT_CLOSE, self._cancel)
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+        # Keep focus on Cancel. The city is spoken explicitly below; focusing
+        # the changing text field can make some screen readers repeat it.
+        wx.CallAfter(cancel_btn.SetFocus)
+        wx.CallLater(120, self._next_location, self._generation)
+
+    @staticmethod
+    def _speech_delay_ms(name):
+        # AccessibleOutput2 queues speech but cannot signal its completion.
+        # This conservative estimate works for short and qualified city names.
+        words = max(1, len(str(name).split()))
+        return max(650, min(3200, 300 + words * 360))
+
+    @staticmethod
+    def _location_bounds(locations):
+        """Fit all locations to one physically proportionate audio viewport."""
+        if not locations:
+            return None
+        lats = [float(item[0]) for item in locations]
+        lons = [float(item[1]) for item in locations]
+        # Unwrap journeys crossing the Date Line so nearby points do not
+        # appear to span almost the entire planet.
+        unwrapped = max(lons) - min(lons) > 180.0
+        if unwrapped:
+            lons = [lon + 360.0 if lon < 0.0 else lon for lon in lons]
+
+        mid_lat = (min(lats) + max(lats)) / 2.0
+        mid_lon = (min(lons) + max(lons)) / 2.0
+        lon_scale = max(0.01, abs(math.cos(math.radians(mid_lat))))
+        lat_span_km = (max(lats) - min(lats)) * 111.195
+        lon_span_km = (max(lons) - min(lons)) * 111.195 * lon_scale
+        # Equal physical spans preserve the audible shape. A small minimum
+        # keeps identical or extremely close entries numerically stable.
+        physical_span_km = max(2.0, lat_span_km, lon_span_km) * 1.10
+        half_lat = physical_span_km / 111.195 / 2.0
+        half_lon = physical_span_km / (111.195 * lon_scale) / 2.0
+        return (
+            max(-90.0, mid_lat - half_lat),
+            min(90.0, mid_lat + half_lat),
+            mid_lon - half_lon,
+            mid_lon + half_lon,
+        )
+
+    @classmethod
+    def _cluster_location_bounds(cls, locations):
+        """Give each location the bounds of its automatically detected region."""
+        locations = list(locations)
+        if len(locations) < 2:
+            bounds = cls._location_bounds(locations)
+            return [bounds] * len(locations)
+
+        legs_km = [
+            dist_metres(
+                float(previous[0]), float(previous[1]),
+                float(current[0]), float(current[1]),
+            ) / 1000.0
+            for previous, current in zip(locations, locations[1:])
+        ]
+        # Estimate the ordinary local leg from the shorter half. This prevents
+        # one or two inter-city jumps from stretching a metropolitan cluster.
+        shorter_half = sorted(legs_km)[:max(1, (len(legs_km) + 1) // 2)]
+        local_leg_km = shorter_half[(len(shorter_half) - 1) // 2]
+        split_at_km = max(50.0, local_leg_km * 3.0)
+
+        clusters = []
+        start = 0
+        for index, leg_km in enumerate(legs_km, start=1):
+            if leg_km > split_at_km:
+                clusters.append((start, index))
+                start = index
+        clusters.append((start, len(locations)))
+
+        # A one-location viewport has no spatial relationship to express: its
+        # only tone lands in the centre, followed by another immediate rescale.
+        # Merge such a bridge point forward where possible, or backward when it
+        # is the final region.
+        index = 0
+        while len(clusters) > 1 and index < len(clusters):
+            first, stop = clusters[index]
+            if stop - first != 1:
+                index += 1
+                continue
+            if index < len(clusters) - 1:
+                _next_first, next_stop = clusters[index + 1]
+                clusters[index:index + 2] = [(first, next_stop)]
+            else:
+                previous_first, _previous_stop = clusters[index - 1]
+                clusters[index - 1:index + 1] = [(previous_first, stop)]
+                index = max(0, index - 1)
+
+        bounds_by_index = [None] * len(locations)
+        for first, stop in clusters:
+            bounds = cls._location_bounds(locations[first:stop])
+            for index in range(first, stop):
+                bounds_by_index[index] = bounds
+        return bounds_by_index
+
+    def _next_location(self, generation):
+        if self._closed or generation != self._generation:
+            return
+        if self._index >= len(self._locations):
+            self._close(wx.ID_OK)
+            return
+        lat, lon, name = self._locations[self._index]
+        spoken = self._spoken_location(self._locations, self._index)
+        if (self._index > 0
+                and self._tone_bounds_by_index[self._index]
+                != self._tone_bounds_by_index[self._index - 1]):
+            spoken = f"Rescaling audio map. {spoken}"
+        self.status.SetValue(spoken)
+        self.status.SetInsertionPoint(0)
+        speech = getattr(self._owner, "_emit_speech", None)
+        if callable(speech):
+            speech(spoken)
+        wx.CallLater(self._speech_delay_ms(spoken), self._play_tone,
+                     generation, float(lat), float(lon))
+
+    @staticmethod
+    def _spoken_location(locations, index):
+        lat, lon, name = locations[index]
+        if index == 0:
+            return name
+        previous_lat, previous_lon, _previous_name = locations[index - 1]
+        kilometres = dist_metres(
+            float(previous_lat), float(previous_lon),
+            float(lat), float(lon),
+        ) / 1000.0
+        distance = (
+            f"{kilometres:.1f}" if kilometres < 10.0
+            else f"{kilometres:.0f}"
+        )
+        direction = compass_name(bearing_deg(
+            float(previous_lat), float(previous_lon),
+            float(lat), float(lon),
+        )).lower().replace("-", " ")
+        return f"{name}, {distance} kilometres {direction}"
+
+    def _play_tone(self, generation, lat, lon):
+        if self._closed or generation != self._generation:
+            return
+        sound = getattr(self._owner, "sound", None)
+        if sound:
+            bounds = (
+                self._tone_bounds_by_index[self._index]
+                if self._index < len(self._tone_bounds_by_index) else None
+            )
+            normalized_lat, normalized_lon, frequency, pan = (
+                sound.spatial_tone_parameters(lat, lon, bounds))
+            rescaled = (
+                self._index > 0
+                and bounds != self._tone_bounds_by_index[self._index - 1]
+            )
+            name = self._locations[self._index][2]
+            miab_log(
+                "verbose",
+                "[JourneyAudioGraph] "
+                f"tone={self._index + 1}/{len(self._locations)} "
+                f"name={name!r} coordinate=({lat:.6f},{lon:.6f}) "
+                f"bounds={bounds!r} "
+                f"normalized=({normalized_lat:.3f},{normalized_lon:.3f}) "
+                f"frequency_hz={frequency:.1f} pan={pan:.3f} "
+                f"rescaled={'yes' if rescaled else 'no'}",
+                getattr(self._owner, "settings", None),
+            )
+            sound.play_spatial_tone(lat, lon, bounds)
+        self._index += 1
+        wx.CallLater(self.TONE_DURATION_MS + self.BETWEEN_LOCATIONS_MS,
+                     self._next_location, generation)
+
+    def _on_char_hook(self, event):
+        if event.GetKeyCode() == wx.WXK_ESCAPE:
+            self._cancel()
+            return
+        event.Skip()
+
+    def _cancel(self, event=None):
+        self._close(wx.ID_CANCEL)
+
+    def _close(self, result):
+        if self._closed:
+            return
+        self._closed = True
+        self._generation += 1
+        self.EndModal(result)
 
 
 class StopEntryDialog(wx.Dialog):
@@ -2105,6 +2379,640 @@ class BookingComBookingDialog(ExpediaBookingDialog):
             open_btn.SetLabel("Open Booking.com")
 
 
+class MurraysSearchDialog(wx.Dialog):
+    """One accessible search for supported long-distance coach operators."""
+
+    _UNAVAILABLE_SUFFIX = " — unavailable on this date"
+
+    def __init__(self, parent, network=None, greyhound_stops=None,
+                 premier_network=None):
+        super().__init__(parent, title="Long Distance Coach Search",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        _set_explicit_accessible_name(self, self, "Long Distance Coach Search")
+        import datetime as _dt
+        self._network = list(network or [])
+        self._greyhound_stops = list(greyhound_stops or [])
+        self._premier_network = list(premier_network or [])
+        self._destination_generation = 0
+        self._pending_destination_load = None
+        self._destination_cancel = None
+        self._destinations_loading = False
+        self._search_when_destinations_ready = False
+        panel = wx.Panel(self)
+        self._panel = panel
+        outer = wx.BoxSizer(wx.VERTICAL)
+        outer.Add(wx.StaticText(panel, label="Operator:"), 0, wx.LEFT | wx.TOP, 10)
+        self.provider = wx.Choice(
+            panel, choices=["All operators", "Murrays Coaches",
+                            "Greyhound Australia", "Premier Motor Service"])
+        self.provider.SetSelection(0)
+        _set_explicit_accessible_name(self, self.provider, "Coach operator")
+        outer.Add(self.provider, 0, wx.ALL | wx.EXPAND, 10)
+        outer.Add(wx.StaticText(panel, label="Origin:"), 0, wx.LEFT | wx.TOP, 10)
+        self.origin = wx.Choice(panel)
+        _set_explicit_accessible_name(self, self.origin, "Coach origin")
+        outer.Add(self.origin, 0, wx.ALL | wx.EXPAND, 10)
+        outer.Add(wx.StaticText(panel, label="Destination:"), 0, wx.LEFT | wx.RIGHT, 10)
+        self.destination = wx.Choice(panel)
+        _set_explicit_accessible_name(self, self.destination, "Coach destination")
+        outer.Add(self.destination, 0, wx.ALL | wx.EXPAND, 10)
+        outer.Add(wx.StaticText(panel, label="Travel date, DDMMYYYY:"),
+                  0, wx.LEFT | wx.RIGHT, 10)
+        self.date = wx.TextCtrl(panel, value=_dt.date.today().strftime("%d%m%Y"))
+        _set_explicit_accessible_name(self, self.date, "Travel date, DDMMYYYY")
+        outer.Add(self.date, 0, wx.ALL | wx.EXPAND, 10)
+        search_row = wx.BoxSizer(wx.HORIZONTAL)
+        search = wx.Button(panel, label="Search")
+        self._search_button = search
+        search_row.Add(search, 0)
+        outer.Add(search_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        self.results_heading = wx.StaticText(panel, label="Departure times:")
+        outer.Add(self.results_heading, 0, wx.LEFT | wx.RIGHT, 10)
+        self.results = wx.ListBox(panel)
+        outer.Add(self.results, 1, wx.ALL | wx.EXPAND, 10)
+        self._result_rows = []
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        self.route_stops = wx.Button(panel, label="Route stops")
+        self.open_murrays = wx.Button(panel, label="Open Murrays")
+        self.open_greyhound = wx.Button(panel, label="Open Greyhound")
+        self.open_premier = wx.Button(panel, label="Open Premier")
+        close = wx.Button(panel, wx.ID_CLOSE, "Close")
+        for button in (self.route_stops, self.open_murrays, self.open_greyhound,
+                       self.open_premier):
+            buttons.Add(button, 0, wx.RIGHT, 8)
+        buttons.Add(close, 0)
+        outer.Add(buttons, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        panel.SetSizer(outer)
+        self.SetSize(680, 520)
+        search.Bind(wx.EVT_BUTTON, self._on_search)
+        self.provider.Bind(wx.EVT_CHOICE, self._on_provider)
+        self.origin.Bind(wx.EVT_CHOICE, self._on_origin)
+        self.destination.Bind(wx.EVT_CHOICE, self._on_destination)
+        self.date.Bind(wx.EVT_TEXT, self._on_date_changed)
+        self.results.Bind(wx.EVT_LISTBOX, self._on_result_selection)
+        self.results.Bind(wx.EVT_LISTBOX_DCLICK, self._on_route_stops)
+        self.route_stops.Bind(wx.EVT_BUTTON, self._on_route_stops)
+        self.open_murrays.Bind(wx.EVT_BUTTON, self._on_open_murrays)
+        self.open_greyhound.Bind(wx.EVT_BUTTON, self._on_open_greyhound)
+        self.open_premier.Bind(wx.EVT_BUTTON, self._on_open_premier)
+        close.Bind(wx.EVT_BUTTON, lambda event: self.EndModal(wx.ID_CLOSE))
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+        self._hide_results()
+        if self._network or self._greyhound_stops or self._premier_network:
+            self._on_provider()
+        else:
+            self.provider.Disable()
+            self.origin.Set(["Loading coach routes"])
+            self.origin.SetSelection(0)
+            self.origin.Disable()
+            self.destination.Set(["Loading coach routes"])
+            self.destination.SetSelection(0)
+            self.destination.Disable()
+            search.Disable()
+            self.open_murrays.Disable()
+            self.open_greyhound.Disable()
+            self.open_premier.Disable()
+        self.provider.SetFocus()
+
+    def set_route_data(self, network, greyhound_stops, premier_network=None):
+        """Populate provider data after the dialog is already visible."""
+        try:
+            if self.IsBeingDeleted():
+                return
+        except RuntimeError:
+            return
+        self._network = list(network)
+        self._greyhound_stops = list(greyhound_stops)
+        self._premier_network = list(premier_network or [])
+        for control in (self.provider, self.origin, self.destination, self._search_button):
+            control.Enable()
+        self._on_provider()
+        self.provider.SetFocus()
+
+    def show_route_error(self, message):
+        try:
+            if self.IsBeingDeleted():
+                return
+        except RuntimeError:
+            return
+        self.origin.Set(["Coach routes could not be loaded"])
+        self.origin.SetSelection(0)
+        wx.MessageBox(message, "Long Distance Coach Search", wx.OK | wx.ICON_ERROR)
+
+    def _provider_name(self):
+        return self.provider.GetStringSelection()
+
+    def _hide_results(self):
+        self.results.Clear()
+        self._result_rows = []
+        self.route_stops.Disable()
+        self.results_heading.SetLabel("Departure times:")
+        self.results_heading.Hide()
+        self.results.Hide()
+        self._panel.Layout()
+
+    def _show_results(self):
+        self.results_heading.Show()
+        self.results.Show()
+        self._panel.Layout()
+
+    def _greyhound_names(self):
+        from murrays import canonical_stop_name
+        return sorted({canonical_stop_name(stop["description"])
+                       for stop in self._greyhound_stops})
+
+    def _greyhound_stop_for(self, name):
+        from murrays import canonical_stop_name
+        wanted = canonical_stop_name(name)
+        return next((stop for stop in self._greyhound_stops
+                     if canonical_stop_name(stop["description"]) == wanted), None)
+
+    def _premier_names(self):
+        from murrays import canonical_stop_name
+        return sorted({canonical_stop_name(stop["description"])
+                       for route in self._premier_network
+                       for stop in route["stops"]})
+
+    def _premier_stop_for(self, name):
+        from murrays import canonical_stop_name
+        wanted = canonical_stop_name(name)
+        return next((stop for route in self._premier_network
+                     for stop in route["stops"]
+                     if canonical_stop_name(stop["description"]) == wanted), None)
+
+    def _premier_destinations(self, origin):
+        from murrays import canonical_stop_name
+        wanted = canonical_stop_name(origin)
+        found = set()
+        for route in self._premier_network:
+            indexes = [index for index, stop in enumerate(route["stops"])
+                       if canonical_stop_name(stop["description"]) == wanted]
+            for index in indexes:
+                found.update(canonical_stop_name(stop["description"])
+                             for stop in route["stops"][index + 1:])
+        return found
+
+    def _on_provider(self, event=None):
+        from murrays import origins
+        provider = self._provider_name()
+        choices = set()
+        if provider in ("All operators", "Murrays Coaches"):
+            choices.update(origins(self._network))
+        if provider in ("All operators", "Greyhound Australia"):
+            choices.update(self._greyhound_names())
+        if provider in ("All operators", "Premier Motor Service"):
+            choices.update(self._premier_names())
+        self.origin.Set(["Choose origin"] + sorted(choices))
+        self.origin.SetSelection(0)
+        self.destination.Set(["Choose destination"])
+        self.destination.SetSelection(0)
+        self.destination.Enable()
+        self._search_button.Enable()
+        self._destination_generation += 1
+        if self._pending_destination_load is not None:
+            self._pending_destination_load.Stop()
+            self._pending_destination_load = None
+        if self._destination_cancel is not None:
+            self._destination_cancel.set()
+            self._destination_cancel = None
+        self._destinations_loading = False
+        self._search_when_destinations_ready = False
+        self._hide_results()
+        self._update_open_buttons()
+
+    def _on_origin(self, event=None, preserve_destination=False):
+        from murrays import destinations
+        from tools import _parse_ddmmyyyy
+        previous_destination = None
+        if preserve_destination:
+            previous_destination = self.destination.GetStringSelection()
+            if previous_destination.endswith(self._UNAVAILABLE_SUFFIX):
+                previous_destination = previous_destination[:-len(
+                    self._UNAVAILABLE_SUFFIX)]
+            if previous_destination in (
+                    "", "Choose destination", "Loading destinations",
+                    "No destinations available"):
+                previous_destination = None
+        self._destination_generation += 1
+        generation = self._destination_generation
+        if self._pending_destination_load is not None:
+            self._pending_destination_load.Stop()
+            self._pending_destination_load = None
+        if self._destination_cancel is not None:
+            self._destination_cancel.set()
+            self._destination_cancel = None
+        self._destinations_loading = False
+        self._search_when_destinations_ready = False
+        origin = self.origin.GetStringSelection()
+        if not origin or origin == "Choose origin":
+            self.destination.Set(["Choose destination"])
+            self.destination.SetSelection(0)
+            self.destination.Enable()
+            self._search_button.Enable()
+            self._hide_results()
+            self._update_open_buttons()
+            return
+        provider = self._provider_name()
+        choices = set()
+        if provider in ("All operators", "Murrays Coaches"):
+            choices.update(destinations(self._network, origin))
+        if provider in ("All operators", "Premier Motor Service"):
+            choices.update(self._premier_destinations(origin))
+        if provider in ("All operators", "Greyhound Australia"):
+            try:
+                day = _parse_ddmmyyyy(self.date.GetValue())
+            except ValueError:
+                self.destination.Set(["Enter a valid travel date"])
+                self.destination.SetSelection(0)
+                self.destination.Enable()
+                self._search_button.Enable()
+                self._hide_results()
+                return
+            import threading
+            self._destination_cancel = threading.Event()
+            self.destination.Set(["Loading destinations"])
+            self.destination.SetSelection(0)
+            self.destination.Enable()
+            self._destinations_loading = True
+            self._search_button.Enable()
+            self._pending_destination_load = wx.CallLater(
+                500, self._start_destination_load,
+                generation, origin, provider, choices, day,
+                self._destination_cancel, preserve_destination,
+                previous_destination)
+            from logging_utils import miab_log
+            miab_log(
+                "verbose",
+                f"[CoachSearch] destination load scheduled generation={generation} "
+                f"origin={origin!r} date={day.isoformat()}",
+                getattr(self.GetParent(), "settings", None),
+            )
+        else:
+            if preserve_destination:
+                unavailable = self._set_destination_choices(
+                    choices, preferred=previous_destination)
+                if unavailable:
+                    wx.CallLater(
+                        150, self._announce_destinations_loaded,
+                        f"{previous_destination} unavailable on this date")
+            else:
+                self._set_destination_choices(choices)
+        self._hide_results()
+        self._update_open_buttons()
+
+    def _on_destination(self, event=None):
+        self._hide_results()
+        self._update_open_buttons()
+
+    def _on_date_changed(self, event=None):
+        self._search_when_destinations_ready = False
+        value = self.date.GetValue().strip()
+        if len(value) == 8 and value.isdigit():
+            self._on_origin(preserve_destination=True)
+        if event is not None:
+            event.Skip()
+
+    def _start_destination_load(self, generation, origin, provider, choices, day,
+                                cancel_event, preserve_destination,
+                                previous_destination):
+        self._pending_destination_load = None
+        import threading
+        threading.Thread(
+            target=self._load_greyhound_destinations,
+            args=(generation, origin, provider, choices, day, cancel_event,
+                  preserve_destination, previous_destination),
+            daemon=True).start()
+
+    def _load_greyhound_destinations(self, generation, origin, provider, choices,
+                                     day, cancel_event, preserve_destination,
+                                     previous_destination):
+        try:
+            from greyhound import valid_destinations
+            from murrays import canonical_stop_name
+            origin_stop = self._greyhound_stop_for(origin)
+            if origin_stop is not None:
+                choices.update(canonical_stop_name(stop["description"])
+                               for stop in valid_destinations(
+                                   origin_stop, self._greyhound_stops, day,
+                                   cancel_event=cancel_event))
+            error = None
+        except (RuntimeError, ValueError) as exc:
+            error = str(exc)
+        wx.CallAfter(self._finish_destination_load,
+                     generation, provider, choices, error,
+                     preserve_destination, previous_destination)
+
+    def _finish_destination_load(self, generation, provider, choices, error,
+                                 preserve_destination, previous_destination):
+        try:
+            if self.IsBeingDeleted() or generation != self._destination_generation:
+                return
+        except RuntimeError:
+            return
+        self._destination_cancel = None
+        self._destinations_loading = False
+        run_search = self._search_when_destinations_ready
+        self._search_when_destinations_ready = False
+        if error and provider == "Greyhound Australia":
+            self.destination.Set(["Greyhound destinations could not be loaded"])
+            self.destination.SetSelection(0)
+            self.destination.Enable()
+            self._search_button.Enable()
+            if run_search:
+                wx.CallAfter(
+                    wx.MessageBox, error, "Long Distance Coach Search",
+                    wx.OK | wx.ICON_ERROR)
+            return
+        destination_had_focus = self.destination.HasFocus()
+        unavailable = self._set_destination_choices(
+            choices, select_first=not preserve_destination,
+            preferred=previous_destination)
+        first = self.destination.GetStringSelection()
+        if (destination_had_focus and first
+                and first != "No destinations available"):
+            wx.CallLater(150, self._announce_destinations_loaded, first)
+        elif unavailable:
+            wx.CallLater(
+                150, self._announce_destinations_loaded,
+                f"{previous_destination} unavailable on this date")
+        from logging_utils import miab_log
+        miab_log(
+            "verbose",
+            f"[CoachSearch] destination load completed generation={generation} "
+            f"count={len(choices)} destination_had_focus={destination_had_focus}",
+            getattr(self.GetParent(), "settings", None),
+        )
+        self._update_open_buttons()
+        if run_search:
+            if choices:
+                wx.CallAfter(self._on_search)
+            else:
+                wx.CallAfter(
+                    wx.MessageBox,
+                    "No destinations are available for this origin and date.",
+                    "Long Distance Coach Search", wx.OK | wx.ICON_INFORMATION)
+
+    def _announce_destinations_loaded(self, first):
+        parent = self.GetParent()
+        emit = getattr(parent, "_emit_speech", None)
+        if callable(emit):
+            emit(first)
+            return
+        from speech_dispatch import speak
+        speak(first)
+
+    def _set_destination_choices(self, choices, select_first=False, preferred=None):
+        ordered = sorted(choices)
+        unavailable = False
+        if not ordered:
+            if preferred:
+                values = [preferred + self._UNAVAILABLE_SUFFIX]
+                unavailable = True
+            else:
+                values = ["No destinations available"]
+            selection = 0
+        elif preferred in ordered:
+            values = ordered
+            selection = ordered.index(preferred)
+        elif preferred:
+            values = [preferred + self._UNAVAILABLE_SUFFIX] + ordered
+            selection = 0
+            unavailable = True
+        elif select_first:
+            values = ordered
+            selection = 0
+        else:
+            values = ["Choose destination"] + ordered
+            selection = 0
+        self.destination.Set(values)
+        self.destination.SetSelection(selection)
+        self.destination.Enable()
+        self._search_button.Enable()
+        return unavailable
+
+    def _values(self):
+        from tools import _parse_ddmmyyyy
+        origin = self.origin.GetStringSelection()
+        destination = self.destination.GetStringSelection()
+        if destination.endswith(self._UNAVAILABLE_SUFFIX):
+            raise ValueError("destination unavailable on this date")
+        if (not origin or not destination or origin == "Choose origin"
+                or destination == "Choose destination"):
+            raise ValueError("choose an origin and destination")
+        return (origin, destination), _parse_ddmmyyyy(self.date.GetValue())
+
+    def _on_search(self, event=None, move_focus=True):
+        import datetime as _dt
+        self._hide_results()
+        if self._destinations_loading:
+            # Do not call screen-reader COM or change focus from inside the
+            # synchronous keyboard/button event.  Windows can reject that as
+            # RPC_E_CANTCALLOUT_ININPUTSYNCCALL (0x8001010d).
+            self._search_when_destinations_ready = True
+            from logging_utils import miab_log
+            miab_log(
+                "verbose", "[CoachSearch] Search queued while destinations loading",
+                getattr(self.GetParent(), "settings", None),
+            )
+            return
+        try:
+            (origin, destination), day = self._values()
+        except (ValueError, IndexError) as exc:
+            if "destination unavailable" in str(exc):
+                destination = self.destination.GetStringSelection()
+                destination = destination[:-len(self._UNAVAILABLE_SUFFIX)]
+                wx.MessageBox(
+                    f"{destination} is unavailable on this date. Change the travel date and try again.",
+                    "Destination unavailable", wx.OK | wx.ICON_INFORMATION)
+                self.date.SetFocus()
+            elif "origin and destination" in str(exc):
+                wx.MessageBox("Choose an origin and destination first.",
+                              "Missing route", wx.OK | wx.ICON_WARNING)
+                self.origin.SetFocus()
+            else:
+                wx.MessageBox("Enter the date as eight digits in DDMMYYYY format.",
+                              "Invalid date", wx.OK | wx.ICON_WARNING)
+                self.date.SetFocus()
+            return
+        if day < _dt.date.today():
+            wx.MessageBox("Travel date cannot be in the past.", "Invalid date",
+                          wx.OK | wx.ICON_WARNING)
+            return
+        from murrays import departures, find_route, load_live_departures
+        from greyhound import load_live_departures as load_greyhound_departures
+        provider = self._provider_name()
+        rows = []
+        murrays_count = 0
+        greyhound_count = 0
+        premier_count = 0
+        errors = []
+        with wx.BusyCursor():
+            if provider in ("All operators", "Murrays Coaches"):
+                try:
+                    route = find_route(self._network, origin, destination)
+                    murrays_rows = load_live_departures(route, day)
+                    # Murrays' availability page can omit trips after their
+                    # same-day sales cutoff. Keep the published timetable
+                    # visible for the supported comparison route.
+                    if not murrays_rows:
+                        murrays_rows = [dict(row, operator="Murrays") for row in
+                                        departures(origin.title(), destination.title(), day)]
+                    rows.extend(murrays_rows)
+                    murrays_count = len(murrays_rows)
+                except (RuntimeError, ValueError) as exc:
+                    errors.append(f"Murrays: {exc}")
+            if provider in ("All operators", "Greyhound Australia"):
+                try:
+                    origin_stop = self._greyhound_stop_for(origin)
+                    destination_stop = self._greyhound_stop_for(destination)
+                    if origin_stop is not None and destination_stop is not None:
+                        greyhound_rows = load_greyhound_departures(
+                            origin_stop, destination_stop, day)
+                        rows.extend(greyhound_rows)
+                        greyhound_count = len(greyhound_rows)
+                except (RuntimeError, ValueError) as exc:
+                    errors.append(f"Greyhound: {exc}")
+            if provider in ("All operators", "Premier Motor Service"):
+                try:
+                    from premier import load_live_departures as load_premier_departures
+                    origin_stop = self._premier_stop_for(origin)
+                    destination_stop = self._premier_stop_for(destination)
+                    if origin_stop is not None and destination_stop is not None:
+                        premier_rows = load_premier_departures(
+                            origin_stop, destination_stop, day,
+                            self._premier_network)
+                        rows.extend(premier_rows)
+                        premier_count = len(premier_rows)
+                except (RuntimeError, ValueError) as exc:
+                    errors.append(f"Premier: {exc}")
+        if errors and (provider != "All operators" or not rows):
+            wx.MessageBox("\n\n".join(errors), "Long Distance Coach Search",
+                          wx.OK | wx.ICON_ERROR)
+            return
+        from logging_utils import miab_log
+        miab_log(
+            "navigation",
+            f"[CoachSearch] provider={provider!r} origin={origin!r} "
+            f"destination={destination!r} date={day.isoformat()} "
+            f"murrays_rows={murrays_count} greyhound_rows={greyhound_count} "
+            f"premier_rows={premier_count} "
+            f"errors={errors!r}",
+            getattr(self.GetParent(), "settings", None),
+        )
+        rows.sort(key=lambda row: (row["depart"], row["operator"]))
+        self._result_rows = rows
+        heading = f"Departure times from {origin} to {destination} on {day:%A %d %B %Y}:"
+        self.results_heading.SetLabel(heading)
+        self.results.Set([row["label"] for row in rows] or [
+            "No departures were found for this route and date"])
+        self.results.SetSelection(0)
+        self._on_result_selection()
+        self._show_results()
+        self._update_open_buttons()
+        if move_focus:
+            self.results.SetFocus()
+
+    def _on_result_selection(self, event=None):
+        index = self.results.GetSelection()
+        row = (self._result_rows[index]
+               if 0 <= index < len(self._result_rows) else None)
+        self.route_stops.Enable(bool(
+            row and row.get("operator") in ("Greyhound", "Premier")))
+        if event is not None:
+            event.Skip()
+
+    def _on_route_stops(self, event=None):
+        index = self.results.GetSelection()
+        if not 0 <= index < len(self._result_rows):
+            wx.Bell()
+            return
+        row = self._result_rows[index]
+        if row.get("operator") not in ("Greyhound", "Premier"):
+            wx.MessageBox("Route stops are available for Greyhound and Premier departures.",
+                          "Long Distance Coach Search",
+                          wx.OK | wx.ICON_INFORMATION)
+            return
+        if row.get("operator") == "Premier":
+            from premier import route_stop_items
+            items = route_stop_items(row)
+        else:
+            from greyhound import live_route_stop_items
+            items = live_route_stop_items(row)
+        dlg = GreyhoundStopsDialog(self, items)
+        dlg.ShowModal()
+        dlg.Destroy()
+        self.results.SetFocus()
+
+    def _update_open_buttons(self):
+        from murrays import find_route
+        origin = self.origin.GetStringSelection()
+        destination = self.destination.GetStringSelection()
+        valid = origin not in ("", "Choose origin") and destination not in (
+            "", "Choose destination")
+        has_murrays = valid and find_route(self._network, origin, destination) is not None
+        has_greyhound = (valid and self._greyhound_stop_for(origin) is not None
+                         and self._greyhound_stop_for(destination) is not None
+                         and origin != destination)
+        has_premier = (valid and self._premier_stop_for(origin) is not None
+                       and destination in self._premier_destinations(origin))
+        provider = self._provider_name()
+        self.open_murrays.Enable(
+            has_murrays and provider in ("All operators", "Murrays Coaches"))
+        self.open_greyhound.Enable(
+            has_greyhound and provider in ("All operators", "Greyhound Australia"))
+        self.open_premier.Enable(
+            has_premier and provider in ("All operators", "Premier Motor Service"))
+
+    def _on_open_murrays(self, event=None):
+        try:
+            import webbrowser
+            from murrays import find_route
+            from tools import _build_murrays_booking_url
+            (origin, destination), _day = self._values()
+            route = find_route(self._network, origin, destination)
+            url = _build_murrays_booking_url(
+                origin, destination, route["group"] if route else None)
+            if webbrowser.open(url) is False:
+                raise RuntimeError("The web browser did not accept the booking link.")
+        except Exception as exc:
+            wx.MessageBox(f"Could not open Murrays:\n\n{exc}",
+                          "Long Distance Coach Search", wx.OK | wx.ICON_ERROR)
+
+    def _on_open_greyhound(self, event=None):
+        try:
+            import webbrowser
+            from tools import _build_greyhound_booking_url
+            (origin, destination), day = self._values()
+            values = {"origin": self._greyhound_stop_for(origin),
+                      "destination": self._greyhound_stop_for(destination),
+                      "depart": day, "return": None, "is_return": False,
+                      "promo_code": ""}
+            if webbrowser.open(_build_greyhound_booking_url(values)) is False:
+                raise RuntimeError("The web browser did not accept the booking link.")
+        except Exception as exc:
+            wx.MessageBox(f"Could not open Greyhound Australia:\n\n{exc}",
+                          "Long Distance Coach Search", wx.OK | wx.ICON_ERROR)
+
+    def _on_open_premier(self, event=None):
+        try:
+            import webbrowser
+            from premier import BOOKING_URL
+            if webbrowser.open(BOOKING_URL) is False:
+                raise RuntimeError("The web browser did not accept the booking link.")
+        except Exception as exc:
+            wx.MessageBox(f"Could not open Premier Motor Service:\n\n{exc}",
+                          "Long Distance Coach Search", wx.OK | wx.ICON_ERROR)
+
+    def _on_char_hook(self, event):
+        key = event.GetKeyCode()
+        if key == wx.WXK_ESCAPE:
+            self.EndModal(wx.ID_CLOSE)
+        elif key in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER) and self.results.HasFocus():
+            self._on_route_stops()
+        else:
+            event.Skip()
+
+
 class GreyhoundStopPickerDialog(wx.Dialog):
     """Filterable, keyboard-friendly chooser for Greyhound stops."""
 
@@ -2310,9 +3218,27 @@ class GreyhoundBookingDialog(wx.Dialog):
         self.search_button.SetLabel("Searching")
         wx.YieldIfNeeded()
         try:
-            from greyhound import load_availability
+            from greyhound import BookingSiteChanged, load_availability
             with wx.BusyCursor():
                 self.availability = load_availability(values)
+        except BookingSiteChanged:
+            try:
+                import webbrowser
+                from tools import _build_greyhound_booking_url
+                if webbrowser.open(_build_greyhound_booking_url(values)) is False:
+                    raise RuntimeError("The web browser did not accept the booking link.")
+            except Exception as exc:
+                self.search_button.SetLabel("Search Greyhound")
+                self.search_button.Enable()
+                wx.MessageBox(f"Could not open Greyhound Australia:\n\n{exc}",
+                              "Greyhound Australia Booking", wx.OK | wx.ICON_ERROR)
+                return
+            wx.MessageBox(
+                "Greyhound has moved live departure times to its new booking "
+                "widget. Your origin, destination and date have been opened there.",
+                "Greyhound Australia Booking", wx.OK | wx.ICON_INFORMATION)
+            self.EndModal(wx.ID_CANCEL)
+            return
         except RuntimeError as exc:
             self.search_button.SetLabel("Search Greyhound")
             self.search_button.Enable()
@@ -2332,7 +3258,7 @@ class GreyhoundStopsDialog(wx.Dialog):
     """Arrow-navigable complete Greyhound service stop list."""
 
     def __init__(self, parent, items):
-        super().__init__(parent, title="Greyhound Service Stops",
+        super().__init__(parent, title="Coach Service Stops",
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         panel = wx.Panel(self)
         outer = wx.BoxSizer(wx.VERTICAL)

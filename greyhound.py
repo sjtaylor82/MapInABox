@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import html
 import os
 import re
 import time
@@ -15,8 +16,10 @@ from app_paths import CACHE_DIR
 from geo import dist_km
 from logging_utils import miab_log
 
-STOPS_URL = "https://www.greyhound.com.au/umbraco/api/travel/getstops"
-CACHE_PATH = os.path.join(CACHE_DIR, "greyhound_stops.json")
+STOPS_URL = "https://book.greyhound.com.au/api/booking/options"
+LIVE_TIMETABLE_URL = "https://book.greyhound.com.au/api/timetables/search"
+STOP_VALIDATION_URL = "https://book.greyhound.com.au/api/stopvalidation/{origin}/{destination}"
+CACHE_PATH = os.path.join(CACHE_DIR, "greyhound_stops_v2.json")
 CACHE_TTL_SECONDS = 86400
 # Greyhound's directory has no coordinates, so stops are geocoded with Photon.
 PHOTON_URL = "https://photon.komoot.io/api/"
@@ -32,6 +35,23 @@ AVAILABILITY_URL = (
     "postexpressavailability")
 
 
+class BookingSiteChanged(RuntimeError):
+    """Greyhound's public site no longer exposes its former JSON form."""
+
+
+def _verification_token(page, preferred_id=None):
+    """Extract an antiforgery token without depending on attribute order."""
+    for tag in re.findall(r"<input\b[^>]*>", page, flags=re.IGNORECASE):
+        attrs = dict((name.casefold(), value) for name, _quote, value in re.findall(
+            r"([\w:-]+)\s*=\s*([\"'])(.*?)\2", tag, flags=re.DOTALL))
+        identity = (attrs.get("id", "") + " " + attrs.get("name", "")).casefold()
+        if ((preferred_id and preferred_id.casefold() in identity)
+                or "requestverificationtoken" in identity or "csrf" in identity):
+            if attrs.get("value"):
+                return attrs["value"]
+    return None
+
+
 def _normalise_stops(data):
     if isinstance(data, dict):
         data = data.get("Stops", data.get("stops", []))
@@ -41,12 +61,18 @@ def _normalise_stops(data):
     for item in data:
         if not isinstance(item, dict):
             continue
+        if item.get("AvailableOnline", item.get("availableOnline", True)) is False:
+            continue
         code = str(item.get("Code") or item.get("code") or "").strip().upper()
         description = str(item.get("Description") or item.get("description") or "").strip()
         address = str(item.get("Address") or item.get("address") or "").strip()
+        if "MEAL BREAK" in description.upper() or "NO PICKUP" in address.upper():
+            continue
         if code and description and code not in seen:
             seen.add(code)
-            stops.append({"code": code, "description": description, "address": address})
+            stops.append({"code": code, "description": description, "address": address,
+                          "terminal": bool(item.get(
+                              "IsTerminal", item.get("terminal", False)))})
     if not stops:
         raise ValueError("Greyhound returned no usable stops")
     return sorted(stops, key=lambda stop: (stop["description"].casefold(), stop["code"]))
@@ -88,6 +114,102 @@ def load_stops(cache_path=CACHE_PATH, now=None, opener=None):
             miab_log("errors", f"[Greyhound] Stop refresh failed; using cache: {exc}", None)
             return cached[0]
         raise RuntimeError(f"Could not download Greyhound destinations: {exc}") from exc
+
+
+def _live_time(value):
+    text = str(value or "").strip()
+    try:
+        return _dt.datetime.strptime(text[:16], "%Y-%m-%d %H:%M")
+    except ValueError:
+        return None
+
+
+def _spoken_live_time(value):
+    return value.strftime("%I:%M%p").lstrip("0").lower()
+
+
+def live_departure_rows(data, destination_name, origin_code=None,
+                        destination_code=None):
+    """Flatten Greyhound's current timetable response into accessible rows."""
+    destination_name = re.sub(
+        r"^\s*\(SFR\s*-\s*TEMP LOCAT\)\s*", "", destination_name,
+        flags=re.IGNORECASE)
+    rows = []
+    seen = set()
+    for route in (data or {}).get("Routes") or []:
+        services = route.get("Services") or []
+        depart = _live_time(route.get("DepartureDate"))
+        arrive = _live_time(route.get("ArrivalDate"))
+        if depart is None and services:
+            depart = _live_time(services[0].get("DepartureDate"))
+        if arrive is None and services:
+            arrive = _live_time(services[-1].get("ArrivalTime"))
+        if depart is None or arrive is None:
+            continue
+        service = html.unescape(str(route.get("RouteServiceSummary") or ", ".join(
+            str(item.get("Service") or "") for item in services)).strip(", "))
+        key = (depart, arrive, service)
+        if key in seen:
+            continue
+        seen.add(key)
+        fare = route.get("CheapestFare")
+        if fare is None and services:
+            fare = services[0].get("CheapestFare")
+        label = (f"{_spoken_live_time(depart)} — Greyhound {service}, arrives at "
+                 f"{destination_name.title()} at {_spoken_live_time(arrive)}")
+        day_difference = (arrive.date() - depart.date()).days
+        if day_difference == 1:
+            label += " next day"
+        elif day_difference > 1:
+            label += f" {day_difference} days later"
+        if isinstance(fare, (int, float)) and fare > 0:
+            label += f", from ${fare:g}"
+        rows.append({"operator": "Greyhound", "service": service,
+                     "depart": depart.strftime("%H:%M"),
+                     "arrive": arrive.strftime("%H:%M"),
+                     "price": fare, "label": label, "route": route})
+        rows[-1]["origin_code"] = origin_code
+        rows[-1]["destination_code"] = destination_code
+    return sorted(rows, key=lambda row: row["depart"])
+
+
+def load_live_departures(origin, destination, day, opener=None):
+    """Return live Greyhound services for one validated route and date."""
+    open_url = opener or urllib.request.urlopen
+    headers = {"Accept": "application/json",
+               "User-Agent": "Map in a Box/1.0 (accessible coach search)"}
+    try:
+        valid, message = validate_route(origin, destination, opener=open_url)
+        if not valid:
+            message = message or "Greyhound does not operate this route"
+            raise ValueError(message)
+        data = load_live_timetable(origin, destination, day, opener=open_url)
+        return live_departure_rows(
+            data, destination["description"], origin["code"], destination["code"])
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"Could not search Greyhound departure times: {exc}") from exc
+
+
+def load_live_timetable(origin, destination, day, opener=None):
+    """Return Greyhound's raw live timetable data without a pair precheck."""
+    payload = json.dumps({"origin": origin["code"],
+                          "destination": destination["code"],
+                          "travelDate": day.isoformat()}).encode()
+    request = urllib.request.Request(
+        LIVE_TIMETABLE_URL, data=payload, method="POST",
+        headers={"Accept": "application/json",
+                 "Content-Type": "application/json",
+                 "User-Agent": "Map in a Box/1.0 (accessible coach search)"})
+    try:
+        with (opener or urllib.request.urlopen)(request, timeout=30) as response:
+            data = json.loads(response.read().decode("utf-8-sig"))
+    except Exception as exc:
+        raise RuntimeError(f"Could not retrieve Greyhound timetable data: {exc}") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("Routes"), list):
+        raise ValueError("Greyhound returned an unexpected timetable format")
+    return data
 
 
 def stop_label(stop):
@@ -202,12 +324,170 @@ DEPARTURES_CACHE_SECONDS = 3600
 _departures_cache = {}
 
 
+def plain_site_message(value):
+    """Convert a booking-site HTML response into readable dialog text."""
+    text = re.sub(r"<\s*br\s*/?\s*>", "\n", str(value or ""),
+                  flags=re.IGNORECASE)
+    text = re.sub(r"</\s*(?:h[1-6]|p|div|li)\s*>", "\n", text,
+                  flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    return "\n".join(" ".join(line.split()) for line in html.unescape(text).splitlines()
+                     if line.strip())
+
+
+_route_validation_cache = {}
+_destination_validation_cache = {}
+ROUTE_VALIDATION_CACHE_SECONDS = 6 * 3600
+
+
+def validate_route(origin, destination, opener=None, now=None):
+    """Validate one selected Greyhound pair and briefly cache the result."""
+    now = time.time() if now is None else now
+    key = (origin["code"], destination["code"])
+    cached = _route_validation_cache.get(key)
+    if cached and now - cached[0] <= ROUTE_VALIDATION_CACHE_SECONDS:
+        return cached[1], cached[2]
+    url = STOP_VALIDATION_URL.format(
+        origin=urllib.parse.quote(origin["code"]),
+        destination=urllib.parse.quote(destination["code"]))
+    request = urllib.request.Request(
+        url, headers={"Accept": "application/json",
+                      "User-Agent": "Map in a Box/1.0 (accessible coach search)"})
+    try:
+        with (opener or urllib.request.urlopen)(request, timeout=20) as response:
+            result = json.loads(response.read().decode("utf-8-sig"))
+    except Exception as exc:
+        raise RuntimeError(f"Could not validate the Greyhound route: {exc}") from exc
+    if not isinstance(result, dict) or "IsValid" not in result:
+        raise RuntimeError("Greyhound returned an unexpected route-validation response")
+    valid = bool(result["IsValid"])
+    message = plain_site_message(result.get("Message"))
+    _route_validation_cache[key] = (now, valid, message)
+    return valid, message
+
+
+def valid_destinations(origin, stops, day, loader=None, now=None, max_workers=8,
+                       cancel_event=None):
+    """Return destinations present in actual timetable routes for *day*."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    now = time.time() if now is None else now
+    key = (origin["code"], day.isoformat())
+    cached = _destination_validation_cache.get(key)
+    if cached and now - cached[0] <= ROUTE_VALIDATION_CACHE_SECONDS:
+        codes = cached[1]
+        return [stop for stop in stops if stop["code"] in codes]
+    loader = loader or load_live_timetable
+    targets = [stop for stop in stops
+               if stop["code"] != origin["code"]
+               and (stop.get("terminal")
+                    or stop["description"].upper() in HUB_NAMES)]
+
+    def search(destination):
+        if cancel_event is not None and cancel_event.is_set():
+            return False, None
+        try:
+            return True, loader(origin, destination, day)
+        except (RuntimeError, ValueError):
+            return False, None
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        checked = list(pool.map(search, targets))
+    if cancel_event is not None and cancel_event.is_set():
+        raise RuntimeError("Greyhound destination check was cancelled")
+    if checked and not any(completed for completed, _destination in checked):
+        raise RuntimeError("Greyhound destinations could not be checked")
+    codes = set()
+    for _completed, timetable in checked:
+        for route in (timetable or {}).get("Routes") or []:
+            reachable = {origin["code"]}
+            for service in route.get("Services") or []:
+                service_stops = service.get("Stops") or []
+                start = next((index for index, stop in enumerate(service_stops)
+                              if str(stop.get("StopCode") or "").upper() in reachable),
+                             None)
+                if start is None:
+                    continue
+                for stop in service_stops[start + 1:]:
+                    code = str(stop.get("StopCode") or "").upper()
+                    if code:
+                        codes.add(code)
+                        reachable.add(code)
+    valid = [stop for stop in stops if stop["code"] in codes]
+    if all(completed for completed, _destination in checked):
+        _destination_validation_cache[key] = (now, codes)
+    return valid
+
+
 def _stop_time(stop, field):
     value = str(stop.get(field) or "").replace("T", " ").strip()
     try:
         return _dt.datetime.strptime(value[:16], "%Y-%m-%d %H:%M")
     except ValueError:
         return None
+
+
+def live_route_stop_items(row):
+    """Return accessible stop items for one live Greyhound result row."""
+    route = row.get("route") or {}
+    origin_code = str(row.get("origin_code") or "").upper()
+    destination_code = str(row.get("destination_code") or "").upper()
+    items = []
+    reachable = {origin_code} if origin_code else set()
+    finished = False
+    for service in route.get("Services") or []:
+        stops = service.get("Stops") or []
+        if not stops:
+            continue
+        if reachable:
+            start = next((index for index, stop in enumerate(stops)
+                          if str(stop.get("StopCode") or "").upper() in reachable),
+                         None)
+            if start is None:
+                continue
+        else:
+            start = 0
+        service_items = []
+        for stop in stops[start:]:
+            code = str(stop.get("StopCode") or "").upper()
+            name = re.sub(
+                r"^\s*\(SFR\s*-\s*TEMP LOCAT\)\s*", "",
+                str(stop.get("StopName") or code), flags=re.IGNORECASE).title()
+            arrival = _stop_time(stop, "ArrivalTime")
+            departure = _stop_time(stop, "DepartureTime")
+            if arrival and departure and arrival != departure:
+                timing = (f"arrive {_spoken_live_time(arrival)}, "
+                          f"depart {_spoken_live_time(departure)}")
+            elif departure:
+                timing = _spoken_live_time(departure)
+            elif arrival:
+                timing = _spoken_live_time(arrival)
+            else:
+                timing = "time unavailable"
+            flags = []
+            if stop.get("OnRequest"):
+                flags.append("request stop")
+            if stop.get("StopOver") and stop.get("StopOverTime"):
+                flags.append(f"stopover {stop['StopOverTime']}")
+            suffix = f", {', '.join(flags)}" if flags else ""
+            service_items.append(f"{name}: {timing}{suffix}")
+            if code:
+                reachable.add(code)
+            if destination_code and code == destination_code:
+                finished = True
+                break
+        if service_items:
+            number = str(service.get("Service") or "").strip()
+            if number:
+                items.append(f"Service {number}")
+            if items and service_items and len(items) > 1:
+                previous = items[-2] if len(items) >= 2 else ""
+                if previous == service_items[0]:
+                    service_items = service_items[1:]
+            items.extend(service_items)
+        if finished:
+            break
+    return items or ["No stop details were returned for this departure."]
 
 
 def departures_from(stop, stops, day, loader=None, now=None):
@@ -308,10 +588,8 @@ def load_timetable(origin_code, destination_code, travel_date, opener=None):
     try:
         with opener(page_request, timeout=20) as response:
             page = response.read().decode("utf-8", errors="replace")
-        match = re.search(
-            r'id=["\']ttw-csrf["\'][^>]*value=["\']([^"\']+)', page,
-            flags=re.IGNORECASE)
-        if not match:
+        token = _verification_token(page, "ttw-csrf")
+        if not token:
             raise ValueError("the timetable verification token was not found")
         payload = json.dumps({"origin": origin_code,
                               "destination": destination_code,
@@ -320,7 +598,7 @@ def load_timetable(origin_code, destination_code, travel_date, opener=None):
             TIMETABLE_URL, data=payload, method="POST",
             headers={"User-Agent": "Map in a Box/1.0 (accessible timetable)",
                      "Content-Type": "application/json",
-                     "__RequestVerificationToken": match.group(1),
+                     "__RequestVerificationToken": token,
                      "Referer": page_url})
         with opener(result_request, timeout=30) as response:
             result = json.loads(response.read().decode("utf-8-sig"))
@@ -372,16 +650,17 @@ def load_availability(values, opener=None):
             page_url, headers={"User-Agent": "Map in a Box/1.0 (accessible booking)"})
         with opener(page_request, timeout=20) as response:
             page = response.read().decode("utf-8", errors="replace")
-        match = re.search(
-            r'id=["\']csrf["\'][^>]*value=["\']([^"\']+)', page,
-            flags=re.IGNORECASE)
-        if not match:
+        token = _verification_token(page, "csrf")
+        if not token:
+            if "ga-booking-widget" in page:
+                raise BookingSiteChanged(
+                    "Greyhound now displays live times in its booking website")
             raise ValueError("the booking verification token was not found")
         request = urllib.request.Request(
             AVAILABILITY_URL, data=json.dumps(payload).encode("utf-8"), method="POST",
             headers={"User-Agent": "Map in a Box/1.0 (accessible booking)",
                      "Content-Type": "application/json",
-                     "__RequestVerificationToken": match.group(1),
+                     "__RequestVerificationToken": token,
                      "Referer": page_url})
         with opener(request, timeout=45) as response:
             result = json.loads(response.read().decode("utf-8-sig"))

@@ -10,6 +10,7 @@ import wx
 from distance_units import format_distance
 from geo import dist_metres
 from logging_utils import miab_log
+from route_pois import core_words
 from poi_fetch import (
     POI_BACKGROUND_RADIUS_METRES,
     POI_CATEGORY_CHOICES,
@@ -39,6 +40,30 @@ def _sort_pois_from_position(pois, lat, lon, radius_m=None):
         current.append(item)
     current.sort(key=lambda item: item.get("dist", float("inf")))
     return current
+
+
+def _unique_pois(pois, within_m=40.0):
+    """One entry per place when several sources return it: the same name, or
+    one name inside another ("Northern Star Hotel" / "Northern Star Hotel
+    Hamilton"), within ``within_m``.  The first source's entry is kept."""
+    out = []
+    for poi in pois:
+        try:
+            lat, lon = float(poi["lat"]), float(poi["lon"])
+        except (KeyError, TypeError, ValueError):
+            out.append(poi)
+            continue
+        words = core_words(str(poi.get("name") or poi.get("label") or "").split(",")[0])
+        duplicate = words and any(
+            dist_metres(lat, lon, float(other["lat"]), float(other["lon"])) <= within_m
+            and (words <= other_words or other_words <= words)
+            for other, other_words in (
+                (o, core_words(str(o.get("name") or o.get("label") or "").split(",")[0]))
+                for o in out if o.get("lat") is not None)
+            if other_words)
+        if not duplicate:
+            out.append(poi)
+    return out
 
 
 def _core_helper(name):
@@ -191,9 +216,11 @@ class PoiSearchMixin:
     def _fetch_pois(self, category_key="all", radius=1000, timeout=30,
                     next_radius=0, name_filter="", street_filter="", source="",
                     bypass_live_guard=False):
-        """Fetch POIs for *category_key* from the requested *source*.
+        """Fetch POIs for *category_key* from the requested sources.
 
-        source: "osm" | "here" | "google" | "" (auto — here if key set, else osm)
+        source: "osm" | "here" | "google", a list of them, or "" for every
+        POI source ticked in Settings.  Results from several sources are
+        merged.
         """
         import threading
         self._loading             = True
@@ -204,9 +231,18 @@ class PoiSearchMixin:
         street_filter = (street_filter or "").strip().lower()
         here_key   = self.settings.get("here_api_key",   "").strip()
         google_key = self.settings.get("google_api_key", "").strip()
-        if not source:
-            poi_source = self.settings.get("poi_source", "osm")
-            source = poi_source if (poi_source == "here" and here_key) else "osm"
+        if isinstance(source, (list, tuple)):
+            search_sources = [s for s in source if s]
+        elif source:
+            search_sources = [source]
+        else:
+            search_sources = self._poi_search_sources()
+        search_sources = [s for s in search_sources
+                          if s != "google" or google_key] or ["osm"]
+        # Loaded background POIs come from OSM and HERE only; a search that
+        # includes Google always asks Google live.
+        local_search = all(s in ("osm", "here") for s in search_sources)
+        source = "+".join(search_sources)   # for logs
         category_labels = dict(POI_CATEGORY_CHOICES)
         category_label  = category_labels.get(category_key, "All nearby")
 
@@ -224,6 +260,7 @@ class PoiSearchMixin:
             search_radii = sorted(set(search_radii))
 
         live_started = False
+        here_failed = False
 
         def _name_match(poi):
             if not name_filter:
@@ -287,7 +324,7 @@ class PoiSearchMixin:
                     prepared, self.lat, self.lon, radius_m=radius_m)
 
             if ((name_filter or street_filter)
-                    and source in ("osm", "here")
+                    and local_search
                     and getattr(self, "_background_poi_fetch_in_progress", False)):
                 miab_log(
                     "verbose",
@@ -306,9 +343,10 @@ class PoiSearchMixin:
 
             background = list(getattr(self, "_all_pois", []) or [])
             if ((name_filter or street_filter)
-                    and source in ("osm", "here")
+                    and local_search
                     and not background):
-                disk_bg = self._poi_fetcher.load_cached_pois(self.lat, self.lon)
+                disk_bg = self._poi_fetcher.load_cached_pois(
+                    self.lat, self.lon, sources=self._poi_background_sources())
                 if disk_bg:
                     self._all_pois = self._merge_personal_pois(disk_bg)
                     self._poi_grid = self._build_poi_grid(self._all_pois)
@@ -320,7 +358,7 @@ class PoiSearchMixin:
                         f"p loaded {len(background)} background POIs from disk for keyword search.",
                         self.settings,
                     )
-            if background and source in ("osm", "here"):
+            if background and local_search:
                 fetch_lat = getattr(self, "_poi_fetch_lat", None)
                 fetch_lon = getattr(self, "_poi_fetch_lon", None)
                 background_distance = (
@@ -334,7 +372,7 @@ class PoiSearchMixin:
                         continue
                     poi_source = (p.get("source") or "osm").lower()
                     sources.add(poi_source)
-                source_matches = not sources or source in sources
+                source_matches = not sources or all(s in sources for s in search_sources)
                 location_matches = background_distance <= POI_BACKGROUND_RADIUS_METRES
                 radius_covered = max(search_radii) <= POI_BACKGROUND_RADIUS_METRES
                 if name_filter or street_filter:
@@ -398,7 +436,6 @@ class PoiSearchMixin:
                                 category_key,
                                 name_filter,
                                 street_filter,
-                                source,
                                 max(search_radii),
                             )
                         self._loading = False
@@ -472,7 +509,7 @@ class PoiSearchMixin:
                 else:
                     reasons = []
                     if not source_matches:
-                        reasons.append(f"cached source {sorted(sources)} does not match {source}")
+                        reasons.append(f"cached sources {sorted(sources)} do not cover {source}")
                     if not location_matches:
                         reasons.append(
                             f"current location is {background_distance:.0f}m from background centre")
@@ -553,7 +590,7 @@ class PoiSearchMixin:
                         next_radius=next_radius,
                         name_filter=name_filter,
                         street_filter=street_filter,
-                        source=source,
+                        source=search_sources,
                     )
                     self._loading = False
                     self._poi_fetch_in_progress = False
@@ -569,6 +606,35 @@ class PoiSearchMixin:
             # cached result was already shown (that case is a silent
             # "just in case" supplementary check the user isn't waiting on,
             # same reasoning as the alarm-sound guard just below).
+            def _known_places():
+                """Loaded and cached places from the sources searched and the
+                POI sources ticked in Settings."""
+                known_sources = {*search_sources, *self._poi_background_sources()}
+                known = list(getattr(self, "_all_pois", []) or [])
+                known += self._poi_fetcher.load_cached_nearby_pois(
+                    self.lat, self.lon, radius=max(search_radii))
+                return [p for p in known if isinstance(p, dict)
+                        and (p.get("source") or "osm").lower() in known_sources]
+
+            # Answer a name search from saved places straight away.  The live
+            # sources still run and add to the list, but a busy OpenStreetMap
+            # server (35 s, or failing, for "glenferrie hotel") no longer
+            # keeps the user waiting for a place MIAB already knows.
+            if (name_filter or street_filter) and not cached_presented and any(
+                    s in ("osm", "here") for s in search_sources):
+                early = _prepare_pois(
+                    _unique_pois([p for p in _known_places()
+                                  if _name_match(p) and _street_match(p)]),
+                    radius_m=max(search_radii))
+                if early and _poi_context_is_current():
+                    self._poi_list = early
+                    self._poi_index = 0
+                    cached_presented = True
+                    miab_log("verbose",
+                             f"p showed {len(early)} saved matches while live sources run.",
+                             self.settings)
+                    wx.CallAfter(self._present_poi_list)
+
             poi_wait_stop = threading.Event()
             if not cached_presented:
                 def _poi_wait_ticker():
@@ -611,140 +677,177 @@ class PoiSearchMixin:
                         f"p live fetch {category_key} radius={attempt_radius}m source={source}.",
                         self.settings,
                     )
-                if source == "google" and google_key:
-                    raw = self._fetch_google_pois(
-                        category_key, radius=attempt_radius,
-                        name_filter=name_filter)
-                    if _discard_if_poi_context_changed("Google live"):
-                        return
-                    raw = filter_pois_by_category(raw, category_key)
-                    pois = [p for p in raw if _name_match(p) and _street_match(p)]
-                    pois.sort(key=lambda x: x.get("dist", float("inf")))
-                    if name_filter or street_filter:
-                        _collect(pois)
-                elif source == "here" and here_key:
-                    self._poi_fetcher.set_here_key(here_key)
-                    cache_kind = "name" if name_filter else "category"
-                    cache_extra = name_filter if name_filter else ""
-                    cached_raw_pois = _live_cache_get(
-                        cache_kind, source, category_key, attempt_radius,
-                        cache_extra)
-                    raw_pois = cached_raw_pois
-                    if raw_pois is None:
-                        if name_filter:
-                            live_raw_pois = self._poi_fetcher.fetch_here_name_search(
-                                self.lat, self.lon, name_filter,
-                                radius=attempt_radius,
-                                address_points=getattr(self, "_address_points", []))
-                        else:
-                            live_raw_pois, _ = self._poi_fetcher.fetch_pois(
-                                self.lat, self.lon,
-                                category=category_key, radius=attempt_radius,
-                                timeout=timeout,
-                                address_points=getattr(self, "_address_points", []),
-                            )
-                        if live_raw_pois is not None:
-                            raw_pois = live_raw_pois
-                            _live_cache_set(
-                                cache_kind, source, category_key,
-                                attempt_radius, raw_pois, cache_extra)
-                    if _discard_if_poi_context_changed("HERE live"):
-                        return
-                    pois = [p for p in raw_pois if _name_match(p) and _street_match(p)]
-                    if name_filter or street_filter:
-                        _collect(pois)
-                else:
-                    # OSM — temporarily clear HERE key so fetch_pois uses Overpass
-                    self._poi_fetcher.set_here_key("")
-                    cached_raw_pois = _live_cache_get("category", source, category_key, attempt_radius)
-                    raw_pois = cached_raw_pois
-                    if raw_pois is None:
-                        # Skip the searching sound entirely when a result was
-                        # already presented instantly from the in-memory
-                        # background cache (cached_presented). In that case
-                        # this live fetch is just a silent "just in case"
-                        # supplementary check the user isn't actively waiting
-                        # on — there's no real searching happening from their
-                        # perspective, so playing the alarm here is exactly
-                        # the "alarm with nothing to search for" bug reported.
-                        if not search_beep_started and not cached_presented:
-                            try:
-                                self.sound.play_file(r"c:\windows\media\alarm09.wav", loops=-1)
-                                search_beep_started = True
-                            except Exception:
-                                pass
-                        # Before hitting Overpass at the exact radius, check
-                        # whether the background disk cache already covers
-                        # this request. This prevents repeated Overpass calls
-                        # for requests within the loaded POI radius.
-                        if (not name_filter
-                                and not background
-                                and attempt_radius <= POI_BACKGROUND_RADIUS_METRES):
-                            disk_bg = self._poi_fetcher.load_cached_pois(self.lat, self.lon)
-                            if disk_bg:
-                                self._all_pois      = self._merge_personal_pois(disk_bg)
-                                self._poi_fetch_lat = self.lat
-                                self._poi_fetch_lon = self.lon
-                                category_pois = filter_pois_by_category(disk_bg, category_key)
-                                if category_pois:
-                                    raw_pois = category_pois
-                                    _live_cache_set("category", source, category_key, attempt_radius, raw_pois)
-                                    miab_log("verbose",
-                                             f"p reused background disk cache for {category_key} radius={attempt_radius}m.",
-                                             self.settings)
-                                else:
-                                    # Disk cache has no entries for this category — do not
-                                    # cache the empty result; fall through to live Overpass fetch.
-                                    miab_log("verbose",
-                                             f"p background disk cache has no {category_key} entries; will try live fetch.",
-                                             self.settings)
-                        if not raw_pois:
-                            live_raw_pois, _ = self._poi_fetcher.fetch_pois(
-                                self.lat, self.lon,
-                                category=category_key, radius=attempt_radius,
-                                timeout=timeout,
-                                address_points=getattr(self, "_address_points", []),
-                            )
-                            if live_raw_pois is not None:
-                                raw_pois = live_raw_pois
-                                _live_cache_set("category", source, category_key, attempt_radius, raw_pois)
-                    if _discard_if_poi_context_changed("OSM live"):
+                round_pois = []
+                for src in search_sources:
+                    if src == "google" and google_key:
+                        raw = self._fetch_google_pois(
+                            category_key, radius=attempt_radius,
+                            name_filter=name_filter)
+                        if _discard_if_poi_context_changed("Google live"):
+                            return
+                        raw = filter_pois_by_category(raw, category_key)
+                        pois = [p for p in raw if _name_match(p) and _street_match(p)]
+                        pois.sort(key=lambda x: x.get("dist", float("inf")))
+                        if name_filter or street_filter:
+                            _collect(pois)
+                    elif src == "here" and here_key:
                         self._poi_fetcher.set_here_key(here_key)
-                        return
-                    self._poi_fetcher.set_here_key(here_key)
-                    pois = [p for p in raw_pois if _name_match(p) and _street_match(p)]
-                    if name_filter or street_filter:
-                        _collect(pois)
-                        # Category-specific searches get a category-aware
-                        # live name query. Generic all-category searches only
-                        # use the live name query when the radius is small.
-                        if name_filter and (category_key != "all" or attempt_radius <= 1000):
-                            raw_name_pois = _live_cache_get(
-                                "name", source, category_key, attempt_radius, name_filter)
-                            if raw_name_pois is None:
-                                raw_name_pois = self._poi_fetcher.fetch_osm_name_search(
-                                    self.lat, self.lon,
-                                    name_filter=name_filter,
-                                    category_key=category_key,
+                        cache_kind = "name" if name_filter else "category"
+                        cache_extra = name_filter if name_filter else ""
+                        cached_raw_pois = _live_cache_get(
+                            cache_kind, src, category_key, attempt_radius,
+                            cache_extra)
+                        raw_pois = cached_raw_pois
+                        if raw_pois is None:
+                            if name_filter:
+                                live_raw_pois = self._poi_fetcher.fetch_here_name_search(
+                                    self.lat, self.lon, name_filter,
                                     radius=attempt_radius,
+                                    address_points=getattr(self, "_address_points", []))
+                            else:
+                                live_raw_pois, _ = self._poi_fetcher.fetch_pois(
+                                    self.lat, self.lon,
+                                    category=category_key, radius=attempt_radius,
                                     timeout=timeout,
                                     address_points=getattr(self, "_address_points", []),
                                 )
-                                if raw_name_pois is not None:
-                                    # Only cache real results; server failures (None)
-                                    # are left uncached so the next P press retries.
-                                    _live_cache_set(
-                                        "name", source, category_key, attempt_radius,
-                                        raw_name_pois, name_filter)
-                                else:
-                                    raw_name_pois = []
-                            pois = [p for p in raw_name_pois if _name_match(p)]
+                            if live_raw_pois is not None:
+                                raw_pois = live_raw_pois
+                                _live_cache_set(
+                                    cache_kind, src, category_key,
+                                    attempt_radius, raw_pois, cache_extra)
+                            else:
+                                here_failed = True
+                        if _discard_if_poi_context_changed("HERE live"):
+                            return
+                        pois = [p for p in (raw_pois or []) if _name_match(p) and _street_match(p)]
+                        if name_filter or street_filter:
                             _collect(pois)
+                    else:
+                        # OSM — temporarily clear HERE key so fetch_pois uses Overpass
+                        self._poi_fetcher.set_here_key("")
+                        if name_filter:
+                            # A name search asks Overpass for the name itself.
+                            # Browsing everything within the radius and then
+                            # filtering was slow ("glenferrie hotel" waited 35 s
+                            # on a busy server for a 3 km browse) and, being
+                            # capped, could still miss the place.
+                            raw_pois = []
+                            if not search_beep_started and not cached_presented:
+                                try:
+                                    self.sound.play_file(r"c:\windows\media\alarm09.wav", loops=-1)
+                                    search_beep_started = True
+                                except Exception:
+                                    pass
+                        else:
+                            cached_raw_pois = _live_cache_get("category", src, category_key, attempt_radius)
+                            raw_pois = cached_raw_pois
+                            if raw_pois is None:
+                                # Skip the searching sound entirely when a result was
+                                # already presented instantly from the in-memory
+                                # background cache (cached_presented). In that case
+                                # this live fetch is just a silent "just in case"
+                                # supplementary check the user isn't actively waiting
+                                # on — there's no real searching happening from their
+                                # perspective, so playing the alarm here is exactly
+                                # the "alarm with nothing to search for" bug reported.
+                                if not search_beep_started and not cached_presented:
+                                    try:
+                                        self.sound.play_file(r"c:\windows\media\alarm09.wav", loops=-1)
+                                        search_beep_started = True
+                                    except Exception:
+                                        pass
+                                # Before hitting Overpass at the exact radius, check
+                                # whether the background disk cache already covers
+                                # this request. This prevents repeated Overpass calls
+                                # for requests within the loaded POI radius.
+                                if (not name_filter
+                                        and not background
+                                        and attempt_radius <= POI_BACKGROUND_RADIUS_METRES):
+                                    disk_bg = self._poi_fetcher.load_cached_pois(self.lat, self.lon)
+                                    if disk_bg:
+                                        self._all_pois      = self._merge_personal_pois(disk_bg)
+                                        self._poi_fetch_lat = self.lat
+                                        self._poi_fetch_lon = self.lon
+                                        category_pois = filter_pois_by_category(disk_bg, category_key)
+                                        if category_pois:
+                                            raw_pois = category_pois
+                                            _live_cache_set("category", src, category_key, attempt_radius, raw_pois)
+                                            miab_log("verbose",
+                                                     f"p reused background disk cache for {category_key} radius={attempt_radius}m.",
+                                                     self.settings)
+                                        else:
+                                            # Disk cache has no entries for this category — do not
+                                            # cache the empty result; fall through to live Overpass fetch.
+                                            miab_log("verbose",
+                                                     f"p background disk cache has no {category_key} entries; will try live fetch.",
+                                                     self.settings)
+                                if not raw_pois:
+                                    live_raw_pois, _ = self._poi_fetcher.fetch_pois(
+                                        self.lat, self.lon,
+                                        category=category_key, radius=attempt_radius,
+                                        timeout=timeout,
+                                        address_points=getattr(self, "_address_points", []),
+                                    )
+                                    if live_raw_pois is not None:
+                                        raw_pois = live_raw_pois
+                                        _live_cache_set("category", src, category_key, attempt_radius, raw_pois)
+                        if _discard_if_poi_context_changed("OSM live"):
+                            self._poi_fetcher.set_here_key(here_key)
+                            return
+                        self._poi_fetcher.set_here_key(here_key)
+                        pois = [p for p in raw_pois if _name_match(p) and _street_match(p)]
+                        if name_filter or street_filter:
+                            _collect(pois)
+                            if name_filter:
+                                raw_name_pois = _live_cache_get(
+                                    "name", src, category_key, attempt_radius, name_filter)
+                                if raw_name_pois is None:
+                                    raw_name_pois = self._poi_fetcher.fetch_osm_name_search(
+                                        self.lat, self.lon,
+                                        name_filter=name_filter,
+                                        category_key=category_key,
+                                        radius=attempt_radius,
+                                        timeout=timeout,
+                                        address_points=getattr(self, "_address_points", []),
+                                    )
+                                    if raw_name_pois is not None:
+                                        # Only cache real results; server failures (None)
+                                        # are left uncached so the next P press retries.
+                                        _live_cache_set(
+                                            "name", src, category_key, attempt_radius,
+                                            raw_name_pois, name_filter)
+                                    else:
+                                        raw_name_pois = []
+                                pois = [p for p in raw_name_pois if _name_match(p)]
+                                _collect(pois)
+                    round_pois.extend(pois)
+                pois = _unique_pois(round_pois)
                 if not name_filter and pois:
                     break
 
+            if (name_filter or street_filter) and any(
+                    s in ("osm", "here") for s in search_sources):
+                # Live name searches can miss places MIAB already knows: HERE
+                # Discover's ranking varies with the search area, and wide
+                # generic OSM searches filter a capped list.  Add matching
+                # loaded and cached places from this source and the POI
+                # databases ticked in Settings (HERE lists 112 Beaumont Street,
+                # Hamilton, only as "Finn McCools Eatery"; OSM has the
+                # Northern Star Hotel).  _prepare_pois below limits them to
+                # the radius from the current position.
+                before = len(collected_name_pois)
+                _collect(_known_places())
+                if len(collected_name_pois) > before:
+                    miab_log(
+                        "verbose",
+                        f"p added {len(collected_name_pois) - before} matching "
+                        "known POIs to the live name results.",
+                        self.settings,
+                    )
+
             if name_filter or street_filter:
-                pois = collected_name_pois
+                pois = _unique_pois(collected_name_pois)
                 if not pois and name_filter and street_filter and collected_name_only_pois:
                     pois = collected_name_only_pois
                     miab_log(
@@ -769,6 +872,11 @@ class PoiSearchMixin:
                 return
 
             pois = _prepare_pois(pois, radius_m=attempted_radius)
+            shown = [(p.get("name"), p.get("lat"), p.get("lon")) for p in getattr(self, "_poi_list", None) or []]
+            if cached_presented and [(p.get("name"), p.get("lat"), p.get("lon")) for p in pois] == shown:
+                # The live sources found nothing new: leave the list already
+                # shown alone rather than announcing it a second time.
+                pois = []
             if not pois and cached_presented:
                 miab_log(
                     "verbose",
@@ -792,13 +900,19 @@ class PoiSearchMixin:
                 if street_filter:
                     filters.append(f"on {street_filter}")
                 what = " ".join(filters) if filters else category_label.lower()
-                if name_filter or street_filter:
+                if here_failed:
+                    # A failed request is not "nothing found": say so, and
+                    # don't offer a wider search that would fail the same way.
+                    wx.CallAfter(
+                        self._announce_transient_then_return,
+                        f"HERE search for {what} failed and no other source found it. "
+                        "Try again in a moment.")
+                elif name_filter or street_filter:
                     wx.CallAfter(
                         self._retry_poi_name_search,
                         category_key,
                         name_filter,
                         street_filter,
-                        source,
                         attempted_radius,
                     )
                 else:

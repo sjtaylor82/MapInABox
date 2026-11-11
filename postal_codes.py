@@ -28,8 +28,11 @@ import csv
 import gzip
 import json
 import os
+import re
 
 from geo import dist_metres
+
+_MILITARY_MAIL = re.compile(r"^\s*[AFD]PO\s+A[AEP]\b", re.IGNORECASE)
 
 
 class PostalCodeLookup:
@@ -61,6 +64,25 @@ class PostalCodeLookup:
     def available(self) -> bool:
         """True if the bundled dataset loaded successfully."""
         return bool(self._manifest)
+
+    def country_code_near(self, lat: float, lon: float) -> str:
+        """Return the country code with the nearest postal locality.
+
+        Candidate countries are first limited by their manifest bounds.  The
+        nearest-point pass resolves overlapping bounds, including the very
+        broad US bounds caused by overseas and military postal entries.
+        """
+        lat = float(lat)
+        lon = float(lon)
+        best_code = ""
+        best_distance = None
+        for code in self._countries_near(lat, lon):
+            for _postcode, _place, _admin1, row_lat, row_lon in self._load_country(code):
+                distance = (row_lat - lat) ** 2 + (row_lon - lon) ** 2
+                if best_distance is None or distance < best_distance:
+                    best_code = code
+                    best_distance = distance
+        return best_code
 
     def _countries_near(self, lat: float, lon: float) -> list[str]:
         pad = self._BBOX_PAD_DEG
@@ -94,6 +116,12 @@ class PostalCodeLookup:
             open_func = gzip.open if path.endswith(".gz") else open
             with open_func(path, "rt", encoding="utf-8", newline="") as f:
                 for row in csv.DictReader(f):
+                    # US military mail codes (APO AA, FPO AP, DPO AE...) sit
+                    # at bases and embassies abroad. They are not places, and
+                    # as nearest localities they named central Jakarta
+                    # "APO AA".
+                    if _MILITARY_MAIL.match(row.get("place_name") or ""):
+                        continue
                     try:
                         rows.append((
                             row["postcode"],
@@ -117,6 +145,17 @@ class PostalCodeLookup:
     def lookup(self, lat: float, lon: float) -> tuple[str, str, str] | None:
         """Return (postcode, place_name, admin_name1) for the nearest known
         point within range, or None if nothing usable is bundled nearby."""
+        match = self.lookup_details(lat, lon)
+        return match[:3] if match else None
+
+    def lookup_details(self, lat: float, lon: float) -> tuple[
+            str, str, str, float, float, float] | None:
+        """Return the nearest postal locality plus its point and distance.
+
+        The result is ``(postcode, place, admin1, lat, lon, distance_m)``.
+        Callers that only need the established three-field API should use
+        :meth:`lookup`.
+        """
         if not self._manifest:
             return None
         candidates = self._countries_near(lat, lon)
@@ -130,8 +169,42 @@ class PostalCodeLookup:
                 d = dist_metres(lat, lon, r_lat, r_lon)
                 if best_dist is None or d < best_dist:
                     best_dist = d
-                    best = (postcode, place, admin1)
+                    best = (postcode, place, admin1, r_lat, r_lon, d)
 
         if best is None or best_dist is None or best_dist > self._MAX_MATCH_KM * 1000:
             return None
         return best
+
+    def search_places(self, query: str, country_code: str,
+                      limit: int = 100) -> list[tuple[str, str, str, float, float]]:
+        """Return postal localities in *country_code* matching *query*.
+
+        The main world-cities catalogue intentionally omits many suburbs.
+        Postal data is a useful offline fallback because it includes those
+        smaller localities and already ships with the application.  Results
+        are deduplicated by locality, region and postcode; exact and prefix
+        matches precede other substring matches.
+        """
+        needle = (query or "").strip().casefold()
+        code = (country_code or "").strip().upper()
+        if not needle or not code or limit <= 0:
+            return []
+
+        matches = []
+        seen = set()
+        for postcode, place, admin1, lat, lon in self._load_country(code):
+            place_text = str(place or "").strip()
+            folded = place_text.casefold()
+            if needle not in folded:
+                continue
+            key = (folded, str(admin1 or "").casefold(), str(postcode or "").casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            rank = 0 if folded == needle else (1 if folded.startswith(needle) else 2)
+            matches.append((rank, place_text, str(admin1 or "").strip(),
+                            str(postcode or "").strip(), lat, lon))
+
+        matches.sort(key=lambda row: (row[0], row[1].casefold(),
+                                      row[2].casefold(), row[3]))
+        return [row[1:] for row in matches[:limit]]

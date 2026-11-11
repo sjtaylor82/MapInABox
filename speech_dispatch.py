@@ -70,6 +70,15 @@ def _jaws_output():
     return None
 
 
+def active_output_name() -> str:
+    """Return the active AccessibleOutput2 backend name, if available."""
+    try:
+        output = _get_output()
+        return str(getattr(output, "name", "") or "").strip().casefold()
+    except Exception:
+        return ""
+
+
 class _Utterance:
     """One queued JAWS request: speech, braille, or both."""
 

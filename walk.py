@@ -45,7 +45,9 @@ class WalkMixin:
             coords = seg["coords"]
             if len(coords) < 2:
                 continue
-            raw_chains.append((clean, coords))
+            info = {"kind": seg.get("kind", ""), "lanes": seg.get("lanes"),
+                    "oneway": bool(seg.get("oneway"))}
+            raw_chains.append((clean, coords, info))
 
         # Step 2: create nodes.
         # Exact coordinate matches always share a node.
@@ -94,9 +96,14 @@ class WalkMixin:
         edges = {}
         node_streets = {}
 
-        def add_edge(a, b, street_name):
+        # Road class and lanes per edge, for describing roads the route crosses.
+        edge_info = {}
+
+        def add_edge(a, b, street_name, info=None):
             if a == b:
                 return
+            if info:
+                edge_info.setdefault(frozenset((a, b)), info)
             if a not in edges:
                 edges[a] = []
             if b not in edges:
@@ -106,7 +113,7 @@ class WalkMixin:
             if (a, street_name) not in edges[b]:
                 edges[b].append((a, street_name))
 
-        for street_name, coords in raw_chains:
+        for street_name, coords, info in raw_chains:
             prev_nid = None
             last_index = len(coords) - 1
             for i, (lat, lon) in enumerate(coords):
@@ -117,7 +124,7 @@ class WalkMixin:
                 if nid not in edges:
                     edges[nid] = []
                 if prev_nid is not None:
-                    add_edge(prev_nid, nid, street_name)
+                    add_edge(prev_nid, nid, street_name, info)
                 prev_nid = nid
 
         # Step 4: identify intersection nodes
@@ -135,6 +142,7 @@ class WalkMixin:
             "edges": edges,
             "node_streets": node_streets,
             "intersections": intersections,
+            "edge_info": edge_info,
         }
 
     def _walk_find_nearest_node(self, lat, lon, street_filter=None):

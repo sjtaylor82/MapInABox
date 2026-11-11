@@ -16,6 +16,12 @@ USER_SOUNDS_DIR = os.path.join(USER_DIR, "sounds")
 USER_COUNTRY_DIR = os.path.join(USER_SOUNDS_DIR, "countries")
 USER_REGION_DIR = os.path.join(USER_SOUNDS_DIR, "regions")
 
+# pygame/SDL_mixer is native code and is not safe to enter concurrently from
+# navigation-tone workers and wx ambience timers. Heap corruption is otherwise
+# reported later at an unrelated Python allocation, obscuring the audio call
+# that damaged it. Every pygame.mixer/sndarray call in the app must hold this.
+MIXER_LOCK = threading.RLock()
+
 COUNTRY_ALIASES = {
     "United States":   "United States of America",
     "USA":             "United States of America",
@@ -100,11 +106,13 @@ class SoundEngine:
     _AMBIENT_CHANNEL_IDS = (0, 15)
 
     def __init__(self):
-        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
-        pygame.mixer.set_num_channels(16)
-        self._ambient_channels = [
-            pygame.mixer.Channel(i) for i in self._AMBIENT_CHANNEL_IDS
-        ]
+        self._mixer_lock = MIXER_LOCK
+        with self._mixer_lock:
+            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+            pygame.mixer.set_num_channels(16)
+            self._ambient_channels = [
+                pygame.mixer.Channel(i) for i in self._AMBIENT_CHANNEL_IDS
+            ]
         self._ambient_index = 0
         self._ambient_transition_generation = 0
         self._ambient_transition_timer = None
@@ -118,9 +126,51 @@ class SoundEngine:
 
     def _apply_volume(self):
         """Set the master volume on every pygame mixer channel."""
-        n = pygame.mixer.get_num_channels()
-        for i in range(n):
-            pygame.mixer.Channel(i).set_volume(self._master_volume)
+        with self._mixer_lock:
+            n = pygame.mixer.get_num_channels()
+            for i in range(n):
+                pygame.mixer.Channel(i).set_volume(self._master_volume)
+
+    def _play_generated_tone(self, stereo) -> None:
+        """Create and play a generated tone under the shared SDL lock."""
+        with self._mixer_lock:
+            snd = pygame.sndarray.make_sound(stereo)
+            for idx in range(1, pygame.mixer.get_num_channels()):
+                if idx in self._AMBIENT_CHANNEL_IDS:
+                    continue
+                channel = pygame.mixer.Channel(idx)
+                if not channel.get_busy():
+                    channel.play(snd)
+                    return
+            pygame.mixer.Channel(1).play(snd)
+
+    def play_array_on_channel(self, stereo, channel_idx: int = 1) -> None:
+        """Create and play a generated tone on a specific mixer channel."""
+        with self._mixer_lock:
+            snd = pygame.sndarray.make_sound(stereo)
+            pygame.mixer.Channel(channel_idx).play(snd)
+
+    def play_array_default(self, stereo) -> None:
+        """Create and play a generated tone on pygame's default free channel."""
+        with self._mixer_lock:
+            snd = pygame.sndarray.make_sound(stereo)
+            snd.play()
+
+    def stop_all_channels(self) -> None:
+        """Stop every mixer channel, including navigation tones."""
+        self.stop()
+        with self._mixer_lock:
+            pygame.mixer.stop()
+
+    def fadeout_current(self, milliseconds: int) -> None:
+        """Fade the current ambience channel."""
+        with self._mixer_lock:
+            self._ch.fadeout(milliseconds)
+
+    def shutdown(self) -> None:
+        """Release the audio device."""
+        with self._mixer_lock:
+            pygame.quit()
 
     def volume_down(self) -> str:
         """Decrease master volume by 10%. Returns announcement string."""
@@ -270,8 +320,9 @@ class SoundEngine:
         self._ambient_transition_generation += 1
         generation = self._ambient_transition_generation
         try:
-            new_channel.stop()
-            old_channel.fadeout(self._AMBIENT_FADE_MS)
+            with self._mixer_lock:
+                new_channel.stop()
+                old_channel.fadeout(self._AMBIENT_FADE_MS)
             import wx
             self._ambient_transition_timer = wx.CallLater(
                 self._AMBIENT_FADE_MS,
@@ -288,14 +339,15 @@ class SoundEngine:
         if generation != self._ambient_transition_generation:
             return
         try:
-            sound = pygame.mixer.Sound(path)
-            channel = self._ambient_channels[channel_index]
-            channel.stop()
-            channel.set_volume(self._master_volume)
-            channel.play(
-                sound, loops=-1, fade_ms=self._AMBIENT_FADE_MS)
-            self._ambient_index = channel_index
-            self._ch = channel
+            with self._mixer_lock:
+                sound = pygame.mixer.Sound(path)
+                channel = self._ambient_channels[channel_index]
+                channel.stop()
+                channel.set_volume(self._master_volume)
+                channel.play(
+                    sound, loops=-1, fade_ms=self._AMBIENT_FADE_MS)
+                self._ambient_index = channel_index
+                self._ch = channel
         except Exception as e:
             miab_log("errors", f"[SoundEngine] Cannot play {path}: {e}", getattr(self, "settings", None))
 
@@ -303,8 +355,9 @@ class SoundEngine:
         """Play a WAV file once (or looped if loops=-1)."""
         try:
             self._ambient_transition_generation += 1
-            sound = pygame.mixer.Sound(path)
-            self._ch.play(sound, loops=loops)
+            with self._mixer_lock:
+                sound = pygame.mixer.Sound(path)
+                self._ch.play(sound, loops=loops)
             self._current_path = None
         except Exception as e:
             miab_log("errors", f"[SoundEngine] Cannot play {path}: {e}", getattr(self, "settings", None))
@@ -312,8 +365,9 @@ class SoundEngine:
     def stop(self):
         """Stop current playback."""
         self._ambient_transition_generation += 1
-        for channel in self._ambient_channels:
-            channel.stop()
+        with self._mixer_lock:
+            for channel in self._ambient_channels:
+                channel.stop()
         self._current = None
         self._current_path = None
 
@@ -321,8 +375,9 @@ class SoundEngine:
         """Fade out all ambience channels without affecting navigation tones."""
         self._ambient_transition_generation += 1
         duration = self._AMBIENT_FADE_MS if milliseconds is None else max(0, int(milliseconds))
-        for channel in self._ambient_channels:
-            channel.fadeout(duration)
+        with self._mixer_lock:
+            for channel in self._ambient_channels:
+                channel.fadeout(duration)
 
     def play_poi_tone(self, side: str):
         """Short directional beep: 'left', 'right', or 'both'."""
@@ -342,15 +397,7 @@ class SoundEngine:
                 l, r = wave * 0.7, wave * 0.7
             stereo = np.ascontiguousarray(
                 np.stack([l, r], axis=-1), dtype=np.int16)
-            snd = pygame.sndarray.make_sound(stereo)
-            for idx in range(1, pygame.mixer.get_num_channels()):
-                if idx in self._AMBIENT_CHANNEL_IDS:
-                    continue
-                ch = pygame.mixer.Channel(idx)
-                if not ch.get_busy():
-                    ch.play(snd)
-                    return
-            pygame.mixer.Channel(1).play(snd)
+            self._play_generated_tone(stereo)
         threading.Thread(target=_gen, daemon=True).start()
 
     def play_shared_address_tone(self):
@@ -367,15 +414,7 @@ class SoundEngine:
                 np.stack((wave, wave), axis=-1) * 0.35 * 32767,
                 dtype=np.int16,
             )
-            snd = pygame.sndarray.make_sound(stereo)
-            for idx in range(1, pygame.mixer.get_num_channels()):
-                if idx in self._AMBIENT_CHANNEL_IDS:
-                    continue
-                channel = pygame.mixer.Channel(idx)
-                if not channel.get_busy():
-                    channel.play(snd)
-                    return
-            pygame.mixer.Channel(1).play(snd)
+            self._play_generated_tone(stereo)
         threading.Thread(target=_gen, daemon=True).start()
 
     def play_barrier_tone(self):
@@ -393,19 +432,14 @@ class SoundEngine:
             wave = np.concatenate((pulse, gap, pulse)) * 0.55 * 32767
             stereo = np.ascontiguousarray(
                 np.stack((wave, wave), axis=-1), dtype=np.int16)
-            snd = pygame.sndarray.make_sound(stereo)
-            for idx in range(1, pygame.mixer.get_num_channels()):
-                if idx in self._AMBIENT_CHANNEL_IDS:
-                    continue
-                channel = pygame.mixer.Channel(idx)
-                if not channel.get_busy():
-                    channel.play(snd)
-                    return
-            pygame.mixer.Channel(1).play(snd)
+            self._play_generated_tone(stereo)
         threading.Thread(target=_gen, daemon=True).start()
 
-    def play_spatial_tone(self, lat, lon, bounds=None):
-        """Pitch-panned navigation beep on channels 1+."""
+    @staticmethod
+    def spatial_tone_parameters(lat, lon, bounds=None):
+        """Return normalized latitude, longitude, frequency, and stereo pan."""
+        lat = float(lat)
+        lon = float(lon)
         if bounds:
             try:
                 min_lat, max_lat, min_lon, max_lon = bounds
@@ -418,9 +452,23 @@ class SoundEngine:
                     lon = ((lon - min_lon) / lon_span) * 360.0 - 180.0
             except Exception:
                 pass
+        # Preserve 440 Hz at the equator while using the full 220--440 Hz
+        # range for southern positions and 440--880 Hz for northern ones.
+        # The previous symmetric slope reached 0 Hz at -90 and was clamped to
+        # 220, making every normalized latitude south of -45 sound identical.
+        if lat < 0.0:
+            freq = 440.0 + (lat / 90.0) * 220.0
+        else:
+            freq = 440.0 + (lat / 90.0) * 440.0
+        freq = max(220.0, min(880.0, freq))
+        pan = max(-1.0, min(1.0, lon / 180.0))
+        return lat, lon, freq, pan
+
+    def play_spatial_tone(self, lat, lon, bounds=None):
+        """Pitch-panned navigation beep on channels 1+."""
+        lat, lon, freq, pan = self.spatial_tone_parameters(lat, lon, bounds)
+
         def _gen():
-            freq   = max(220.0, min(880.0, 440.0 + (lat / 90.0) * 440.0))
-            pan    = max(-1.0,  min(1.0,   lon / 180.0))
             sr     = 44100
             t      = np.linspace(0, 0.15, int(sr * 0.15), False)
             wave   = np.sin(2 * np.pi * freq * t)
@@ -433,13 +481,5 @@ class SoundEngine:
                 np.stack([left, right], axis=-1) * 0.5 * 32767,
                 dtype=np.int16
             )
-            snd = pygame.sndarray.make_sound(stereo)
-            for idx in range(1, pygame.mixer.get_num_channels()):
-                if idx in self._AMBIENT_CHANNEL_IDS:
-                    continue
-                ch = pygame.mixer.Channel(idx)
-                if not ch.get_busy():
-                    ch.play(snd)
-                    return
-            pygame.mixer.Channel(1).play(snd)
+            self._play_generated_tone(stereo)
         threading.Thread(target=_gen, daemon=True).start()

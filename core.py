@@ -21,7 +21,10 @@ _SPEECH_TIMING = bool(os.environ.get("MIAB_SPEECH_TIMING"))
 # provider and fall back to wx's native one, for screen-reader A/B testing.
 _NO_MODE_ACCESSIBLE = bool(os.environ.get("MIAB_MODE_LABEL_NO_ACCESSIBLE"))
 from i18n import set_language
-from speech_dispatch import SpeechDispatch, braille as _braille, speak as _speak
+from speech_dispatch import (
+    SpeechDispatch, active_output_name,
+    braille as _braille, speak as _speak,
+)
 from wx_utils import IS_MAC, MSAAListBox, _log_key_event, _primary_down
 from keystrokes import action_for_event, disabled_default_for_event
 from lookups import LookupsMixin
@@ -59,6 +62,7 @@ from free import FreeExploreEngine
 from nav import NavigationEngine
 from here_poi import HereClient as HerePoi
 import mall_directory
+import map_symbols
 import user_maps
 from user_map_dialogs import LocalRouteDialog, MapDrawerDialog
 from postal_codes import PostalCodeLookup
@@ -74,15 +78,17 @@ from secret_store import (
     save_secure_credentials,
 )
 from distance_units import (
-    format_distance, format_distance_label, set_unit_system,
+    format_distance, format_distance_label, get_unit_system, set_unit_system,
 )
 from geo_features import GeoFeatures
 from sound_engine import COUNTRY_ALIASES, SoundEngine
+from dotpad import DotPadController
 from world_map_panel import (
     COL_BG,
     WorldMapPanel,
     _GEO_COUNTRIES,
     _GEO_LAND_POLYGONS,
+    _GEO_RINGS,
     _IS_LAND,
 )
 from street_search_frame import _StreetSearchFrame
@@ -97,7 +103,7 @@ from poi_search import (
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '2026.9.4'
+APP_VERSION   = '2026.11.0'
 
 # Bundled read-only resources — inside the executable bundle or source tree.
 BASE_DIR = RESOURCE_DIR
@@ -190,7 +196,9 @@ KNOWN_OCEANS = {
     "Great Australian Bight": [(-50, -32, 115, 145)],
     # Broad offshore fallback only; local coastal bays/headlands should win first.
     # Include Tasmania and the NSW coast under the Tasman Sea rather than Pacific.
-    "Tasman Sea":     [(-50, -38, 140, 175)],
+    # The second box is the northern Tasman, between Sydney and the North
+    # Island, which otherwise fell through to "Pacific Ocean".
+    "Tasman Sea":     [(-50, -38, 140, 175), (-38, -30, 150, 173)],
     "Gulf of Mexico":     [( 18,  30,  -97,  -80)],
     "Caribbean Sea":  [( 10,  23,  -87,  -60)],
     "Mediterranean Sea":  [( 30,  46,   -6,   36)],
@@ -241,6 +249,7 @@ DEFAULT_SETTINGS = {
     "check_updates_at_startup": True,
     "skipped_update_version": "",
     "spatial_tones_mode":     "world",  # "world", "country", or "region"
+    "visual_assist":          True,     # start in Visual Assist (F9 remembers)
     "challenge_direction_mode": "map",  # "map" or "globe"
     "poi_browse_radius_km":    2,
     "suppress_warn_google":    False,
@@ -257,14 +266,18 @@ DEFAULT_SETTINGS = {
     "ors_api_key":            "",
     "weather_temperature_unit": "auto",  # "auto", "celsius", or "fahrenheit"
     "distance_unit":          "metric",  # "metric" or "imperial"
-    "poi_source":             "osm",   # "osm" or "here"
+    "poi_sources":            ["osm"], # "osm", "here" and/or "google" (P searches only)
     "visual_mapping_source":  "auto",  # "google", "mapillary", or legacy-aware "auto"
     "journey_transport_source": "rome2rio",  # free multimodal discovery by default
     "driving_route_source":   "osrm",  # paid Google driving is explicit opt-in
     "key_bindings":           {},
     "language":               "",      # empty means system/default language
     "gnaf_enabled":           True,    # Australian address point overlay
+    "dotpad_enabled":         True,    # use a connected Dot Pad for F8 shapes
+    "dotpad_follow":          True,    # Dot Pad tracks the current country
+    "dotpad_port":            "",      # empty means auto-detect over USB
     "jump_history":           [],      # last 5 J-key destinations [{label,lat,lon}]
+    "address_history":        [],      # last 10 S-jump and route-end addresses (Ctrl+A)
     # On in Education builds, off in Pro builds, unless the user overrides it.
     "clear_favourites_on_exit": EDUCATION_EDITION,
     "logging": {
@@ -312,6 +325,9 @@ def load_settings():
             saved.pop("serper_api_key", None)
             saved.pop("google_cse_id", None)
             saved.pop("mistral_service_enabled", None)
+            if "poi_sources" not in saved and saved.get("poi_source") in ("osm", "here"):
+                # The single POI database choice became a set of checkboxes.
+                saved["poi_sources"] = [saved["poi_source"]]
             s.update(saved)
         except Exception:
             saved = {}
@@ -824,6 +840,14 @@ class MapNavigator(
         self.settings = load_settings()
         migrate_legacy_credentials(self, self.settings)
         set_unit_system(self.settings.get("distance_unit", "metric"))
+        # MIAB owns a connected Dot Pad: F8 shapes on its graphics area and
+        # MIAB's own braille on its text line, independent of the screen reader.
+        self.dotpad = DotPadController(
+            lambda: self.settings,
+            announce=lambda text: wx.CallAfter(self._status_update, text, True),
+            on_follow_changed=lambda value: wx.CallAfter(
+                self._on_dotpad_follow_changed, value))
+        self.dotpad.connect()
         # Source-test launcher support: allow diagnostics to be enabled before
         # Settings is usable.  This is intentionally opt-in and does not alter
         # the saved settings file.
@@ -865,9 +889,10 @@ class MapNavigator(
         self._mode_label.SetBackgroundColour(wx.Colour(10, 20, 40))
         self._mode_label.SetForegroundColour(wx.Colour(220, 220, 220))
 
-        self._btn_ai_summary = wx.Button(root, label="AI Summary (Shift+I)")
-        self._btn_ai_summary.SetToolTip("Generate a spoken narrative briefing of the current GPS route")
-        self._btn_ai_summary.Bind(wx.EVT_BUTTON, lambda e: self._nav_request_narrative_briefing())
+        self._btn_ai_summary = wx.Button(root, label="Stretch Summary (Shift+I)")
+        self._btn_ai_summary.SetToolTip(
+            "Describe the stretch of the route you are on; press again for the whole route")
+        self._btn_ai_summary.Bind(wx.EVT_BUTTON, lambda e: self._nav_request_route_summary())
         self._btn_ai_summary.Hide()
 
         self._list_vsizer = wx.BoxSizer(wx.VERTICAL)
@@ -894,6 +919,7 @@ class MapNavigator(
         self._update_dialog_active = False
         self._suppress_focus_repeat_until = 0.0
         self._tools_workflow_active = False
+        self._startup_location_announcement_pending = True
         self._poi_fetch_lat         = None   # location where POIs were last fetched
         self._poi_fetch_lon         = None
         self._poi_fetch_in_progress = False
@@ -1015,6 +1041,10 @@ class MapNavigator(
         self.Show()
         self.Raise()
         self.Maximize(True)
+        # Visual Assist starts on unless the user turned it off last time.
+        # Quietly: the startup announcement should not be "Visual Assist on".
+        if self.settings.get("visual_assist", True):
+            wx.CallAfter(self._toggle_map_fullscreen, announce=False)
         wx.CallAfter(self._focus_map_window_silently)
         wx.CallLater(200, self._ready)
 
@@ -1345,6 +1375,7 @@ class MapNavigator(
 
     def _refresh_info_panel(self):
         """Refresh the visual information panel without speech or focus changes."""
+        self._dotpad_follow_update()
         if not hasattr(self, "_info_place"):
             return
         place = getattr(self, "last_location_str", "") or getattr(self, "street_label", "")
@@ -1401,12 +1432,14 @@ class MapNavigator(
             "poi_launch_website": new_id(), "personal_poi": new_id(),
             "poi_search": new_id(), "address": new_id(), "street_search": new_id(),
             "nav_address": new_id(), "nav_briefing": new_id(),
+            "address_history": new_id(),
             "intersection": new_id(), "walking": new_id(),
             "add_fav": new_id(),
             "tools": new_id(), "sounds": new_id(), "challenge": new_id(),
             "challenge_multi": new_id(),
             "help": new_id(), "about": new_id(), "manual": new_id(),
             "check_updates": new_id(), "donate": new_id(),
+            "download_link": new_id(),
         }
         self._menu_ids = ids
 
@@ -1443,6 +1476,8 @@ class MapNavigator(
                  lambda e: self.show_jump_dialog())
         add_item(go_menu, "jump_history", "Jump &History\tCtrl+H",
                  lambda e: self.show_jump_history())
+        add_item(go_menu, "address_history", "&Address History\tCtrl+A",
+                 lambda e: self.show_address_history())
         street_mode_label = "&Street Mode\tControl+F11" if IS_MAC else "&Street Mode\tF11"
         add_item(go_menu, "street", street_mode_label,
                  lambda e: self._menu_toggle_street_mode())
@@ -1528,8 +1563,8 @@ class MapNavigator(
                  lambda e: self._street_search())
         add_item(street_menu, "nav_address", "&Navigate to Address",
                  lambda e: self._nav_to_address())
-        add_item(street_menu, "nav_briefing", "Narrative &Briefing of Current Route\tShift+I",
-                 lambda e: self._nav_request_narrative_briefing())
+        add_item(street_menu, "nav_briefing", "Stretch &Summary of Current Route\tShift+I",
+                 lambda e: self._nav_request_route_summary())
         add_item(street_menu, "intersection", "Nearest &Intersection",
                  lambda e: self._announce_nearest_intersection())
         add_item(street_menu, "walking", "&Walking Mode",
@@ -1590,6 +1625,8 @@ class MapNavigator(
                  lambda e: self._check_for_updates())
         add_item(help_menu, "about", "&About",
                  lambda e: self._show_about())
+        add_item(help_menu, "download_link", "Show &Download Link",
+                 lambda e: self._show_download_link())
         help_menu.AppendSeparator()
         add_item(help_menu, "donate", "Donate to Project",
                  lambda e: __import__("webbrowser").open("https://www.paypal.com/donate?business=samtaylor9%40me.com&currency_code=AUD&item_name=Map+in+a+Box"))
@@ -1639,97 +1676,89 @@ class MapNavigator(
         toolbar.Realize()
         self._update_main_menu_state()
 
+    def _ask_real_width(self, title, estimate=None, reason=""):
+        """Ask how wide an imported map is in real life; metres, or None.
+
+        ``estimate`` (metres) is offered as the answer, with ``reason`` saying
+        where it came from, so a creator who has no idea can just press Enter.
+        """
+        units = get_unit_system()
+        unit = user_maps.unit_label(units)
+        imperial = units == "imperial"
+        if estimate:
+            amount = user_maps.round_estimate(
+                estimate * user_maps.FEET_PER_METRE if imperial else estimate)
+            example = str(int(amount))
+            hint = (f"{reason}, it is probably about {example} {unit}. Press Enter to use that, "
+                    "or type a better width if you know it.")
+        else:
+            example = "330" if imperial else "100"
+            hint = (f"If you are not sure, a classroom is about {'33' if imperial else '10'} "
+                    f"{unit} across, and a school or shopping centre a few hundred {unit}.")
+        while True:
+            dialog = wx.TextEntryDialog(
+                self,
+                "How wide is the area on the map, from its left edge to its right edge, "
+                f"in {unit}? Directions use it for distances. {hint}",
+                title, example)
+            try:
+                if dialog.ShowModal() != wx.ID_OK:
+                    return None
+                text = dialog.GetValue()
+            finally:
+                dialog.Destroy()
+            metres = user_maps.parse_distance(text, units)
+            if metres and metres > 0:
+                return metres
+            wx.MessageBox(f"Type a width in {unit}, for example {example}.", title,
+                          wx.OK | wx.ICON_INFORMATION, self)
+
+    def _apply_map_legends(self, floors):
+        """Name numbered places from the map's key, asking once whether the
+        key numbers belong in the names.  Returns how many were named."""
+        show_keys = False
+        if any(user_maps.has_legend(floor) for floor in floors):
+            show_keys = wx.MessageBox(
+                "This map numbers its shops and services and lists them in a key, so each "
+                "number will be named from the key, such as Mi Casa.\n\n"
+                "Also say each key number in the name, such as Mi Casa (key 50)? This helps "
+                "match places to the paper map, but the numbers can be confused with gate "
+                "or room numbers.",
+                "Key numbers", wx.YES_NO | wx.NO_DEFAULT | wx.ICON_QUESTION, self) == wx.YES
+        named = 0
+        for floor in floors:
+            named += user_maps.apply_legend(floor, show_keys=show_keys)[0]
+        return named
+
+    MAP_SOURCE_WILDCARD = (
+        "Map sources (*.pdf;*.jpg;*.jpeg;*.png)|*.pdf;*.jpg;*.jpeg;*.png|"
+        "PDF files (*.pdf)|*.pdf|Image files (*.jpg;*.jpeg;*.png)|*.jpg;*.jpeg;*.png")
+
     def _create_user_map(self):
-        """Open the intentionally small path-and-label map drawer."""
+        """Start a teacher's map: built from names and distances, or imported."""
         choice = wx.SingleChoiceDialog(
-            self, "How would you like to begin?", "Create Map File",
-            ["Draw a new map", "Import a JPG, PNG, or PDF"],
+            self, "How would you like to make the map?", "Create Map File",
+            ["Create from scratch", "Import PDF"],
         )
-        choice.SetSelection(1)
+        choice.SetSelection(0)
         try:
             if choice.ShowModal() != wx.ID_OK:
                 return
             use_image = choice.GetSelection() == 1
         finally:
             choice.Destroy()
-        background = ""
-        source_path = ""
         if use_image:
-            picker = wx.FileDialog(
-                self, "Choose a map image or PDF",
-                wildcard=("Map sources (*.jpg;*.jpeg;*.png;*.pdf)|*.jpg;*.jpeg;*.png;*.pdf|"
-                          "PDF files (*.pdf)|*.pdf|Image files (*.jpg;*.jpeg;*.png)|*.jpg;*.jpeg;*.png"),
-                style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
-            )
+            picker = wx.FileDialog(self, "Choose a map PDF or picture",
+                                   wildcard=self.MAP_SOURCE_WILDCARD,
+                                   style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
             try:
                 if picker.ShowModal() != wx.ID_OK:
                     return
-                background = picker.GetPath()
-                source_path = background
+                source = picker.GetPath()
             finally:
                 picker.Destroy()
-        source_text = ""
-        source_page = 0
-        source_size = None
-        backgrounds = []
-        imported_floors = []
-        if background.lower().endswith(".pdf"):
-            try:
-                page_count = user_maps.pdf_page_count(background)
-                import_all = False
-                if page_count > 1:
-                    mode_dialog = wx.SingleChoiceDialog(
-                        self, "How should the PDF pages be imported?", "Import PDF",
-                        ["Import all pages as floors", "Import one page"])
-                    try:
-                        if mode_dialog.ShowModal() != wx.ID_OK:
-                            return
-                        import_all = mode_dialog.GetSelection() == 0
-                    finally:
-                        mode_dialog.Destroy()
-                    if not import_all:
-                        page_dialog = wx.SingleChoiceDialog(
-                            self, "Which PDF page should this map use?", "Select PDF Page",
-                            [f"Page {number}" for number in range(1, page_count + 1)])
-                        try:
-                            if page_dialog.ShowModal() != wx.ID_OK:
-                                return
-                            source_page = page_dialog.GetSelection()
-                        finally:
-                            page_dialog.Destroy()
-                pages = range(page_count) if import_all else [source_page]
-                for page_index in pages:
-                    rendered = os.path.join(CACHE_DIR, f"user_map_pdf_page_{page_index + 1}.png")
-                    text, pixel_width, pixel_height = user_maps.render_pdf_page(
-                        background, page_index, rendered)
-                    width = 500.0
-                    height = max(10.0, width * pixel_height / pixel_width)
-                    floor = user_maps.new_floor(
-                        f"Floor {page_index + 1}", width, height, page_index)
-                    floor["source_text"] = text
-                    try:
-                        floor["places"] = user_maps.detect_pdf_labels(
-                            background, page_index, width, height,
-                            f"floor-{page_index + 1}")
-                        if not floor["places"]:
-                            floor["places"] = user_maps.detect_image_labels(
-                                rendered, width, height, f"floor-{page_index + 1}")
-                    except Exception as exc:
-                        # Rendering the source is still useful when optional OCR
-                        # is unavailable; the instructor can label it later.
-                        miab_log("errors", f"PDF map label detection failed: {exc}", self.settings)
-                    if floor["places"]:
-                        floor["start"] = floor["places"][0]["id"]
-                    imported_floors.append(floor)
-                    backgrounds.append(rendered)
-                if not import_all:
-                    background = backgrounds[0]
-                    source_text = imported_floors[0]["source_text"]
-                    source_size = (imported_floors[0]["width"], imported_floors[0]["height"])
-            except Exception as exc:
-                wx.MessageBox(f"The PDF could not be imported.\n\n{exc}",
-                              "Create Map File", wx.OK | wx.ICON_ERROR, self)
-                return
+            self._map_from_source(source)
+            return
         name_dialog = wx.TextEntryDialog(self, "What is the map called?", "Create Map File")
         try:
             if name_dialog.ShowModal() != wx.ID_OK:
@@ -1737,54 +1766,297 @@ class MapNavigator(
             name = name_dialog.GetValue().strip() or "Untitled map"
         finally:
             name_dialog.Destroy()
-        data = user_maps.new_map(name, *(source_size or (500.0, 350.0)))
-        if len(imported_floors) > 1:
-            data["floors"] = imported_floors
-            background = backgrounds
-        elif imported_floors:
-            imported = imported_floors[0]
-            data["source_text"] = imported["source_text"]
-            data["source_page"] = imported["source_page"]
-            data["places"] = imported["places"]
-            data["start"] = imported["start"]
-        elif background:
-            try:
-                data["places"] = user_maps.detect_image_labels(
-                    background, data["width"], data["height"], "image")
-                if data["places"]:
-                    data["start"] = data["places"][0]["id"]
-            except Exception as exc:
-                miab_log("errors", f"Map image label detection failed: {exc}", self.settings)
-        else:
-            data["source_text"] = source_text
-            data["source_page"] = source_page
-        dialog = MapDrawerDialog(
-            self, data, background,
-            suggested_save_path=user_maps.suggested_save_path(source_path))
+        dialog = MapDrawerDialog(self, user_maps.new_map(name), "")
         dialog.ShowModal()
         dialog.Destroy()
         self._focus_map_window_silently()
 
-    def _open_user_map(self):
-        picker = wx.FileDialog(
-            self, "Open Map File",
-            wildcard="Map in a Box maps (*.miabmap)|*.miabmap",
-            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
-        )
-        try:
-            if picker.ShowModal() != wx.ID_OK:
+    def _map_from_source(self, source, ask_first=True):
+        """Turn a PDF or picture into a map file in one go, or open the map
+        already made from it (straight away unless ``ask_first``)."""
+        existing = user_maps.suggested_save_path(source)
+        if os.path.exists(existing) and not ask_first:
+            self._open_user_map(existing)
+            return
+        if os.path.exists(existing):
+            ask = wx.MessageDialog(
+                self, f"A map has already been made from this file: "
+                f"{os.path.basename(existing)}.\n\nOpen that map, or make it again from "
+                "the file? Making it again replaces it.",
+                "Map file", wx.YES_NO | wx.CANCEL | wx.ICON_QUESTION)
+            ask.SetYesNoCancelLabels("&Open the map", "&Make it again", "Cancel")
+            answer = ask.ShowModal()
+            ask.Destroy()
+            if answer == wx.ID_YES:
+                self._open_user_map(existing)
                 return
-            path = picker.GetPath()
+            if answer != wx.ID_NO:
+                return
+        imported = self._read_map_source(source)
+        if imported is None:
+            return
+        data, backgrounds, notice = imported
+        background_arg = backgrounds if len(backgrounds) > 1 else backgrounds[0]
+        result = None if notice else self._finish_imported_map(data, backgrounds)
+        if result is None:
+            # Nothing to join automatically: the creator adds places or paths.
+            dialog = MapDrawerDialog(
+                self, data, background_arg, suggested_save_path=existing,
+                traced=list(range(len(backgrounds))),
+                notice=notice or "Map in a Box could not find the walkways on this map, so "
+                "join the places with Join two places, then save.")
+            dialog.ShowModal()
+            dialog.Destroy()
+            self._focus_map_window_silently()
+            return
+        try:
+            path = user_maps.save_map(
+                existing, data, backgrounds if "floors" in data else backgrounds[0])
+        except Exception as exc:
+            miab_log("errors", f"Saving an imported map failed: {exc}", self.settings)
+            path = ""
+        where = (f"It is saved as {os.path.basename(path)}, beside the original file."
+                 if path else "It could not be saved beside the original file, so choose "
+                 "Edit in the map builder and save it somewhere else.")
+        done = wx.MessageDialog(self, f"{result}\n\n{where}", "Map made",
+                                wx.YES_NO | wx.CANCEL | wx.ICON_INFORMATION)
+        done.SetYesNoCancelLabels("&Explore it now", "&Edit in the map builder", "Close")
+        answer = done.ShowModal()
+        done.Destroy()
+        if answer == wx.ID_YES and path:
+            self._open_user_map(path)
+        elif answer == wx.ID_NO or (answer == wx.ID_YES and not path):
+            dialog = MapDrawerDialog(self, data, background_arg, save_path=path,
+                                     suggested_save_path=existing,
+                                     traced=list(range(len(backgrounds))))
+            dialog.ShowModal()
+            dialog.Destroy()
+            self._focus_map_window_silently()
+        else:
+            self._focus_map_window_silently()
+
+    def _finish_imported_map(self, data, backgrounds):
+        """Add the walkways, drop label text that is not a place, and say what
+        was made; None when no walkway could be found."""
+        import map_autopaths
+        floors = user_maps.floors_for(data)
+        joined, cannot_join, found_any, amenities = 0, [], False, []
+        with wx.BusyInfo("Finding the walkways and joining the places..."):
+            for floor, picture in zip(floors, backgrounds):
+                if not picture or not floor.get("places"):
+                    continue
+                try:
+                    summary = map_autopaths.add_paths_automatically(floor, picture)
+                except Exception as exc:
+                    miab_log("errors", f"Automatic paths failed: {exc}", self.settings)
+                    summary = None
+                if summary is None:
+                    continue
+                found_any = True
+                joined += summary["joined"]
+                # Titles, dates and legend lines are not joined to a walkway
+                # and were not named from the key: they are not places.
+                for place_id in summary["left_out_ids"]:
+                    user_maps.delete_place(floor, place_id)
+                user_maps.tell_symbols_apart(floor)
+                unjoined = set(summary["named_left_out_ids"])
+                cannot_join += [p["name"] for p in floor["places"] if p["id"] in unjoined]
+                amenities += [p["symbol"] for p in floor["places"]
+                              if p.get("symbol") and p["id"] not in unjoined]
+                first = next((p for p in floor["places"]
+                              if p["id"] not in unjoined and not p.get("symbol")), None)
+                if first:
+                    floor["start"] = first["id"]
+        if not found_any:
+            return None
+        floor_text = f" on {len(floors)} floors" if len(floors) > 1 else ""
+        message = (f"Made the map {data['name']}: {joined} "
+                   f"{'place' if joined == 1 else 'places'} joined by walkways{floor_text}"
+                   + (f", including {map_symbols.describe_counts(amenities)}." if amenities
+                      else "."))
+        if cannot_join:
+            message += (f" {len(cannot_join)} could not be joined, so directions cannot reach "
+                        f"them yet: {user_maps.short_list(cannot_join)}. They can be joined "
+                        "in the map builder with Join two places.")
+        return message
+
+    def _read_map_source(self, background):
+        """Read a PDF or picture into floors: labels, key names, real size and
+        name.  Returns (data, backgrounds, notice), or None if cancelled."""
+        notice = ""
+        backgrounds = []
+        floors = []
+        if background.lower().endswith(".pdf"):
+            try:
+                page_count = user_maps.pdf_page_count(background)
+                pages = [0]
+                if page_count > 1:
+                    mode_dialog = wx.SingleChoiceDialog(
+                        self, "This PDF has several pages. How should they be used?", "Import PDF",
+                        ["Each page is a floor", "Use one page"])
+                    try:
+                        if mode_dialog.ShowModal() != wx.ID_OK:
+                            return None
+                        import_all = mode_dialog.GetSelection() == 0
+                    finally:
+                        mode_dialog.Destroy()
+                    pages = list(range(page_count))
+                    if not import_all:
+                        page_dialog = wx.SingleChoiceDialog(
+                            self, "Which page?", "Choose a PDF page",
+                            [f"Page {number}" for number in range(1, page_count + 1)])
+                        try:
+                            if page_dialog.ShowModal() != wx.ID_OK:
+                                return None
+                            pages = [page_dialog.GetSelection()]
+                        finally:
+                            page_dialog.Destroy()
+                progress = wx.ProgressDialog(
+                    "Import PDF", "Reading the labels on the map...", maximum=len(pages),
+                    parent=self, style=wx.PD_APP_MODAL | wx.PD_AUTO_HIDE)
+                try:
+                    for number, page_index in enumerate(pages, 1):
+                        progress.Update(number - 1, f"Reading the labels on page {number} of {len(pages)}...")
+                        rendered = os.path.join(CACHE_DIR, f"user_map_pdf_page_{page_index + 1}.png")
+                        text, pixel_width, pixel_height = user_maps.render_pdf_page(
+                            background, page_index, rendered)
+                        width = 500.0
+                        height = max(10.0, width * pixel_height / pixel_width)
+                        floor = user_maps.new_floor(
+                            f"Floor {len(floors) + 1}" if len(pages) > 1 else "Floor 1",
+                            width, height, page_index)
+                        floor["source_text"] = text
+                        try:
+                            floor["places"] = user_maps.detect_pdf_labels(
+                                background, page_index, width, height, f"floor-{page_index + 1}")
+                        except Exception as exc:
+                            miab_log("errors", f"PDF map label detection failed: {exc}", self.settings)
+                        # Read the page as a picture too: a scanned PDF has no
+                        # text, and many maps draw some labels as artwork.
+                        try:
+                            floor["places"] = user_maps.merge_labels(
+                                floor["places"],
+                                user_maps.detect_image_labels(
+                                    rendered, width, height, f"floor-{page_index + 1}"),
+                                width, f"floor-{page_index + 1}")
+                        except Exception as exc:
+                            miab_log("errors", f"PDF page OCR failed: {exc}", self.settings)
+                        if floor["places"]:
+                            floor["start"] = floor["places"][0]["id"]
+                        floors.append(floor)
+                        backgrounds.append(rendered)
+                finally:
+                    progress.Destroy()
+                self._apply_map_legends(floors)
+                for floor in floors:
+                    try:
+                        symbols, _key = map_symbols.symbol_places(
+                            background, floor["source_page"], floor["width"], floor["height"],
+                            f"floor-{floor['source_page'] + 1}-symbol")
+                    except Exception as exc:
+                        miab_log("errors", f"Map symbol reading failed: {exc}", self.settings)
+                        symbols = []
+                    floor["places"].extend(symbols)
+                estimate, reason = None, ""
+                scaled = user_maps.pdf_scale_width(background, pages[0])
+                if scaled:
+                    estimate, reason = scaled, "From the scale printed on the PDF"
+                else:
+                    guesses = sorted(g for g in map(user_maps.estimate_width_from_labels, floors) if g)
+                    if guesses:
+                        estimate = guesses[len(guesses) // 2]
+                        reason = "Judging by how closely its labels are spaced"
+            except Exception as exc:
+                wx.MessageBox(f"The PDF could not be imported.\n\n{exc}",
+                              "Create Map File", wx.OK | wx.ICON_ERROR, self)
+                return None
+            real_width = self._ask_real_width("Import PDF", estimate, reason)
+            if real_width is None:
+                return None
+            for floor in floors:
+                user_maps.scale_floor(floor, real_width / floor["width"])
+        else:
+            image = wx.Image(background)
+            if not image.IsOk():
+                wx.MessageBox("That picture could not be opened.", "Create Map File",
+                              wx.OK | wx.ICON_ERROR, self)
+                return None
+            # Keep the picture's proportions so shapes and directions are true;
+            # the real size is set once the labels show how big the place is.
+            floor = user_maps.new_floor("Floor 1", 500.0, 500.0 * image.GetHeight() / image.GetWidth())
+            try:
+                with wx.BusyInfo("Reading the labels on the map..."):
+                    floor["places"] = user_maps.detect_image_labels(
+                        background, floor["width"], floor["height"], "image")
+            except ImportError:
+                notice = ("Map in a Box cannot read the labels printed on pictures on this "
+                          "computer, so add the places yourself: choose Click to add a place, "
+                          "or Add place.")
+            except Exception as exc:
+                miab_log("errors", f"Map image label detection failed: {exc}", self.settings)
+            self._apply_map_legends([floor])
+            estimate = user_maps.estimate_width_from_labels(floor)
+            real_width = self._ask_real_width(
+                "Import picture", estimate, "Judging by how closely its labels are spaced")
+            if real_width is None:
+                return None
+            user_maps.scale_floor(floor, real_width / floor["width"])
+            if floor["places"]:
+                floor["start"] = floor["places"][0]["id"]
+            floors.append(floor)
+            backgrounds.append(background)
+        if not any(floor.get("places") for floor in floors) and not notice:
+            notice = ("No labels could be read on this map, so add the places yourself: "
+                      "choose Click to add a place, or Add place.")
+
+        suggested = user_maps.suggest_map_name(background)
+        name_dialog = wx.TextEntryDialog(
+            self, "What is the map called?" + (
+                " This is the title read from the map; change it if you like." if suggested else ""),
+            "Create Map File", suggested)
+        try:
+            if name_dialog.ShowModal() != wx.ID_OK:
+                return None
+            name = name_dialog.GetValue().strip() or "Untitled map"
         finally:
-            picker.Destroy()
+            name_dialog.Destroy()
+
+        data = user_maps.new_map(name)
+        if len(floors) > 1:
+            for key in user_maps._FLOOR_KEYS:
+                data.pop(key, None)
+            data["floors"] = floors
+        else:
+            data.update({key: floors[0][key] for key in user_maps._FLOOR_KEYS if key in floors[0]})
+        return data, backgrounds, notice
+
+    def _open_user_map(self, path=None):
+        """Open a map file.  Choosing a PDF or picture instead opens the map
+        made from it, or makes one."""
+        if path is None:
+            picker = wx.FileDialog(
+                self, "Open Map File",
+                wildcard=("Map in a Box maps, PDFs and pictures "
+                          "(*.miabmap;*.pdf;*.jpg;*.jpeg;*.png)|*.miabmap;*.pdf;*.jpg;*.jpeg;*.png|"
+                          "Map in a Box maps (*.miabmap)|*.miabmap|" + self.MAP_SOURCE_WILDCARD),
+                style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+            )
+            try:
+                if picker.ShowModal() != wx.ID_OK:
+                    return
+                path = picker.GetPath()
+            finally:
+                picker.Destroy()
+            if not path.lower().endswith(".miabmap"):
+                self._map_from_source(path, ask_first=False)
+                return
         sounds_were_enabled = getattr(self, "sounds_enabled", True)
         self.sounds_enabled = False
         try:
             # Opening a local document is an audio boundary: stop looping
             # world sounds and suppress incidental tones until it is ready.
             try:
-                self.sound.stop()
-                pygame.mixer.stop()
+                self.sound.stop_all_channels()
             except Exception:
                 pass
             extract_dir = os.path.join(CACHE_DIR, "open_user_map")
@@ -1843,7 +2115,9 @@ class MapNavigator(
         dialog.Destroy()
         self._focus_map_window_silently()
 
-    def _activate_user_map_floor(self, index, announce=True):
+    def _activate_user_map_floor(self, index, announce=True, arrive_at=None, via=None):
+        """Show floor ``index``, at its start or at place ``arrive_at`` when the
+        student took the stairs or lift ``via`` to get there."""
         floors = user_maps.floors_for(self._user_map_data)
         if not 0 <= index < len(floors):
             return False
@@ -1856,7 +2130,7 @@ class MapNavigator(
             if index < len(self._user_map_backgrounds) else "")
         self._user_map_graph = (coords, edges, place_nodes)
         places = floor.get("places") or []
-        start_id = floor.get("start")
+        start_id = arrive_at or floor.get("start")
         start = next((p for p in places if p["id"] == start_id), places[0] if places else None)
         self._user_map_node = place_nodes.get(start["id"]) if start else None
         target_x = start["x"] if start else floor["width"] / 2.0
@@ -1872,9 +2146,37 @@ class MapNavigator(
         self.map_panel.set_position(self.lat, self.lon, False, "")
         self.map_panel.Refresh()
         if announce:
-            location = f" Starting at {start['name']}." if start else ""
-            self._status_update(f"{floor['name']}.{location}", force=True)
+            name = user_maps.floor_name(self._user_map_data, index)
+            if via is not None and start:
+                self._status_update(f"Took the {via['kind']} to {name}. {start['name']}.", force=True)
+            else:
+                location = f" Starting at {start['name']}." if start else ""
+                self._status_update(f"{name}.{location}", force=True)
         return True
+
+    def _user_map_link_here(self, delta):
+        """Stairs or lift at the student's position heading up (+1) or down (-1).
+
+        Returns (link, other_end) or (None, None).  A link straight to the
+        next floor in that direction is preferred over one further away.
+        """
+        data = self._user_map_floor
+        left, right, bottom, top = user_maps.exploration_bounds(data)
+        cell_size = max(right - left, top - bottom) / 30.0
+        x, y = self.lon * 111195.0, self.lat * 111195.0
+        index = self._user_map_floor_index
+        choices = []
+        for place in data.get("places") or []:
+            if math.hypot(place["x"] - x, place["y"] - y) > cell_size:
+                continue
+            for link, other in user_maps.links_at(self._user_map_data, index, place["id"]):
+                step = other["floor"] - index
+                if step * delta > 0:
+                    choices.append((abs(step), link, other))
+        if not choices:
+            return None, None
+        _step, link, other = min(choices, key=lambda item: item[0])
+        return link, other
 
     def _close_user_map(self, announce=True):
         if not self._user_map_data:
@@ -1906,10 +2208,15 @@ class MapNavigator(
         if not data:
             self._status_update("Open a map file before requesting a local route.", force=True)
             return
-        if len(data.get("places") or []) < 2:
+        all_places = sum(len(floor.get("places") or [])
+                         for floor in user_maps.floors_for(self._user_map_data))
+        if all_places < 2:
             self._status_update("This map needs at least two labelled places for directions.", force=True)
             return
-        dialog = LocalRouteDialog(self, data)
+        nearest = user_maps.nearest_places(data, self.lon * 111195.0, self.lat * 111195.0)
+        dialog = LocalRouteDialog(self, self._user_map_data,
+                                  floor_index=self._user_map_floor_index,
+                                  here=nearest[0]["id"] if nearest else None)
         dialog.ShowModal()
         dialog.Destroy()
         self._focus_map_window_silently()
@@ -2956,6 +3263,15 @@ class MapNavigator(
                 # contains the last road visited (for example Portsmouth
                 # Place after moving north into Raby Bay).
                 label, cross = self._nearest_road(self.lat, self.lon)
+                # Navigation steps put the position on a turn or crossing,
+                # where the nearest road may be the cross street; the street
+                # the route follows from here is the one to give.
+                nav_pin = getattr(self, "_nav_street_pin", None)
+                if (getattr(self, "_nav_active", False) and nav_pin and nav_pin[2]
+                        and (nav_pin[0], nav_pin[1]) == (self.lat, self.lon)):
+                    if label and label.split("(")[0].strip() != nav_pin[2]:
+                        cross = label.split("(")[0].strip()
+                    label = nav_pin[2]
 
                 # No street data nearby — check natural features first (same
                 # logic as _update_street_display) before falling back to the
@@ -3052,18 +3368,10 @@ class MapNavigator(
 
     def _show_poi_category_dialog(
             self, initial_key="all", initial_name="", initial_street="",
-            initial_source=None, notice=""):
-        sources = ["osm"]
-        if self.settings.get("here_api_key", "").strip():
-            sources.append("here")
-        if self.settings.get("google_api_key", "").strip():
-            sources.append("google")
-        preferred = initial_source or self.settings.get("poi_source", "osm")
+            notice=""):
         initial_radius = int(self.settings.get("poi_browse_radius_km", 2) or 2) * 1000
         dlg = POICategoryDialog(
             self,
-            available_sources=sources,
-            preferred_source=preferred,
             initial_key=initial_key,
             initial_name=initial_name,
             initial_street=initial_street,
@@ -3079,7 +3387,7 @@ class MapNavigator(
                 label  = category_map.get(dlg.selected_key, "All nearby")
                 name   = dlg.selected_name
                 street = dlg.selected_street
-                source = dlg.selected_source
+                via = self._poi_sources_label(self._poi_search_sources())
                 self.settings["poi_browse_radius_km"] = max(1, int(round(dlg.selected_radius / 1000.0)))
                 # This dialog is also the preference editor for subsequent
                 # POI searches. Persist the chosen radius immediately; without
@@ -3090,8 +3398,8 @@ class MapNavigator(
                     filters.append(f"'{name}'")
                 if street:
                     filters.append(f"on {street}")
-                msg = (f"Searching {label.lower()} {' '.join(filters)} via {source.upper()}..."
-                       if filters else f"Searching {label.lower()} via {source.upper()}...")
+                msg = (f"Searching {label.lower()} {' '.join(filters)} via {via}..."
+                       if filters else f"Searching {label.lower()} via {via}...")
                 def _announce_search(m=msg):
                     self._suppress_location_restore = False
                     self.update_ui(m, force=True)
@@ -3099,7 +3407,7 @@ class MapNavigator(
                 threading.Thread(
                     target=self._fetch_pois,
                     args=(dlg.selected_key,),
-                    kwargs={"name_filter": name, "source": source,
+                    kwargs={"name_filter": name,
                             "street_filter": street,
                             "radius": dlg.selected_radius},
                     daemon=True,
@@ -3114,7 +3422,7 @@ class MapNavigator(
     def _announce_poi_count(self):
         wx.CallAfter(self._show_poi_category_dialog)
 
-    def _retry_poi_name_search(self, category_key, name_filter, street_filter, source, radius):
+    def _retry_poi_name_search(self, category_key, name_filter, street_filter, radius):
         parts = []
         if name_filter:
             parts.append(f"'{name_filter}'")
@@ -3128,7 +3436,6 @@ class MapNavigator(
                 initial_key=category_key,
                 initial_name=name_filter,
                 initial_street=street_filter,
-                initial_source=source,
                 notice=f"No {what} found within {format_distance(radius)}. Edit the search and try again.",
             ),
         )
@@ -3259,24 +3566,11 @@ class MapNavigator(
         self._show_poi_in_listbox(force_top=True)
 
     def _set_nav_button_visible(self, show: bool) -> None:
-        """Show or hide the AI Summary button below the listbox."""
+        """Show or hide the Stretch Summary button below the listbox."""
         btn = getattr(self, "_btn_ai_summary", None)
         if btn is None:
             return
         btn.Show(show)
-        self._list_vsizer.Layout()
-
-    def _set_nav_button_busy(self, busy: bool) -> None:
-        """Update the GPS AI Summary button while work is running."""
-        btn = getattr(self, "_btn_ai_summary", None)
-        if btn is None:
-            return
-        if busy:
-            btn.SetLabel("Thinking...")
-            btn.Disable()
-        else:
-            btn.SetLabel("AI Summary (Shift+I)")
-            btn.Enable()
         self._list_vsizer.Layout()
 
     def _clear_poi_state(self) -> None:
@@ -3745,7 +4039,7 @@ class MapNavigator(
                                (poi_list_open and focused == self))
 
         # TAB: allow focus traversal while a POI list is open or navigation is
-        # active (so the user can reach the AI Summary button); swallow otherwise.
+        # active (so the user can reach the Stretch Summary button); swallow otherwise.
         if key == wx.WXK_TAB:
             if poi_list_open or getattr(self, '_nav_active', False):
                 event.Skip()
@@ -4580,6 +4874,7 @@ class MapNavigator(
             self._jump_address_point_lat = None
             self._jump_address_point_lon = None
             self._jump_address_point_source = None
+        self._record_address(self._jump_address_number or "", street_name, self.lat, self.lon)
 
         wx.CallAfter(self.map_panel.set_position, self.lat, self.lon, True, street_name)
 
@@ -5691,9 +5986,16 @@ class MapNavigator(
             self._status_update(f"Renamed to '{new_name}' locally.")
             wx.CallLater(2000, self._restore_poi_listbox)
 
-    def _toggle_map_fullscreen(self):
-        """F9 — toggle the shared Windows/macOS Visual Assist presentation."""
+    def _toggle_map_fullscreen(self, announce=True):
+        """F9 — toggle the shared Windows/macOS Visual Assist presentation.
+
+        The choice is remembered: Visual Assist comes back on (or stays off)
+        at the next launch. ``announce=False`` is the silent startup call.
+        """
         self._map_fullscreen = not self._map_fullscreen
+        if announce:
+            self.settings["visual_assist"] = self._map_fullscreen
+            save_settings(self.settings)
         status = ""
         if self._map_fullscreen:
             self._map_was_maximized = self.IsMaximized()
@@ -5719,6 +6021,8 @@ class MapNavigator(
         self._h_sizer.Layout()
         self.map_panel.Refresh()
         self.listbox.SetFocus()
+        if not announce:
+            return
         if IS_MAC:
             wx.CallLater(180, self._status_update, status, True)
         else:
@@ -6166,7 +6470,58 @@ class MapNavigator(
         if getattr(self, "map_zoom_factor", 1) > 1:
             self.map_panel.dismiss_country_visual()
             return "zoom"
-        # Find matching entry in _GEO_COUNTRIES
+        match = self._geo_country_entry(country)
+        if match:
+            self.map_panel.set_flash(
+                match['name'],
+                match['rings_idx'],
+                match['centroid_lon'],
+                match['centroid_lat'],
+            )
+            self.dotpad.show_shape(
+                match['name'],
+                self._geo_country_rings(match),
+                match['centroid_lon'],
+                (float(self.lon), float(self.lat)),
+            )
+        else:
+            # Country not in GeoJSON — just flash the name at current position
+            self.map_panel.set_flash(country, [], self.lon, self.lat)
+        return True
+
+    def _poi_background_sources(self):
+        """Street-mode POI databases ticked in Settings, HERE first.
+
+        HERE is only used with its key; with nothing usable ticked, OSM is.
+        Google is never used for the background list: it is charged per
+        request.
+        """
+        chosen = self.settings.get("poi_sources") or ["osm"]
+        here_key = str(self.settings.get("here_api_key", "") or "").strip()
+        sources = [s for s in ("here", "osm")
+                   if s in chosen and (s == "osm" or here_key)]
+        return sources or ["osm"]
+
+    @staticmethod
+    def _poi_sources_label(sources):
+        names = {"osm": "OpenStreetMap", "here": "HERE", "google": "Google"}
+        labels = [names.get(s, s) for s in sources]
+        return labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + " and " + labels[-1]
+
+    def _poi_search_sources(self):
+        """Sources a P search asks: the street-mode ones plus Google Places
+        when it is ticked and has a key."""
+        sources = self._poi_background_sources()
+        google_key = str(self.settings.get("google_api_key", "") or "").strip()
+        if "google" in (self.settings.get("poi_sources") or []) and google_key:
+            sources.append("google")
+        return sources
+
+    def _geo_country_entry(self, country):
+        """Find the _GEO_COUNTRIES entry for a country name, exact then fuzzy."""
+        cache = self.__dict__.setdefault("_geo_country_entry_cache", {})
+        if country in cache:
+            return cache[country]
         c_lower = country.lower()
         match = None
         for c in _GEO_COUNTRIES:
@@ -6179,17 +6534,36 @@ class MapNavigator(
                 if c_lower in c['name'].lower() or c['name'].lower() in c_lower:
                     match = c
                     break
-        if match:
-            self.map_panel.set_flash(
-                match['name'],
-                match['rings_idx'],
-                match['centroid_lon'],
-                match['centroid_lat'],
-            )
+        cache[country] = match
+        return match
+
+    @staticmethod
+    def _geo_country_rings(entry):
+        return [_GEO_RINGS[i] for i in entry['rings_idx'] if 0 <= i < len(_GEO_RINGS)]
+
+    def _dotpad_follow_update(self):
+        """Dot Pad follow mode: track the current country and position."""
+        dotpad = getattr(self, "dotpad", None)
+        if (dotpad is None or not dotpad.following
+                or getattr(self, "lat", None) is None):
+            return
+        country = getattr(self, "last_country_found", "")
+        entry = None
+        if country and country != "Open Water":
+            entry = self._geo_country_entry(country)
+        position = (float(self.lon), float(self.lat))
+        if entry:
+            dotpad.follow(entry['name'], self._geo_country_rings(entry),
+                          entry['centroid_lon'], position)
         else:
-            # Country not in GeoJSON — just flash the name at current position
-            self.map_panel.set_flash(country, [], self.lon, self.lat)
-        return True
+            dotpad.follow(None, None, None, position)
+
+    def _on_dotpad_follow_changed(self, value):
+        """F2 on the Dot Pad toggled follow mode: remember it like Settings does."""
+        self.settings["dotpad_follow"] = value
+        save_settings(self.settings)
+        if value:
+            self._dotpad_follow_update()
 
     def toggle_sounds(self):
         self.sounds_enabled = not getattr(self, 'sounds_enabled', True)
@@ -6223,7 +6597,8 @@ class MapNavigator(
             self._clear_favourites_and_personal_pois()
         if hasattr(self, "_geo_features"):
             self._geo_features.cleanup_temp()
-        pygame.quit()
+        self.sound.shutdown()
+        self.dotpad.shutdown()
         self.Destroy()
         os._exit(0)
 
@@ -6603,13 +6978,25 @@ class MapNavigator(
             return
         self._verbose_trace(f"_update_location_focus applied: {msg!r}")
         self._speech_timing("lookup result reached _update_location_focus")
+        startup_announcement = getattr(
+            self, "_startup_location_announcement_pending", False)
+        if startup_announcement:
+            self._startup_location_announcement_pending = False
+        delay_for_nvda = startup_announcement and active_output_name() == "nvda"
         # Announce first, then let the visual panel catch up.  Refreshing it
         # before the announcement put a burst of MSAA name-change events
         # directly ahead of the speech, which is what JAWS turned into a delay.
-        self._announce_location(msg_text)
-        self._speech_timing("announce: handed to screen reader")
+        if not delay_for_nvda:
+            self._announce_location(msg_text)
+            self._speech_timing("announce: handed to screen reader")
         self._schedule_info_panel_refresh()
-        self._speech_timing("announce: handed to screen reader")
+        if delay_for_nvda:
+            # NVDA controller speech can be displaced by the startup focus and
+            # info-panel accessibility events. Let those settle, then make the
+            # home-location utterance once. JAWS uses its existing queued COM
+            # path and VoiceOver retains the established ordering.
+            wx.CallLater(350, self._announce_location, msg_text)
+            self._speech_timing("startup NVDA announce: delayed until UI settled")
         if getattr(self, "_poi_list", []):
             wx.CallAfter(self.listbox.SetFocus)
 
@@ -6972,7 +7359,8 @@ class MapNavigator(
         if address_points is None:
             address_points = getattr(self, "_address_points", [])
         try:
-            cached = self._poi_fetcher.load_cached_pois(lat, lon)
+            cached = self._poi_fetcher.load_cached_pois(
+                lat, lon, sources=self._poi_background_sources())
             if cached is not None:
                 _suppressed = _load_suppressed()
                 _renamed    = _load_renamed()
@@ -6991,7 +7379,8 @@ class MapNavigator(
                 # Only refresh live if the cache is stale (> 6 h). Fresh
                 # caches are served as-is to avoid hammering Overpass on
                 # every street-mode entry.
-                _age_h = self._poi_fetcher.cached_background_age_hours(lat, lon)
+                _age_h = self._poi_fetcher.cached_background_age_hours(
+                    lat, lon, sources=self._poi_background_sources())
                 if _age_h is None or _age_h > 6:
                     miab_log("verbose",
                              f"Background POI cache age {_age_h:.1f}h — refreshing live." if _age_h else
@@ -7043,13 +7432,9 @@ class MapNavigator(
         poi_lat = self.lat if fetch_lat is None else fetch_lat
         poi_lon = self.lon if fetch_lon is None else fetch_lon
 
-        # Respect poi_source setting — only use HERE if explicitly chosen
-        poi_source = self.settings.get("poi_source", "osm")
-        here_key   = self.settings.get("here_api_key", "").strip()
-        if poi_source == "here" and here_key:
-            self._poi_fetcher.set_here_key(here_key)
-        else:
-            self._poi_fetcher.set_here_key("")
+        poi_sources = self._poi_background_sources()
+        if "here" in poi_sources:
+            self._poi_fetcher.set_here_key(self.settings.get("here_api_key", ""))
 
         try:
             self._background_poi_fetch_in_progress = True
@@ -7068,6 +7453,7 @@ class MapNavigator(
             pois = self._poi_fetcher.fetch_all_background(
                 poi_lat, poi_lon, address_points,
                 force_refresh=force_refresh,
+                sources=poi_sources,
             )
             # Discard if street mode was cancelled while fetching
             if (not self.street_mode
@@ -7249,8 +7635,7 @@ class MapNavigator(
             wave[-fade:] *= np.linspace(1, 0, fade)
             stereo = np.ascontiguousarray(
                 np.stack([wave, wave], axis=-1) * 0.4 * 32767, dtype=np.int16)
-            snd = pygame.sndarray.make_sound(stereo)
-            snd.play()
+            self.sound.play_array_default(stereo)
         except Exception:
             pass
 
@@ -7424,6 +7809,7 @@ class MapNavigator(
             self._free_engine.log_settings = self.settings
             self._poi_fetcher.set_here_key(self.settings.get("here_api_key", ""))
             self._nav.update_settings(self.settings)
+            self.dotpad.apply_settings()
             self._here = HerePoi(
                 api_key   = self.settings.get("here_api_key", ""),
                 cache_dir = CACHE_DIR,
@@ -7751,6 +8137,8 @@ class MapNavigator(
             return True
         if primary and not shift and not alt and (key == ord('H') or key == ord('h')):
             self.show_jump_history(); return True
+        if primary and not shift and not alt and (key == ord('A') or key == ord('a')):
+            self.show_address_history(); return True
         if primary and not shift and not alt and key in (ord('1'), ord('2'), ord('3')):
             self._announce_mark(int(chr(key)), return_focus=False)
             return True
@@ -7850,7 +8238,7 @@ class MapNavigator(
             if no_mod and (key == ord('I') or key == ord('i')):
                 self._nav_announce_step(); return True
             if shift and not primary and not alt and (key == ord('I') or key == ord('i')):
-                self._nav_request_narrative_briefing(); return True
+                self._nav_request_route_summary(); return True
             if no_mod and (key == ord('X') or key == ord('x')):
                 self._nav_announce_cross_street(); return True
 
@@ -7897,13 +8285,13 @@ class MapNavigator(
             if shift and (key == ord('4') or key == ord('$')):
                 miab_log("feature_usage", "Key: $ (currency)", self.settings)
                 self._announce_currency(); return True
-            if primary and alt and key == wx.WXK_UP:
+            if alt and not primary and key == wx.WXK_UP:
                 self._jump_nearest_land("north"); return True
-            if primary and alt and key == wx.WXK_DOWN:
+            if alt and not primary and key == wx.WXK_DOWN:
                 self._jump_nearest_land("south"); return True
-            if primary and alt and key == wx.WXK_LEFT:
+            if alt and not primary and key == wx.WXK_LEFT:
                 self._jump_nearest_land("west"); return True
-            if primary and alt and key == wx.WXK_RIGHT:
+            if alt and not primary and key == wx.WXK_RIGHT:
                 self._jump_nearest_land("east"); return True
             if no_mod and (key == ord('A') or key == ord('a')):
                 miab_log("feature_usage", "Key: A (nearest airport)", self.settings)
@@ -8287,9 +8675,35 @@ class MapNavigator(
         if primary and not shift and not alt and key in (ord("R"), ord("r")):
             self._user_map_route()
             return True
+        no_mod = not (shift or primary or alt)
+        if no_mod and key in (ord("R"), ord("r"), ord("C"), ord("c"), ord("A"), ord("a")):
+            # Region, country and address mean "where am I" on a map file;
+            # the world lookups would describe the sea off Ghana, where the
+            # map's own coordinates sit.
+            left, right, bottom, top = user_maps.exploration_bounds(data)
+            self._status_update(user_maps.describe_position(
+                self._user_map_data, self._user_map_floor_index,
+                self.lon * 111195.0, self.lat * 111195.0,
+                max(right - left, top - bottom) / 30.0, get_unit_system()), force=True)
+            return True
+        world_key = ((not primary and not alt and (ord("A") <= key <= ord("Z")
+                                                   or ord("a") <= key <= ord("z")))
+                     or (not alt and wx.WXK_F2 <= key <= wx.WXK_F12 and key != wx.WXK_F11)
+                     or (primary and not alt and key in (ord("J"), ord("j"))))
+        if world_key:
+            self._status_update("That key is for the world map. On this map, use the arrows, "
+                                "R for where you are, Ctrl+R for directions, or Escape to "
+                                "close it.", force=True)
+            return True
         if primary and not shift and not alt and key in (wx.WXK_PAGEUP, wx.WXK_PAGEDOWN):
             floors = user_maps.floors_for(self._user_map_data)
             delta = 1 if key == wx.WXK_PAGEUP else -1
+            link, other = self._user_map_link_here(delta)
+            if link is not None:
+                # Standing at stairs or a lift: arrive where it leads.
+                self._activate_user_map_floor(
+                    other["floor"], arrive_at=other["place"], via=link)
+                return True
             target = self._user_map_floor_index + delta
             if not 0 <= target < len(floors):
                 edge = "highest" if delta > 0 else "lowest"
@@ -8384,15 +8798,14 @@ class MapNavigator(
                 message = label["name"]
                 if label.get("description"):
                     message += ". " + label["description"]
+                for link, other in user_maps.links_at(
+                        self._user_map_data, self._user_map_floor_index, label["id"]):
+                    message += ". " + user_maps.link_phrase(self._user_map_data, link, other)
                 messages.append(message)
             self._status_update("; ".join(messages) + ".", force=True)
-        elif key in (wx.WXK_UP, wx.WXK_DOWN) and not primary:
-            row_item_count = len(user_maps.places_in_grid_row(
-                data, y, cell_size))
-            if row_item_count:
-                noun = "item" if row_item_count == 1 else "items"
-                self._status_update(
-                    f"{row_item_count} {noun}", force=True)
+        else:
+            self._status_update(user_maps.describe_empty_spot(
+                data, x, y, cell_size, get_unit_system()), force=True)
         return True
 
     def _run_custom_keystroke_action(self, action):
@@ -8413,7 +8826,7 @@ class MapNavigator(
             "address": self._announce_address,
             "navigate_address": self._nav_to_address,
             "walking_mode": self._walk_toggle,
-            "route_briefing": self._nav_request_narrative_briefing,
+            "route_briefing": self._nav_request_route_summary,
         }
         callback = actions.get(action)
         if callback:
@@ -8578,6 +8991,19 @@ class MapNavigator(
                     str(row['admin_name']),
                     str(row['country']),
                 )
+                # worldcities is deliberately compact and omits many suburbs.
+                # Prefer a nearby bundled postal locality for the map surface
+                # so a jump to Carina does not degrade to "between Cannon Hill
+                # and Carindale" immediately after landing.
+                postal_place = self._postal_codes.lookup_details(self.lat, self.lon)
+                postal_centre = None
+                if postal_place and postal_place[5] <= 5000:
+                    _postcode, place, postal_admin, postal_lat, postal_lon, _distance = postal_place
+                    if place:
+                        city = place
+                        if postal_admin:
+                            state = postal_admin
+                        postal_centre = (postal_lat, postal_lon)
                 if polygon_country:
                     country = polygon_country
                     city_matches_country = (
@@ -8601,7 +9027,8 @@ class MapNavigator(
                             if dist_km <= NEAREST_PLACE_FALLBACK_KM:
                                 return self._nearest_city_distance_label()
                     return feature_label
-                close_place = city_matches_country and dist_km <= PLACE_NAME_CLOSE_KM
+                close_place = city_matches_country and (
+                    postal_centre is not None or dist_km <= PLACE_NAME_CLOSE_KM)
                 prev_state   = getattr(self, 'last_state_found', '')
                 prev_country = self.last_country_found
                 self.last_city_found = (
@@ -8611,8 +9038,10 @@ class MapNavigator(
                 # _try_enter_street_mode can geocode from the suburb's own
                 # location rather than the cursor position.
                 if self.last_city_found:
-                    self._last_city_found_lat = self._city_lats[idx]
-                    self._last_city_found_lon = self._city_lons[idx]
+                    self._last_city_found_lat = (
+                        postal_centre[0] if postal_centre else self._city_lats[idx])
+                    self._last_city_found_lon = (
+                        postal_centre[1] if postal_centre else self._city_lons[idx])
                 else:
                     self._last_city_found_lat = None
                     self._last_city_found_lon = None
@@ -8672,6 +9101,13 @@ class MapNavigator(
                 # the country, sound, languages, and facts at one coordinate.
                 # Antarctic ocean positions must not borrow New Zealand from
                 # the nearest-city dataset, which has no Antarctic cities.
+                # Off land there is no city or state; without clearing them the
+                # Visual Assist callout kept the last landfall, such as
+                # "North Sydney, New South Wales, New Zealand".
+                self.last_city_found = ""
+                self.last_state_found = ""
+                self._last_city_found_lat = None
+                self._last_city_found_lon = None
                 if self.lat < -60.0:
                     country = "Open Water"
                 elif (dist_km <= 75.0 and nearest_country
@@ -8711,9 +9147,13 @@ class MapNavigator(
                 if (close_place
                         and display_base == getattr(self, "_last_location_base", "")):
                     try:
+                        context_lat = (postal_centre[0] if postal_centre
+                                       else float(row["lat"]))
+                        context_lon = (postal_centre[1] if postal_centre
+                                       else float(row["lng"]))
                         context = self._close_place_position_context(
-                            float(row["lat"]), float(row["lng"]),
-                            self.lat, self.lon, idx)
+                            context_lat, context_lon, self.lat, self.lon,
+                            None if postal_centre else idx)
                     except Exception:
                         context = ""
                     if context:
@@ -8959,7 +9399,7 @@ class MapNavigator(
             "Ctrl+End: jump to the South Pole.",
             "Shift+arrows: fine movement of about 1 kilometre.",
             "Ctrl+arrows: move in large steps of about 100 kilometres.",
-            "Ctrl+Alt+arrows: jump to the nearest foreign country in that direction.",
+            "Alt+arrows: jump to the nearest foreign country in that direction.",
             "F2: repeat last landed object. Double-tap: spell it out. Triple-tap: copy to clipboard.",
             "Shift+F2: climate zone.",
             "F3: latitude.",
@@ -8970,7 +9410,7 @@ class MapNavigator(
             "F6: country facts.",
             "Shift+F6: Wikipedia summary.",
             "F7: toggle sounds.",
-            "F8: flash country on map.",
+            "F8: flash country on map, and show its shape on a connected Dot Pad.",
             "Shift+F8: cycle world view and country view.",
             "Ctrl+Plus and Ctrl+Minus: change geographic visual zoom.",
             "Ctrl+0: reset visual zoom to 1 X.",
@@ -9040,11 +9480,20 @@ class MapNavigator(
             ]
         elif self.street_mode:
             title = "STREET MODE HELP"
-            lines = [
+            nav_lines = [
+                "During walking directions (Ctrl+G):",
+                "Up or Down: next or previous instruction.",
+                "I: repeat the current instruction.",
+                "Shift+I: summary of the current stretch; press again for the whole route, then Up, Down and I move through it and Escape closes it.",
+                "Escape: stop navigation.",
+            ] if getattr(self, "_nav_active", False) else []
+            lines = nav_lines + [
                 "Up or Down: next or previous known address on the current street.",
                 "Left or Right: previous or next POI sharing the current address.",
                 "Shift+Up or Shift+Down: move forward or backward along the current street in fine steps.",
                 "Shift+Left or Shift+Right: fine sideways movement across the street.",
+                "Alt+Arrows: move about 80 metres north, south, west or east, ignoring the street.",
+                "Ctrl+A: address history, the addresses you jumped to with S and your route destinations.",
                 "Ctrl+Up or Ctrl+Down: next or previous intersection.",
                 "Ctrl+Left or Ctrl+Right: turn left or right at an intersection.",
                 "Page Up: previous known number.",
@@ -9166,7 +9615,83 @@ class MapNavigator(
         dlg.ShowModal()
         dlg.Destroy()
 
+    DOWNLOAD_URL = "https://github.com/sjtaylor82/MapInABox/releases"
 
+    def _show_download_link(self):
+        """Help, Show Download Link: the link and a QR code, filling the window.
+
+        Made for presenting: an audience can read the link or scan the code
+        from the back of a room without the presenter leaving the program.
+        The screen reader reads the link, Copy puts it on the clipboard, and
+        Escape or Close returns to the map.
+        """
+        navy, gold, white = wx.Colour(11, 30, 63), wx.Colour(242, 194, 48), wx.Colour(255, 255, 255)
+        dlg = wx.Dialog(self, title=f"Download {APP_NAME}",
+                        style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        dlg.SetBackgroundColour(navy)
+        screen_h = wx.GetDisplaySize()[1]
+
+        def big_text(label, points, colour, bold=True):
+            text = wx.StaticText(dlg, label=label)
+            text.SetFont(wx.Font(points, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL,
+                                 wx.FONTWEIGHT_BOLD if bold else wx.FONTWEIGHT_NORMAL))
+            text.SetForegroundColour(colour)
+            return text
+
+        scale = max(0.6, min(1.4, screen_h / 1080))
+        words = wx.BoxSizer(wx.VERTICAL)
+        words.Add(big_text(APP_NAME, int(48 * scale), white), 0, wx.BOTTOM, 10)
+        words.Add(big_text("Free for Windows and macOS", int(26 * scale), gold, bold=False), 0, wx.BOTTOM, 30)
+        link_label = self.DOWNLOAD_URL.replace("https://", "")
+        link = big_text(link_label, int(26 * scale), gold)
+        link.SetName(f"Download link: {self.DOWNLOAD_URL}")
+        words.Add(link, 0, wx.BOTTOM, 30)
+        words.Add(big_text("Scan the code to download.", int(20 * scale), white, bold=False), 0)
+
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        row.Add(words, 1, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 40)
+        qr_path = os.path.join(RESOURCE_DIR, "download_qr.png")
+        if os.path.exists(qr_path):
+            side = int(screen_h * 0.5)
+            image = wx.Image(qr_path).Scale(side, side, wx.IMAGE_QUALITY_NORMAL)
+            qr = wx.StaticBitmap(dlg, bitmap=wx.Bitmap(image))
+            qr.SetName("QR code for the download link")
+            row.Add(qr, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 40)
+
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        copy_btn = wx.Button(dlg, label="&Copy link")
+        close_btn = wx.Button(dlg, wx.ID_CANCEL, "Close")
+
+        def copy_link(_event):
+            if wx.TheClipboard.Open():
+                try:
+                    wx.TheClipboard.SetData(wx.TextDataObject(self.DOWNLOAD_URL))
+                finally:
+                    wx.TheClipboard.Close()
+                _speak("Link copied.")
+
+        copy_btn.Bind(wx.EVT_BUTTON, copy_link)
+        buttons.Add(copy_btn, 0, wx.RIGHT, 10)
+        buttons.Add(close_btn, 0)
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+        outer.AddStretchSpacer(1)
+        outer.Add(row, 0, wx.ALIGN_CENTER)
+        outer.AddStretchSpacer(1)
+        outer.Add(buttons, 0, wx.ALIGN_RIGHT | wx.ALL, 20)
+        dlg.SetSizer(outer)
+        dlg.SetEscapeId(wx.ID_CANCEL)
+        # Fill the usable screen. Maximize() on a dialog also covers the
+        # taskbar, which then hid the Copy and Close buttons.
+        display = wx.Display(max(0, wx.Display.GetFromWindow(self)))
+        dlg.SetSize(display.GetClientArea())
+        dlg.Layout()
+        close_btn.SetFocus()
+        wx.CallLater(400, _speak,
+                     f"Download {APP_NAME} free from github.com, sjtaylor82, MapInABox, releases. "
+                     "The link and a QR code are on screen.")
+        dlg.ShowModal()
+        dlg.Destroy()
 
     def _announce_overhead_flights(self):
         """Shift+A — show aircraft overhead in a listbox. Enter fetches destination."""

@@ -7,8 +7,10 @@ from pathlib import Path
 import greyhound
 from greyhound import (
     _normalise_stops, availability_options, filter_stops, format_option_stops,
-    load_availability, load_stops, option_stop_items, stop_coordinates,
-    stop_label, stops_named_after, stops_near,
+    live_departure_rows, live_route_stop_items, load_availability, load_stops,
+    option_stop_items, stop_coordinates,
+    plain_site_message, stop_label, stops_named_after, stops_near, validate_route,
+    valid_destinations,
 )
 from tools import _build_greyhound_booking_url
 
@@ -45,16 +47,121 @@ def values(**changes):
 
 
 class GreyhoundTests(unittest.TestCase):
+    def test_html_route_error_is_plain_readable_text(self):
+        message = plain_site_message(
+            '<h1>No availability</h1><p>See the <a href="map">network map</a>.</p>')
+        self.assertEqual(message, "No availability\nSee the network map.")
+
+    def test_only_the_selected_route_pair_is_validated_and_cached(self):
+        calls = []
+
+        def opener(request, timeout=0):
+            calls.append(request.full_url)
+            return _Response(json.dumps({
+                "IsValid": False, "Message": "<h1>No availability</h1>"
+            }).encode())
+
+        greyhound._route_validation_cache.clear()
+        origin = {"code": "ADL"}
+        destination = {"code": "SYD"}
+        self.assertEqual(validate_route(origin, destination, opener=opener, now=0),
+                         (False, "No availability"))
+        self.assertEqual(validate_route(origin, destination, opener=opener, now=1),
+                         (False, "No availability"))
+        self.assertEqual(len(calls), 1)
+
+    def test_destination_population_keeps_only_valid_pairs(self):
+        raw_stops = [dict(stop, IsTerminal=stop["Code"] == "NEW") for stop in STOPS]
+        stops = _normalise_stops(raw_stops)
+        origin = next(stop for stop in stops if stop["code"] == "BNE")
+
+        def loader(_origin, destination, _day):
+            if destination["code"] != "NEW":
+                return {"Routes": []}
+            return {"Routes": [{"Services": [{"Stops": [
+                {"StopCode": "BNE"}, {"StopCode": "NEW"}
+            ]}]}]}
+
+        greyhound._destination_validation_cache.clear()
+        found = valid_destinations(
+            origin, stops, dt.date(2026, 11, 11), loader=loader,
+            now=0, max_workers=1)
+        self.assertEqual([stop["code"] for stop in found], ["NEW"])
+
+    def test_current_timetable_rows_include_live_time_service_and_fare(self):
+        data = {"Routes": [{
+            "DepartureDate": "2026-11-11 11:00",
+            "ArrivalDate": "2026-11-11 12:50",
+            "RouteServiceSummary": "GX714", "CheapestFare": 42,
+            "Services": [],
+        }]}
+        rows = live_departure_rows(data, "BRISBANE")
+        self.assertEqual(rows[0]["depart"], "11:00")
+        self.assertEqual(rows[0]["arrive"], "12:50")
+        self.assertIn("Greyhound GX714", rows[0]["label"])
+        self.assertIn("from $42", rows[0]["label"])
+
+    def test_live_timetable_decodes_transfers_and_marks_next_day(self):
+        data = {"Routes": [{
+            "DepartureDate": "2026-11-11 16:45",
+            "ArrivalDate": "2026-11-12 08:30",
+            "RouteServiceSummary": "GX496 &gt; GX712", "CheapestFare": 37.7,
+            "Services": [],
+        }]}
+        row = live_departure_rows(data, "BRISBANE DOMESTIC AIRPORT")[0]
+        self.assertIn("GX496 > GX712", row["label"])
+        self.assertIn("next day", row["label"])
+
+    def test_zero_fare_is_not_spoken_as_free_and_temp_stop_name_is_cleaned(self):
+        data = {"Routes": [{
+            "DepartureDate": "2026-11-11 04:00",
+            "ArrivalDate": "2026-11-11 10:00",
+            "RouteServiceSummary": "GX243", "CheapestFare": 0,
+            "Services": [],
+        }]}
+        row = live_departure_rows(data, "(SFR - TEMP LOCAT) SOUTHPORT")[0]
+        self.assertIn("arrives at Southport at 10:00am", row["label"])
+        self.assertNotIn("from $0", row["label"])
+
+    def test_live_route_stops_include_times_request_stops_and_meal_breaks(self):
+        row = {
+            "origin_code": "WGG", "destination_code": "BNE",
+            "route": {"Services": [{"Service": "GX243", "Stops": [
+                {"StopCode": "WGG", "StopName": "Woolgoolga",
+                 "DepartureTime": "2026-11-11 04:00"},
+                {"StopCode": "ARR", "StopName": "Arrawarra (Spot X)",
+                 "DepartureTime": "2026-11-11 04:10", "OnRequest": True},
+                {"StopCode": "BNM", "StopName": "Ballina Meal Break Only",
+                 "ArrivalTime": "2026-11-11 07:20",
+                 "DepartureTime": "2026-11-11 07:55",
+                 "StopOver": True, "StopOverTime": "35m"},
+                {"StopCode": "SPT", "StopName": "(SFR - TEMP LOCAT) Southport",
+                 "DepartureTime": "2026-11-11 10:00", "OnRequest": True},
+                {"StopCode": "BNE", "StopName": "Brisbane",
+                 "ArrivalTime": "2026-11-11 11:00"},
+            ]}]},
+        }
+        items = live_route_stop_items(row)
+        self.assertEqual(items[0], "Service GX243")
+        self.assertIn("Arrawarra (Spot X): 4:10am, request stop", items)
+        self.assertIn(
+            "Ballina Meal Break Only: arrive 7:20am, depart 7:55am, stopover 35m",
+            items)
+        self.assertIn("Southport: 10:00am, request stop", items)
+        self.assertEqual(items[-1], "Brisbane: 11:00am")
+
     def test_booking_url_populates_official_widget_parameters(self):
         url = _build_greyhound_booking_url(values())
-        for expected in ("ORIGIN=BNE", "DESTINATION=NEW", "TRAVELDATE=2026-10-10",
-                         "RETURNDATE=2026-10-12", "ISRETURN=TRUE", "PROMOCODE=SAVE"):
+        for expected in ("b-origin=BNE", "b-destination=NEW",
+                         "b-travel-date=2026-10-10",
+                         "b-return-date=2026-10-12", "b-travel-type=return",
+                         "b-promo-code=SAVE"):
             self.assertIn(expected, url)
 
     def test_one_way_url_does_not_send_return_date(self):
         url = _build_greyhound_booking_url(values(is_return=False))
-        self.assertIn("ISRETURN=FALSE", url)
-        self.assertNotIn("RETURNDATE", url)
+        self.assertIn("b-travel-type=one-way", url)
+        self.assertNotIn("b-return-date", url)
 
     def test_return_must_follow_departure(self):
         with self.assertRaisesRegex(ValueError, "return date"):
@@ -240,6 +347,22 @@ class GreyhoundTests(unittest.TestCase):
         self.assertEqual(payload["options"]["fareBasis1Count"], 1)
         self.assertEqual(len(payload["options"]["TravelLegs"]), 1)
         self.assertEqual(result, [{"RouteOptions": []}])
+
+    def test_availability_token_attributes_can_be_reordered(self):
+        captured = []
+
+        def opener(request, timeout=0):
+            captured.append(request)
+            if request.data is None:
+                return _Response(
+                    b'<input value="token" name="__RequestVerificationToken" id="csrf">')
+            return _Response(json.dumps({
+                "status": "success", "data": [{"RouteOptions": []}]
+            }).encode())
+
+        load_availability(values(is_return=False), opener=opener)
+        headers = {name.casefold(): value for name, value in captured[1].header_items()}
+        self.assertEqual(headers["__requestverificationtoken"], "token")
 
     def test_availability_rows_include_one_adult_price(self):
         rows = availability_options([{"RouteOptions": [{

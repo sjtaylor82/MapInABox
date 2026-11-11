@@ -40,6 +40,47 @@ _AIRLINE_DIRECT_AIRPORTS = {
 }
 
 
+def _short_audiograph_name(resolved_name: str) -> str:
+    """Reduce a geocoder address to the locality a map user would hear."""
+    text = " ".join(str(resolved_name or "").split())
+    if not text:
+        return ""
+    parts = [part.strip() for part in text.split(",") if part.strip()]
+    if not parts:
+        return text
+
+    street_words = re.compile(
+        r"\b(?:street|st|road|rd|avenue|ave|boulevard|blvd|drive|dr|"
+        r"lane|ln|highway|hwy|place|pl|parade|pde|terrace|tce|way)\b\.?",
+        re.IGNORECASE,
+    )
+    street_index = next(
+        (i for i, part in enumerate(parts)
+         if street_words.search(part) or re.search(r"\d+\s+\D", part)),
+        None,
+    )
+    candidates = parts[street_index + 1:] if street_index is not None else parts
+
+    state_suffix = re.compile(
+        r"\s+(?:(?:NSW|VIC|QLD|SA|WA|TAS|NT|ACT)\s+)?\d{4}\s*$|"
+        r"\s+(?:NSW|VIC|QLD|SA|WA|TAS|NT|ACT)\s*$",
+        re.IGNORECASE,
+    )
+    ignored = {
+        "australia", "new south wales", "queensland", "victoria",
+        "south australia", "western australia", "tasmania",
+        "northern territory", "australian capital territory",
+    }
+    for candidate in candidates:
+        concise = state_suffix.sub("", candidate).strip()
+        if (not concise or concise.casefold() in ignored
+                or concise.casefold().startswith("city of ")
+                or concise.isdigit()):
+            continue
+        return concise
+    return parts[0]
+
+
 def _parse_ddmmyyyy(value):
     """Parse the compact date format used by the accessible booking tools."""
     import datetime as _dt
@@ -172,7 +213,7 @@ def _build_booking_com_url(values):
 
 
 def _build_greyhound_booking_url(values):
-    """Build the URL understood by Greyhound Australia's booking widget."""
+    """Build a URL for Greyhound Australia's current booking widget."""
     depart = values["depart"]
     returning = values.get("return")
     is_return = bool(values.get("is_return"))
@@ -180,15 +221,28 @@ def _build_greyhound_booking_url(values):
         raise ValueError("origin and destination must be different")
     if is_return and (returning is None or returning <= depart):
         raise ValueError("return date must be after departure date")
-    params = {"ORIGIN": values["origin"]["code"],
-              "DESTINATION": values["destination"]["code"],
-              "TRAVELDATE": depart.isoformat(),
-              "ISRETURN": "TRUE" if is_return else "FALSE"}
+    params = {"b-origin": values["origin"]["code"],
+              "b-destination": values["destination"]["code"],
+              "b-travel-date": depart.isoformat(),
+              "b-travel-type": "return" if is_return else "one-way",
+              "b-p1-pax": "adult", "b-p1-count": "1"}
     if is_return:
-        params["RETURNDATE"] = returning.isoformat()
+        params["b-return-date"] = returning.isoformat()
     if values.get("promo_code"):
-        params["PROMOCODE"] = values["promo_code"]
-    return "https://www.greyhound.com.au/?" + urllib.parse.urlencode(params) + "#tab1"
+        params["b-promo-code"] = values["promo_code"]
+    return "https://www.greyhound.com.au/?" + urllib.parse.urlencode(params)
+
+
+def _build_murrays_booking_url(origin="Toowoomba", destination="Brisbane",
+                               route_group=None):
+    """Return Murrays' official booking engine, selecting a known route."""
+    endpoints = (str(origin).casefold().strip(), str(destination).casefold().strip())
+    is_toowoomba_route = ("toowoomba" in endpoints
+                           and any(place.startswith("brisbane") for place in endpoints))
+    code = route_group or ("TBE" if is_toowoomba_route else None)
+    params = {"RouteCode": code} if code else {}
+    return ("https://online.murrays.com.au/MurraysCoaches/booking/dates" +
+            (("?" + urllib.parse.urlencode(params)) if params else ""))
 
 # Dialogs imported lazily to avoid circular imports
 
@@ -197,10 +251,12 @@ def _get_dialogs():
         ToolsMenuDialog, StopEntryDialog, DateTimePickerDialog,
         JourneyResultsDialog, TransitLookupDialog, RouteResultsDialog,
         RendezvousResultsDialog, FindFoodDialog, MeetPointDialog,
+        JourneyAudioGraphEntryDialog, JourneyAudioGraphPlaybackDialog,
     )
     return (ToolsMenuDialog, StopEntryDialog, DateTimePickerDialog,
             JourneyResultsDialog, TransitLookupDialog, RouteResultsDialog,
-            RendezvousResultsDialog, FindFoodDialog, MeetPointDialog)
+            RendezvousResultsDialog, FindFoodDialog, MeetPointDialog,
+            JourneyAudioGraphEntryDialog, JourneyAudioGraphPlaybackDialog)
 
 def _key_required(parent, title, message, link_label, link_url):
     from dialogs import show_api_key_required
@@ -839,7 +895,9 @@ class ToolsMixin:
                 if not self._education_tool_allowed(selected_tool):
                     self._restore_tools_sound()
                     return
-                if selected_tool == "detour_calculator":
+                if selected_tool == "journey_audiograph":
+                    self._tool_journey_audiograph()
+                elif selected_tool == "detour_calculator":
                     self._tool_detour_calculator()
                 elif selected_tool == "route_explorer":
                     self._tool_route_explorer()
@@ -865,6 +923,8 @@ class ToolsMixin:
                     self._tool_booking_com()
                 elif selected_tool == "greyhound_booking":
                     self._tool_greyhound_booking()
+                elif selected_tool == "murrays_search":
+                    self._tool_murrays_search()
                 elif selected_tool == "hotel_search":
                     self._tool_hotel_search()
                 elif selected_tool == "find_food":
@@ -908,6 +968,50 @@ class ToolsMixin:
         """Restore the pre-F12 sound state after leaving the tools menu."""
         self._finish_thinking()
         self._end_tools_workflow()
+
+    def _tool_journey_audiograph(self):
+        """Collect locations, resolve them, then speak and sonify each one."""
+        if not self._education_tool_allowed("journey_audiograph"):
+            return
+        rt = self._get_route_tools()
+        if rt is None:
+            return
+        # Match Journey Planner: search worldwide, while allowing the current
+        # country to rank an otherwise ambiguous place more helpfully.
+        preferred_country_code = (
+            getattr(self, "_current_country_code", "") or "").strip()
+        if not preferred_country_code:
+            preferred_country_code = self._country_name_to_code(
+                getattr(self, "last_country_found", "") or "")
+        resolved = []
+        while True:
+            entry = self._dlgs[9](self, resolved)
+            action = entry.ShowModal()
+            resolved = entry.GetLocations()
+            entry.Destroy()
+            if action == wx.ID_CANCEL:
+                return
+            if action == wx.ID_DELETE:
+                continue
+            if action == wx.ID_OK:
+                break
+
+            place = self._pick_location(
+                "Location (address, stop or suburb):", "location", rt, "",
+                preferred_country_code=preferred_country_code)
+            if place is not None:
+                resolved.append(self._audiograph_map_location(*place))
+
+        if not resolved:
+            return
+        playback = self._dlgs[10](self, resolved)
+        playback.ShowModal()
+        playback.Destroy()
+
+    def _audiograph_map_location(self, lat, lon, resolved_name):
+        """Keep the resolved coordinate while shortening its spoken label."""
+        short_name = _short_audiograph_name(resolved_name)
+        return float(lat), float(lon), short_name or str(resolved_name)
 
     def _get_route_tools(self) -> "RouteTools | None":
         """Return a configured RouteTools instance, or None."""
@@ -2378,6 +2482,48 @@ class ToolsMixin:
         results = GreyhoundAvailabilityDialog(self, availability, values)
         results.ShowModal()
         results.Destroy()
+
+    def _tool_murrays_search(self):
+        """Search long-distance coach operators together."""
+        from murrays import load_network as load_murrays_network
+        from greyhound import load_stops
+        from premier import load_network as load_premier_network
+        from dialogs import MurraysSearchDialog
+        dlg = MurraysSearchDialog(self)
+
+        def load_routes():
+            from concurrent.futures import ThreadPoolExecutor
+            loaders = {
+                "Murrays": load_murrays_network,
+                "Greyhound": load_stops,
+                "Premier": load_premier_network,
+            }
+            results = {}
+            errors = []
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                futures = {name: pool.submit(loader)
+                           for name, loader in loaders.items()}
+                for name, future in futures.items():
+                    try:
+                        results[name] = future.result()
+                    except Exception as exc:
+                        results[name] = []
+                        errors.append(f"{name}: {exc}")
+            if any(results.values()):
+                wx.CallAfter(
+                    dlg.set_route_data, results["Murrays"], results["Greyhound"],
+                    results["Premier"])
+                for error in errors:
+                    miab_log("errors", f"[CoachSearch] {error}", self.settings)
+            else:
+                wx.CallAfter(
+                    dlg.show_route_error,
+                    "Could not download coach routes:\n\n" + "\n".join(errors))
+
+        import threading
+        threading.Thread(target=load_routes, daemon=True).start()
+        dlg.ShowModal()
+        dlg.Destroy()
 
     def _tool_order_uber(self):
         if not self._education_tool_allowed("order_uber"):

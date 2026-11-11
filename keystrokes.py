@@ -24,7 +24,7 @@ KEY_ACTIONS = (
     KeyAction("address", "Announce current address", "Street", "A"),
     KeyAction("navigate_address", "Navigate to an address", "Street", "Primary+G"),
     KeyAction("walking_mode", "Toggle walking mode", "Street", "W"),
-    KeyAction("route_briefing", "Narrative briefing of current route", "Street", "Shift+I"),
+    KeyAction("route_briefing", "Stretch summary of current route", "Street", "Shift+I"),
 )
 ACTIONS_BY_ID = {action.id: action for action in KEY_ACTIONS}
 CONTEXTS = ("Global", "Map", "Street")

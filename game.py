@@ -74,14 +74,16 @@ def _country_centroid(df, country: str) -> tuple[float, float]:
 def _play_sound_array(arr: np.ndarray, channel_idx: int = -1) -> None:
     """Play a stereo int16 numpy array on a free pygame channel."""
     import pygame
+    from sound_engine import MIXER_LOCK
     arr = np.ascontiguousarray(arr)
-    snd = pygame.sndarray.make_sound(arr)
-    if channel_idx >= 0:
-        pygame.mixer.Channel(channel_idx).play(snd)
-    else:
-        ch = pygame.mixer.find_channel()
-        if ch:
-            ch.play(snd)
+    with MIXER_LOCK:
+        snd = pygame.sndarray.make_sound(arr)
+        if channel_idx >= 0:
+            pygame.mixer.Channel(channel_idx).play(snd)
+        else:
+            ch = pygame.mixer.find_channel()
+            if ch:
+                ch.play(snd)
 
 
 def _make_sonar_pulse(proximity: float = 0.0, sr: int = 44100) -> np.ndarray:
