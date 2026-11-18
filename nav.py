@@ -1268,12 +1268,37 @@ import wx
 from dialogs import POICategoryDialog, StreetSearchDialog
 from logging_utils import miab_log
 from poi_fetch import filter_pois_by_category
-from route_pois import describe_pois_along, describe_sides
+from route_pois import describe_pois_along, describe_pois_near_route, describe_sides
 
 _NAV_ARRIVAL_CONTEXT_DELAY_MS = 2500
 
 
 class NavMixin:
+
+    def _nav_enrich_poi_grid(self, dest_lat, dest_lon):
+        """Merge already-cached places around this route into its POI grid."""
+        fetcher = getattr(self, "_poi_fetcher", None)
+        remember = getattr(self, "_remember_poi_search_results", None)
+        if fetcher is None or remember is None:
+            return 0
+        try:
+            mid_lat = (float(self.lat) + float(dest_lat)) / 2.0
+            mid_lon = (float(self.lon) + float(dest_lon)) / 2.0
+            route_m = dist_metres(
+                float(self.lat), float(self.lon), float(dest_lat), float(dest_lon))
+            radius = max(500.0, route_m / 2.0 + 200.0)
+            cached = fetcher.load_cached_nearby_pois(
+                mid_lat, mid_lon, radius=radius)
+            if cached:
+                remember(cached)
+            miab_log("navigation",
+                     f"Route POI grid enriched with {len(cached)} cached places.",
+                     self.settings)
+            return len(cached)
+        except Exception as exc:
+            miab_log("errors", f"[Nav] Route POI cache enrichment failed: {exc}",
+                     self.settings)
+            return 0
 
     def _nav_valid_coord(self, lat, lon):
         try:
@@ -1284,7 +1309,12 @@ class NavMixin:
         return -90 <= lat <= 90 and -180 <= lon <= 180
 
     def _nav_update_ui(self, msg):
-        """Navigation messages own the focused listbox item."""
+        """Announce the current navigation message and cancel stale speech."""
+        # A delayed repeat of an earlier step must never speak after the user
+        # has already advanced or gone back.
+        self._transient_return_generation = getattr(
+            self, "_transient_return_generation", 0) + 1
+        self._transient_message_active_until = 0.0
         try:
             self.update_ui(msg, force=True)
         except TypeError:
@@ -1411,8 +1441,11 @@ class NavMixin:
         category = (self.settings.get("walk_poi_category", "all") or "all").lower()
         if category != "all":
             pois = filter_pois_by_category(pois, category)
-        return describe_pois_along(polyline, streets, pois,
-                                   getattr(self, "_address_points", []))
+        confident = describe_pois_along(
+            polyline, streets, pois, getattr(self, "_address_points", []))
+        if confident:
+            return confident
+        return describe_pois_near_route(polyline, streets, pois)
 
     def _nav_stretch_summary(self, idx):
         """Shift+I — a description of one stretch from MIAB's own data.
@@ -1466,6 +1499,10 @@ class NavMixin:
             self._status_update("No street data loaded yet. Wait for streets to load first.", force=True)
             return
 
+        # This is the only entry point that begins a fresh destination-picking
+        # session.  Delayed callbacks from the previous session stay locked.
+        self._nav_destination_committed = False
+
         # Offer Address or POI
         has_pois = bool(getattr(self, '_poi_list', []))
         choices = ["Street address"]
@@ -1482,7 +1519,13 @@ class NavMixin:
         if sel == 0:
             self._nav_to_address_pick()
         else:
-            self._nav_to_poi_pick()
+            # Identify this particular POI-picking request.  A category fetch
+            # finishes asynchronously and must not reopen the picker after the
+            # user has already selected a destination and moved on to choosing
+            # a route.
+            pick_generation = getattr(self, "_nav_poi_pick_generation", 0) + 1
+            self._nav_poi_pick_generation = pick_generation
+            self._nav_to_poi_pick(pick_generation)
 
     def _nav_to_address_pick(self):
         """Pick a street and number using the same dialog as S key."""
@@ -1567,8 +1610,19 @@ class NavMixin:
         dest_name = f"{number} {street}"
         self._nav_launch(best["lat"], best["lon"], dest_name)
 
-    def _nav_to_poi_pick(self):
+    def _nav_to_poi_pick(self, pick_generation=None):
         """Pick a destination from the loaded POI list, fetching first if needed."""
+        if getattr(self, "_nav_destination_committed", False):
+            miab_log("navigation",
+                     "Ignored POI destination picker after destination commit.",
+                     self.settings)
+            return
+        if (pick_generation is not None
+                and pick_generation != getattr(
+                    self, "_nav_poi_pick_generation", 0)):
+            miab_log("navigation", "Ignored stale POI destination picker.",
+                     self.settings)
+            return
         pois = getattr(self, '_poi_list', [])
         if not pois:
             dlg = POICategoryDialog(self)
@@ -1582,7 +1636,7 @@ class NavMixin:
             self._status_update("Loading points of interest...")
             def _fetch_then_pick():
                 self._fetch_pois(category, name_filter=name)
-                wx.CallAfter(self._nav_to_poi_pick)
+                wx.CallAfter(self._nav_to_poi_pick, pick_generation)
             threading.Thread(target=_fetch_then_pick, daemon=True).start()
             return
 
@@ -1593,6 +1647,10 @@ class NavMixin:
         idx = dlg.GetSelection(); dlg.Destroy()
         poi = pois[idx]
         dest_name = names[idx]
+        # Invalidate every delayed callback before route calculation starts.
+        self._nav_destination_committed = True
+        self._nav_poi_pick_generation = getattr(
+            self, "_nav_poi_pick_generation", 0) + 1
         self._poi_list  = []
         self._poi_index = 0
         self._poi_explore_stack = []
@@ -1606,6 +1664,22 @@ class NavMixin:
     def _nav_launch(self, dest_lat, dest_lon, dest_name,
                     target_source="manual", target_meta=None):
         """Common entry point — check provider and start navigation."""
+        # Navigation owns the UI from this point.  Results from a POI request
+        # started beforehand must not replace its dialogs or announcements.
+        self._nav_destination_committed = True
+        self._poi_context_generation = getattr(
+            self, "_poi_context_generation", 0) + 1
+        # Cancel any delayed "return to POI list" captured by an earlier
+        # search announcement, then remove only the visible/search list state.
+        # The background POI grid remains available for route announcements.
+        self._transient_return_generation = getattr(
+            self, "_transient_return_generation", 0) + 1
+        clear_pois = getattr(self, "_clear_poi_state", None)
+        if clear_pois is not None:
+            clear_pois()
+        show_mode = getattr(self, "_show_mode_surface", None)
+        if show_mode is not None:
+            show_mode(focus=True)
         requested_provider = self.settings.get("nav_provider", "osm")
         provider = requested_provider
         try:
@@ -1614,6 +1688,7 @@ class NavMixin:
         except (TypeError, ValueError):
             self._nav_update_ui(f"No GPS coordinate for {dest_name}.")
             return
+        self._nav_enrich_poi_grid(dest_lat, dest_lon)
         meta = target_meta or {}
         distance_m = dist_metres(self.lat, self.lon, dest_lat, dest_lon)
         source = meta.get("source") or meta.get("_source") or target_source
@@ -1868,8 +1943,7 @@ class NavMixin:
         total_min = int(getattr(self, '_nav_total_min', 0) or 0)
         time_part = f"about {total_min} min, " if total_min > 0 else ""
         return (
-            f"{first}  {provider} to {dest_name}.  "
-            f"{mode_label}, {dist_part}{time_part}"
+            f"{first}  {mode_label}, {dist_part}{time_part}"
             f"{n_turns} turn{'s' if n_turns != 1 else ''}, "
             f"{n_steps} step{'s' if n_steps != 1 else ''}."
         )
@@ -1899,6 +1973,12 @@ class NavMixin:
         self._nav_step = 1
         self._nav.step = 1
         message = self._nav_route_summary(dest_name, provider=provider)
+        # Route-choice dialogs restore focus to the control that owned it
+        # before they opened (often the now-hidden POI list).  Navigation must
+        # reclaim the map command surface after the final dialog closes.
+        show_mode = getattr(self, "_show_mode_surface", None)
+        if show_mode is not None:
+            show_mode(focus=True)
         # Any background/live POI request that began before navigation is now
         # stale; its completion must not re-announce the destination POI.
         self._poi_context_generation = getattr(
@@ -2375,24 +2455,6 @@ class NavMixin:
                 force=True,
             )
             return
-        node = getattr(self, '_walk_node', None)
-        street = getattr(self, '_walk_street', None)
-        if node and street and self._walk_graph:
-            cross = self._walk_get_cross_streets(node, street)
-            if cross:
-                self._status_update(f"Near {street} and {', '.join(cross[:2])}.", force=True)
-            else:
-                self._status_update(f"On {street}, no cross streets identified nearby.", force=True)
-        else:
-            # Not in walking mode — use current position and nearest road
-            label, cross = self._nearest_road(self.lat, self.lon)
-            if cross:
-                self._status_update(f"Near {label} and {cross}.", force=True)
-            elif label:
-                self._status_update(f"On {label}.", force=True)
-            else:
-                self._status_update("Cross street information not available.", force=True)
-
     def _nav_route_street_at(self, idx):
         """The street the route follows from step ``idx``'s point: the edge
         leaving it, or for the last step the edge arriving.  "" for routes

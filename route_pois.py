@@ -171,6 +171,30 @@ def _parity_sides(path, segment_streets, address_points):
     return learned
 
 
+def _nearby_address_number(path, poi, street, address_points, within_m=30.0):
+    """Infer an unnumbered POI's address from a nearby point on its street."""
+    street = street_key(street)
+    if not street:
+        return None
+    try:
+        px, py = path.xy(float(poi["lat"]), float(poi["lon"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    candidates = []
+    for address in address_points or ():
+        number = _house_number(address.get("number"))
+        if number is None or street_key(address.get("street")) != street:
+            continue
+        try:
+            ax, ay = path.xy(float(address["lat"]), float(address["lon"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        distance = math.hypot(px - ax, py - ay)
+        if distance <= within_m:
+            candidates.append((distance, number))
+    return min(candidates, default=(None, None), key=lambda item: item[0])[1]
+
+
 _EATERY_KINDS = {
     "restaurant", "cafe", "fast food", "bakery", "bar", "pub",
     "ice cream", "food court", "biergarten",
@@ -297,8 +321,12 @@ def passed_places(polyline, segment_streets, pois, address_points=()):
             continue
         side = "left" if lateral > 0 else "right"
         number = _poi_number(poi)
+        evidence_number = number
+        if evidence_number is None:
+            evidence_number = _nearby_address_number(
+                path, poi, segment_streets[segment], address_points)
         expected = parity_sides.get(segment_street, {}).get(
-            number % 2 if number is not None else None)
+            evidence_number % 2 if evidence_number is not None else None)
         if expected and expected != side:
             continue
         # A house number is only spoken when the place is recorded on this
@@ -322,7 +350,8 @@ _GENERIC_NAME_WORDS = {
 
 
 def core_words(name):
-    return {w for w in re.findall(r"[0-9a-zé]+", name.casefold().replace("'", ""))
+    normalised = name.casefold().replace("’", "'").replace("'", "")
+    return {w for w in re.findall(r"[0-9a-zé]+", normalised)
             if w not in _GENERIC_NAME_WORDS}
 
 
@@ -515,6 +544,50 @@ def describe_pois_along(polyline, segment_streets, pois, address_points=(), maxi
         lead = f"On your {side}, you'll pass" if index == 0 else f"On your {side},"
         sentences.append(f"{lead} {run}.")
     return "  ".join(sentences) + _more_eateries(more) if sentences else ""
+
+
+def describe_pois_near_route(polyline, segment_streets, pois, maximum=6):
+    """Name places genuinely beside a stretch when their side is uncertain."""
+    if len(polyline) < 2:
+        return ""
+    path = _StepPath(polyline)
+    found = []
+    seen = set()
+    for poi in pois:
+        name = _poi_name(poi)
+        if not name or name.casefold() in seen:
+            continue
+        try:
+            hit = path.project(float(poi["lat"]), float(poi["lon"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if hit is None:
+            continue
+        segment, along, lateral = hit
+        if not END_CLEARANCE_M <= along <= path.length - END_CLEARANCE_M:
+            continue
+        if any(abs(along - bend) < BEND_CLEARANCE_M for bend in path.bends):
+            continue
+        if abs(lateral) > MAX_LATERAL_M:
+            continue
+        segment_street = street_key(segment_streets[segment])
+        poi_street = street_key(_poi_street(poi))
+        if poi_street and segment_street and poi_street != segment_street:
+            continue
+        if not poi_street and abs(lateral) > MAX_LATERAL_UNKNOWN_STREET_M:
+            continue
+        if _names_a_street(name, segment_streets[segment]):
+            continue
+        seen.add(name.casefold())
+        found.append((along, name, poi))
+    found.sort(key=lambda item: (item[0], item[1].casefold()))
+    if not found:
+        return ""
+    selected = found[:maximum]
+    names = [place_phrase(poi) for _along, _name, poi in selected]
+    extra = len(found) - len(selected)
+    suffix = f"  {extra} more places along here." if extra else ""
+    return f"Along this stretch: {join_names(names)}.{suffix}"
 
 
 def describe_sides(polyline, segment_streets, pois, address_points=(), maximum=20):

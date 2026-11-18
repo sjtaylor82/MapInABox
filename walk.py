@@ -371,6 +371,37 @@ class WalkMixin:
 
         return ".  ".join(parts) + ("." if parts else "")
 
+    def _walk_entry_intersection(self, lat, lon, preferred_street=""):
+        """Choose the nearest entry node, preferring the selected street."""
+        graph = self._walk_graph or {}
+        nodes = graph.get("nodes", {})
+        intersections = graph.get("intersections", set())
+        node_streets = graph.get("node_streets", {})
+
+        def bare(value):
+            return re.sub(r"\s*\(.*?\)", "", value or "").strip().casefold()
+
+        preferred_key = bare(preferred_street)
+        candidates = list(intersections)
+        if preferred_key:
+            on_preferred = [
+                nid for nid in candidates
+                if preferred_key in {
+                    bare(name) for name in node_streets.get(nid, set())
+                }
+            ]
+            if on_preferred:
+                candidates = on_preferred
+
+        def distance(nid):
+            nlat, nlon = nodes[nid]
+            return math.sqrt(
+                ((lat - nlat) * 111000) ** 2
+                + ((lon - nlon) * 111000 * math.cos(math.radians(lat))) ** 2
+            )
+
+        return min(candidates, key=distance, default=None)
+
     def _walk_toggle(self):
         """Toggle walking mode on or off."""
         if self._walking_mode:
@@ -400,20 +431,20 @@ class WalkMixin:
             self._status_update("Could not build walking graph. Not enough intersections found.", force=True)
             return
 
-        # Find nearest intersection to current position
+        # Prefer an intersection on the selected street. A closer endpoint on
+        # an unrelated side street must not pull walking mode away from the
+        # address the student selected.
         entry_lat, entry_lon = self.lat, self.lon
-        best_nid = None
-        best_dist = float("inf")
         nodes = self._walk_graph["nodes"]
-        intersections = self._walk_graph["intersections"]
-        for nid in intersections:
-            nlat, nlon = nodes[nid]
-            d = math.sqrt(((self.lat - nlat) * 111000)**2 +
-                          ((self.lon - nlon) * 111000 *
-                           math.cos(math.radians(self.lat)))**2)
-            if d < best_dist:
-                best_dist = d
-                best_nid = nid
+        preferred_labels = [
+            getattr(self, "_jump_address_street", ""),
+            getattr(self, "_jump_street_label", ""),
+            getattr(self, "street_label", ""),
+        ]
+        preferred_label = next(
+            (str(label) for label in preferred_labels if label), "")
+        best_nid = self._walk_entry_intersection(
+            entry_lat, entry_lon, preferred_label)
 
         if best_nid is None:
             self._status_update("No intersections found nearby.", force=True)
@@ -429,11 +460,6 @@ class WalkMixin:
             self._status_update("No named streets at nearest intersection.", force=True)
             return
 
-        preferred_labels = [
-            getattr(self, "_jump_address_street", ""),
-            getattr(self, "_jump_street_label", ""),
-            getattr(self, "street_label", ""),
-        ]
         preferred = next((
             street for label in preferred_labels if label
             for street in named if street.casefold() == str(label).casefold()

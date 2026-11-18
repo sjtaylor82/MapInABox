@@ -20,6 +20,7 @@ import zipfile
 
 FORMAT_VERSION = 1
 MAP_JSON = "map.json"
+SOUND_EXTENSIONS = {".wav", ".ogg", ".mp3"}
 
 
 def suggested_save_path(source_path):
@@ -99,6 +100,8 @@ def validate_map(data):
             place["x"] = float(place["x"])
             place["y"] = float(place["y"])
             place["description"] = str(place.get("description") or "").strip()
+            place["sound"] = str(place.get("sound") or "").strip()
+            place["sound_path"] = str(place.get("sound_path") or "").strip()
             if place["id"] in seen:
                 raise ValueError("The map contains duplicate place identifiers on a floor.")
             seen.add(place["id"])
@@ -116,7 +119,7 @@ def validate_map(data):
 
 
 def save_map(path, data, background_path=None):
-    """Save a portable .miabmap ZIP, embedding an optional JPEG background."""
+    """Save a portable .miabmap ZIP with its backgrounds and place sounds."""
     data = validate_map(json.loads(json.dumps(data)))
     target = os.path.abspath(path)
     if not target.lower().endswith(".miabmap"):
@@ -128,6 +131,7 @@ def save_map(path, data, background_path=None):
         backgrounds = [background_path]
     backgrounds.extend([None] * (len(surfaces) - len(backgrounds)))
     members = []
+    sound_members = []
     for index, (surface, source) in enumerate(zip(surfaces, backgrounds)):
         member = ""
         if source:
@@ -136,6 +140,29 @@ def save_map(path, data, background_path=None):
             member = f"floors/{index + 1}/{filename}" if "floors" in data else filename
         surface["background"] = member
         members.append((member, source))
+        for place in surface.get("places", []):
+            source_sound = str(place.get("sound_path") or "").strip()
+            previous_member = str(place.get("sound") or "").strip()
+            if not source_sound and previous_member and os.path.isfile(previous_member):
+                source_sound = previous_member
+            if not source_sound:
+                place["sound"] = ""
+                place.pop("sound_path", None)
+                continue
+            if not os.path.isfile(source_sound):
+                raise ValueError(
+                    f"The sound for {place['name']} cannot be found: {source_sound}")
+            extension = os.path.splitext(source_sound)[1].lower()
+            if extension not in SOUND_EXTENSIONS:
+                raise ValueError(
+                    f"The sound for {place['name']} must be a WAV, OGG or MP3 file.")
+            safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", place["id"]).strip("-.") or "place"
+            sound_name = f"{safe_id}{extension}"
+            sound_member = (f"floors/{index + 1}/sounds/{sound_name}"
+                            if "floors" in data else f"sounds/{sound_name}")
+            place["sound"] = sound_member
+            place.pop("sound_path", None)
+            sound_members.append((sound_member, source_sound))
     parent = os.path.dirname(target) or os.curdir
     os.makedirs(parent, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix="miabmap-", suffix=".tmp", dir=parent)
@@ -146,6 +173,8 @@ def save_map(path, data, background_path=None):
             for member, source in members:
                 if member and source:
                     archive.write(source, member)
+            for member, source in sound_members:
+                archive.write(source, member)
         os.replace(temporary, target)
     finally:
         if os.path.exists(temporary):
@@ -154,7 +183,7 @@ def save_map(path, data, background_path=None):
 
 
 def load_map(path, extract_dir=None):
-    """Load a map and optionally extract its background for display."""
+    """Load a map and optionally extract its backgrounds and place sounds."""
     with zipfile.ZipFile(path, "r") as archive:
         try:
             data = json.loads(archive.read(MAP_JSON).decode("utf-8"))
@@ -172,6 +201,16 @@ def load_map(path, extract_dir=None):
                 with archive.open(member) as source, open(background, "wb") as dest:
                     shutil.copyfileobj(source, dest)
             backgrounds.append(background)
+            for place in surface.get("places", []):
+                place["sound_path"] = ""
+                member = place.get("sound")
+                if member and member in archive.namelist() and extract_dir:
+                    sound_dir = os.path.join(extract_dir, f"floor-{index + 1}", "sounds")
+                    os.makedirs(sound_dir, exist_ok=True)
+                    sound_path = os.path.join(sound_dir, os.path.basename(member))
+                    with archive.open(member) as source, open(sound_path, "wb") as dest:
+                        shutil.copyfileobj(source, dest)
+                    place["sound_path"] = sound_path
     return data, backgrounds if "floors" in data else backgrounds[0]
 
 
@@ -885,13 +924,14 @@ def _new_place_id(floor):
     return f"place-{number}"
 
 
-def add_place(floor, name, x, y, description=""):
+def add_place(floor, name, x, y, description="", sound_path=""):
     """Add a named place at X/Y metres; the first place becomes the start."""
     name = str(name or "").strip()
     if not name:
         raise ValueError("A place needs a name.")
     place = {"id": _new_place_id(floor), "name": name,
              "description": str(description or "").strip(),
+             "sound": "", "sound_path": str(sound_path or "").strip(),
              "x": float(x), "y": float(y)}
     floor.setdefault("places", []).append(place)
     if not floor.get("start"):
@@ -1135,6 +1175,8 @@ def describe_place(floor, place, unit_system="metric"):
                      f"{compass_name(dx, dy)} of {start['name']}")
     if place.get("description"):
         text += f". {place['description']}"
+    if place.get("sound_path") or place.get("sound"):
+        text += ". Has an arrival sound"
     return text
 
 

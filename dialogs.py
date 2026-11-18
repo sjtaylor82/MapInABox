@@ -3610,9 +3610,28 @@ class JourneyResultsDialog(wx.Dialog):
             self._open_source_btn.Bind(wx.EVT_BUTTON, self._on_open_source)
         close_btn.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CLOSE))
         self.listbox.Bind(wx.EVT_LISTBOX_DCLICK, lambda e: self._show_detail())
+        self.listbox.Bind(wx.EVT_LISTBOX, self._on_route_selection)
         self.listbox.Bind(wx.EVT_KEY_DOWN, self._on_list_key)
         self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
         wx.CallAfter(self.listbox.SetFocus)
+        self._update_transit_actions()
+
+    def _selected_route_has_transit(self):
+        idx = self._selected_route_index()
+        return (idx != wx.NOT_FOUND
+                and any(leg.get("type") == "transit"
+                        for leg in (self._routes[idx].get("legs") or [])))
+
+    def _update_transit_actions(self):
+        available = self._selected_route_has_transit()
+        if self._platforms_btn:
+            self._platforms_btn.Enable(available)
+        if self._stops_btn:
+            self._stops_btn.Enable(available)
+
+    def _on_route_selection(self, event):
+        self._update_transit_actions()
+        event.Skip()
 
     def _show_detail(self):
         sel = self.listbox.GetSelection()
@@ -3632,6 +3651,7 @@ class JourneyResultsDialog(wx.Dialog):
         self._showing_detail = False
         self.Layout()
         self.listbox.SetFocus()
+        self._update_transit_actions()
 
     def _selected_route_index(self):
         sel = self.listbox.GetSelection()
@@ -3786,12 +3806,53 @@ class JourneyResultsDialog(wx.Dialog):
     def _on_platforms_ready(self, routes):
         self._routes = routes
         if self._platforms_btn:
-            self._platforms_btn.SetLabel("Platforms loaded")
+            self._platforms_btn.Enable()
+            self._platforms_btn.SetLabel("Show Platforms")
         if self._showing_detail:
             sel = self.listbox.GetSelection()
             if sel != wx.NOT_FOUND and sel < len(self._routes):
                 self.detail.SetValue(self._routes[sel]["detail_text"])
                 self.detail.SetInsertionPoint(0)
+
+        idx = self._selected_route_index()
+        route = self._routes[idx] if idx != wx.NOT_FOUND else {}
+        items = []
+        for leg in route.get("legs") or []:
+            if leg.get("type") != "transit":
+                continue
+            service = leg.get("line_name") or leg.get("vehicle_type") or "Service"
+            stop = leg.get("departure_stop") or "boarding stop"
+            platform = leg.get("departure_platform")
+            if platform:
+                items.append(f"{service}: {stop}, platform {platform}.")
+            else:
+                items.append(f"{service}: no platform number is available for {stop}.")
+        if not items:
+            items = ["No transit platform information is available for this journey."]
+
+        dlg = wx.Dialog(self, title="Journey Planner - Platforms",
+                        style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        platforms = wx.ListBox(dlg, choices=items, style=wx.LB_SINGLE)
+        platforms.SetSelection(0)
+        platforms.SetMinSize((560, 240))
+        sizer.Add(platforms, 1, wx.EXPAND | wx.ALL, 10)
+        close_btn = wx.Button(dlg, wx.ID_CLOSE, "Close")
+        sizer.Add(close_btn, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        dlg.SetSizer(sizer)
+        dlg.SetSize(620, 360)
+        close_btn.Bind(wx.EVT_BUTTON, lambda e: dlg.EndModal(wx.ID_CLOSE))
+        dlg.Bind(wx.EVT_CHAR_HOOK,
+                 lambda e: dlg.EndModal(wx.ID_CLOSE)
+                 if e.GetKeyCode() in (wx.WXK_ESCAPE, wx.WXK_BACK)
+                 else e.Skip())
+        wx.CallAfter(platforms.SetFocus)
+        dlg.ShowModal()
+        dlg.Destroy()
+        if self._showing_detail:
+            self.detail.SetFocus()
+        else:
+            self.listbox.SetFocus()
 
     def _on_list_key(self, event):
         code = event.GetKeyCode()

@@ -25,6 +25,22 @@ def save_settings(settings):
     return save(settings)
 
 
+def _street_area_key(name):
+    """Return a comparison key for equivalent locality labels.
+
+    Postal datasets may append ``DC`` (distribution centre) to an ordinary
+    suburb name, while reverse geocoding returns the suburb without it.
+    Treat those labels as the same area when deciding whether a street-mode
+    boundary has been crossed.
+    """
+    words = re.sub(r"[^a-z0-9]+", " ", str(name or "").casefold()).split()
+    if words and words[-1] == "dc":
+        words.pop()
+    if len(words) >= 2 and words[-2:] == ["distribution", "centre"]:
+        words = words[:-2]
+    return " ".join(words)
+
+
 def _street_area_identity(geo, preferred_name=""):
     """Resolve the label and OSM boundary that describe the same area.
 
@@ -38,7 +54,7 @@ def _street_area_identity(geo, preferred_name=""):
     area_name = preferred_name or nominatim_name or "this area"
     boundary_matches = (
         not preferred_name
-        or preferred_name.casefold() == nominatim_name.casefold()
+        or _street_area_key(preferred_name) == _street_area_key(nominatim_name)
     )
     return (
         area_name,
@@ -48,6 +64,17 @@ def _street_area_identity(geo, preferred_name=""):
 
 
 class StreetModeMixin:
+    def _replace_road_segments(self, segments):
+        """Install road data and invalidate graphs derived from older data."""
+        self._road_segments = segments
+        self._walk_graph = None
+        nav = getattr(self, "_nav", None)
+        if nav is not None and hasattr(nav, "set_graph"):
+            nav.set_graph(None)
+        clear_survey = getattr(self, "_clear_street_survey_cache", None)
+        if callable(clear_survey):
+            clear_survey()
+
     def _street_shift_follow_axis(self):
         """Return the cardinal key axis matching the local street bearing."""
         street = (getattr(self, "_jump_street_label", None)
@@ -236,7 +263,7 @@ class StreetModeMixin:
             # Cache invalid if >7km from center
             if dist > 7000:
                 miab_log("street", f"[Street] Cache invalid - {dist:.0f}m from center, clearing", getattr(self, "settings", None))
-                self._road_segments = []
+                self._replace_road_segments([])
                 self._natural_features = []
                 self._interpolations = []
                 self._address_points = []
@@ -690,7 +717,7 @@ class StreetModeMixin:
         # of whatever was left over from before (which can read as blank
         # or "unknown").
         self._show_mode_surface("Street mode", focus=True)
-        self._road_segments  = []
+        self._replace_road_segments([])
         self._natural_features = []
         self._address_points = []
         self._road_fetched   = False
@@ -847,7 +874,7 @@ class StreetModeMixin:
         """Silently download streets after a POI jump within the same suburb — no dialog."""
         self._status_update(f"Downloading streets for {suburb_name}...")
         self._road_fetched = False
-        self._road_segments = []
+        self._replace_road_segments([])
         self._loading = True
         self._fetch_road_data()
         threading.Thread(target=self._fetch_poi_intersection,
@@ -858,7 +885,7 @@ class StreetModeMixin:
         if self._confirm_fetch_streets(suburb_name):
             self._status_update(f"Downloading streets for {suburb_name}...")
             self._road_fetched = False
-            self._road_segments = []
+            self._replace_road_segments([])
             self._loading = True
             self._fetch_road_data()
             threading.Thread(target=self._fetch_poi_intersection,
@@ -881,7 +908,7 @@ class StreetModeMixin:
         self._street_fetch_lat = None
         self._street_fetch_lon = None
         self._street_fetch_id = getattr(self, '_street_fetch_id', 0) + 1
-        self._road_segments  = []
+        self._replace_road_segments([])
         self._natural_features = []
         self._interpolations = []
         self._address_points = []
@@ -1110,7 +1137,7 @@ class StreetModeMixin:
                             self._recentring = True
                             self._street_fetch_lat = clat
                             self._street_fetch_lon = clon
-                            self._road_segments  = []
+                            self._replace_road_segments([])
                             self._natural_features = []
                             self._interpolations = []
                             self._road_fetched   = False
@@ -1122,7 +1149,7 @@ class StreetModeMixin:
                 return
 
             # ── Stage 1 complete — announce immediately ───────────────
-            self._road_segments  = segs
+            self._replace_road_segments(segs)
             self._natural_features = natural_features  # Store natural features from fetch
             self._interpolations = interpolations  # Store address interpolation data
             self._address_points = addrs
@@ -1256,7 +1283,7 @@ class StreetModeMixin:
                         if not self.street_mode or self._street_fetch_id != my_fetch_id:
                             self._quiet_gnaf_reload = False
                             return
-                        self._road_segments  = merged
+                        self._replace_road_segments(merged)
                         self._address_points = full_addrs or self._address_points
                         self._clear_street_survey_cache()
                         try:

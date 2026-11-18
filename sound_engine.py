@@ -352,7 +352,7 @@ class SoundEngine:
             miab_log("errors", f"[SoundEngine] Cannot play {path}: {e}", getattr(self, "settings", None))
 
     def play_file(self, path, loops=0):
-        """Play a WAV file once (or looped if loops=-1)."""
+        """Play a pygame-supported audio file once (or looped if loops=-1)."""
         try:
             self._ambient_transition_generation += 1
             with self._mixer_lock:

@@ -61,8 +61,9 @@ class Rome2RioTests(unittest.TestCase):
     def test_public_search_response_becomes_accessible_journey_results(self):
         payload = {
             "places": [
-                {"shortName": "Brisbane"},
-                {"shortName": "Dubbo"},
+                {"shortName": "Brisbane", "lat": -27.466, "lng": 153.026},
+                {"shortName": "Orange", "lat": -33.283, "lng": 149.1},
+                {"shortName": "Dubbo", "lat": -32.25, "lng": 148.61},
             ],
             "segments": [{"options": [0], "duration": 63900}],
             "options": [{"hops": [0]}],
@@ -70,14 +71,14 @@ class Rome2RioTests(unittest.TestCase):
                 "line": 0, "vehicle": 0, "marketingCarrier": 0,
                 "duration": 63900,
             }],
-            "lines": [{"places": [0, 1], "names": ["NX123"]}],
+            "lines": [{"places": [0, 1, 2], "names": ["NX123"]}],
             "vehicles": [{"name": "bus", "kind": "bus"}],
             "carriers": [{"name": "Example Coaches"}],
             "routes": [{
                 "name": "Bus",
                 "duration": 63900,
                 "segments": [0],
-                "places": [0, 1],
+                "places": [0, 2],
                 "indicativePrices": [{
                     "currencyCode": "AUD", "priceLow": 180,
                     "priceHigh": 248,
@@ -95,6 +96,18 @@ class Rome2RioTests(unittest.TestCase):
             "Example Coaches bus, service NX123: Brisbane to Dubbo; about 17h 45m",
             routes[0]["detail_text"])
         self.assertEqual(routes[0]["source"], "rome2rio")
+        self.assertEqual(len(routes[0]["legs"]), 1)
+        leg = routes[0]["legs"][0]
+        self.assertEqual(leg["type"], "transit")
+        self.assertEqual(leg["line_name"], "NX123")
+        self.assertEqual(leg["departure_stop"], "Brisbane")
+        self.assertEqual(leg["arrival_stop"], "Dubbo")
+        self.assertEqual(leg["departure_stop_lat"], -27.466)
+        self.assertEqual(leg["arrival_stop_lon"], 148.61)
+        self.assertEqual(
+            [stop["name"] for stop in leg["rome2rio_stops"]],
+            ["Brisbane", "Orange", "Dubbo"],
+        )
 
     def test_dated_bus_departures_are_added_with_full_details(self):
         class Response:

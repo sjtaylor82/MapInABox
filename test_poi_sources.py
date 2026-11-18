@@ -5,6 +5,7 @@ from unittest import mock
 
 import poi_fetch
 from poi_fetch import PoiFetcher, merge_background_sources
+from poi_search import PoiSearchMixin
 
 
 def _poi(name, lat, lon, source=None):
@@ -40,6 +41,28 @@ class MergeTests(unittest.TestCase):
     def test_one_source_keeps_its_own_entries(self):
         same = [_poi("Unit", 0, 0), _poi("Unit", 0, 0)]
         self.assertEqual(len(merge_background_sources([same])), 2)
+
+
+class SearchResultGridTests(unittest.TestCase):
+    def test_category_result_is_added_to_route_poi_grid(self):
+        class Host(PoiSearchMixin):
+            def _merge_personal_pois(self, pois):
+                return list(pois)
+
+            def _build_poi_grid(self, pois):
+                return {"places": list(pois)}
+
+        host = Host()
+        host._all_pois = [_poi("Background Place", 1.0, 1.0)]
+        factory = _poi("Factory 51", 1.001, 1.001, "here")
+
+        host._remember_poi_search_results([factory])
+
+        self.assertEqual(
+            [poi["name"] for poi in host._all_pois],
+            ["Background Place", "Factory 51"],
+        )
+        self.assertIn(factory, host._poi_grid["places"])
 
 
 class BackgroundSourcesTests(unittest.TestCase):

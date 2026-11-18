@@ -1,7 +1,9 @@
+import ast
 import threading
 import time
 import unittest
 from unittest import mock
+from pathlib import Path
 
 import numpy as np
 
@@ -293,6 +295,53 @@ class ControllerTests(unittest.TestCase):
         self.controller.show_shape("Peru", [[(0, 0), (1, 0), (1, 1)]])
         time.sleep(0.2)
         self.assertIsNone(FakeDotPad.instance)
+
+
+class F8IntegrationTests(unittest.TestCase):
+    @staticmethod
+    def _flash_method():
+        tree = ast.parse(Path("core.py").read_text(encoding="utf-8"))
+        map_navigator = next(
+            node for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "MapNavigator")
+        method = next(
+            node for node in map_navigator.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_flash_current_country")
+        namespace = {}
+        exec(compile(ast.Module(body=[method], type_ignores=[]),
+                     "core.py", "exec"), namespace)
+        return namespace["_flash_current_country"]
+
+    def _host(self, zoom):
+        host = mock.Mock()
+        host.last_country_found = "Peru"
+        host.map_zoom_factor = zoom
+        host.lon = -75.0
+        host.lat = -10.0
+        host._geo_country_entry.return_value = {
+            "name": "Peru",
+            "rings_idx": [1],
+            "centroid_lon": -75.0,
+            "centroid_lat": -10.0,
+        }
+        host._geo_country_rings.return_value = [[(-76, -11), (-74, -9)]]
+        return host
+
+    def test_f8_sends_country_to_dotpad_at_normal_zoom(self):
+        host = self._host(1)
+        result = self._flash_method()(host)
+        self.assertIs(result, True)
+        host.dotpad.show_shape.assert_called_once()
+        host.map_panel.set_flash.assert_called_once()
+
+    def test_f8_sends_country_to_dotpad_when_magnified(self):
+        host = self._host(2)
+        result = self._flash_method()(host)
+        self.assertEqual(result, "zoom")
+        host.dotpad.show_shape.assert_called_once()
+        host.map_panel.dismiss_country_visual.assert_called_once()
+        host.map_panel.set_flash.assert_not_called()
 
 
 if __name__ == "__main__":

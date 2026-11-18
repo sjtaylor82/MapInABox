@@ -341,7 +341,9 @@ class PlaceDialog(wx.Dialog):
         self._others = others
         panel = wx.Panel(self)
         sizer = wx.BoxSizer(wx.VERTICAL)
-        self.name = self.description = None
+        self.name = self.description = self.sound_display = None
+        self.sound_path = str(place.get("sound_path") or "") if place else ""
+        self.sound_changed = False
         if mode in ("add", "edit"):
             sizer.Add(wx.StaticText(panel, label="Name:"), 0, wx.LEFT | wx.TOP, 10)
             self.name = wx.TextCtrl(panel, value=place["name"] if place else "")
@@ -351,6 +353,21 @@ class PlaceDialog(wx.Dialog):
                 0, wx.LEFT, 10)
             self.description = wx.TextCtrl(panel, value=place.get("description", "") if place else "")
             sizer.Add(self.description, 0, wx.ALL | wx.EXPAND, 10)
+            sizer.Add(wx.StaticText(
+                panel, label="Sound played when students arrive (optional):"),
+                0, wx.LEFT, 10)
+            sound_row = wx.BoxSizer(wx.HORIZONTAL)
+            self.sound_display = wx.TextCtrl(
+                panel, value=os.path.basename(self.sound_path), style=wx.TE_READONLY)
+            self.sound_display.SetName("Place sound file")
+            sound_row.Add(self.sound_display, 1, wx.RIGHT | wx.EXPAND, 8)
+            browse = wx.Button(panel, label="&Choose sound...")
+            remove = wx.Button(panel, label="&Remove sound")
+            browse.Bind(wx.EVT_BUTTON, self._choose_sound)
+            remove.Bind(wx.EVT_BUTTON, self._remove_sound)
+            sound_row.Add(browse, 0, wx.RIGHT, 8)
+            sound_row.Add(remove, 0)
+            sizer.Add(sound_row, 0, wx.ALL | wx.EXPAND, 10)
         self.reference = self.distance = self.direction = self.connect = None
         if mode == "move" or (mode == "add" and not position_known):
             if others:
@@ -385,6 +402,27 @@ class PlaceDialog(wx.Dialog):
             wx.CallAfter(first.SetFocus)
         self.CentreOnParent()
 
+    def _choose_sound(self, event):
+        picker = wx.FileDialog(
+            self, "Choose a sound for this place",
+            wildcard=("Audio files (*.wav;*.ogg;*.mp3)|*.wav;*.ogg;*.mp3|"
+                      "WAV files (*.wav)|*.wav|OGG files (*.ogg)|*.ogg|"
+                      "MP3 files (*.mp3)|*.mp3"),
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
+        try:
+            if picker.ShowModal() != wx.ID_OK:
+                return
+            self.sound_path = picker.GetPath()
+            self.sound_changed = True
+            self.sound_display.SetValue(os.path.basename(self.sound_path))
+        finally:
+            picker.Destroy()
+
+    def _remove_sound(self, event):
+        self.sound_path = ""
+        self.sound_changed = True
+        self.sound_display.SetValue("")
+
     def _ok(self, event):
         result = {}
         if self.name is not None:
@@ -395,6 +433,8 @@ class PlaceDialog(wx.Dialog):
                 return
             result["name"] = name
             result["description"] = self.description.GetValue().strip()
+            if self.sound_changed:
+                result["sound_path"] = self.sound_path
         if self.distance is not None:
             metres = user_maps.parse_distance(self.distance.GetValue(), self.unit_system)
             if metres is None:
@@ -557,7 +597,7 @@ class MapDrawerDialog(wx.Dialog):
         place_buttons = wx.WrapSizer(wx.HORIZONTAL)
         box = place_box.GetStaticBox()
         b_add = wx.Button(box, label="&Add place")
-        b_edit = wx.Button(box, label="&Edit name or description")
+        b_edit = wx.Button(box, label="&Edit place details")
         b_move = wx.Button(box, label="&Move")
         b_delete = wx.Button(box, label="&Delete place")
         b_start = wx.Button(box, label="Set as s&tart")
@@ -719,7 +759,9 @@ class MapDrawerDialog(wx.Dialog):
             x, y = self.floor["width"] / 2, self.floor["height"] / 2
         else:
             x, y = user_maps.FIT_MARGIN_M, user_maps.FIT_MARGIN_M
-        place = user_maps.add_place(self.floor, result["name"], x, y, result["description"])
+        place = user_maps.add_place(
+            self.floor, result["name"], x, y, result["description"],
+            result.get("sound_path", ""))
         message = f"Added {place['name']}"
         if "reference" in result:
             reference = user_maps.place_by_id(self.floor, result["reference"])
@@ -742,7 +784,9 @@ class MapDrawerDialog(wx.Dialog):
         finally:
             dialog.Destroy()
         self._before_change()
-        place = user_maps.add_place(self.floor, result["name"], x, y, result["description"])
+        place = user_maps.add_place(
+            self.floor, result["name"], x, y, result["description"],
+            result.get("sound_path", ""))
         joined = user_maps.join_place_to_paths(self.floor, place, self.canvas.join_distance())
         self._changed(select_place=place["id"])
         if joined:
@@ -764,6 +808,9 @@ class MapDrawerDialog(wx.Dialog):
             dialog.Destroy()
         self._before_change()
         place["name"], place["description"] = result["name"], result["description"]
+        if "sound_path" in result:
+            place["sound_path"] = result["sound_path"]
+            place["sound"] = ""
         self._changed(select_place=place["id"])
         self._status(f"Updated {place['name']}.")
 

@@ -103,7 +103,7 @@ from poi_search import (
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '2026.11.0'
+APP_VERSION   = '2026.11.19'
 
 # Bundled read-only resources — inside the executable bundle or source tree.
 BASE_DIR = RESOURCE_DIR
@@ -929,6 +929,8 @@ class MapNavigator(
         self._pending_poi_live_search = None
         self._pending_poi_live_generation = 0
         self._poi_context_generation = 0
+        self._nav_poi_pick_generation = 0
+        self._nav_destination_committed = False
         self._pending_pois_ready_sound = False
         self.street_mode        = False
         self.street_label       = ""
@@ -951,6 +953,7 @@ class MapNavigator(
         self._street_survey_cache = {}
         self._street_survey_current_poi = None
         self.sounds_enabled     = True
+        self._last_ambient_sound_place = ""
         self._transit           = TransitLookup(script_dir=CACHE_DIR, resource_dir=BASE_DIR)
         self._transit.stale_confirm_cb = self._confirm_stale_gtfs_update
         self._game              = ChallengeGame(
@@ -985,6 +988,7 @@ class MapNavigator(
         self._user_map_saved_state  = None
         self._user_map_graph        = None
         self._user_map_node         = None
+        self._user_map_last_sound_place_id = None
         self._prev_lat              = None   # for latitude-line crossing detection
         self._prev_lon              = None   # for Date Line crossing detection
         self._distance_since_fetch  = 0.0
@@ -2115,6 +2119,21 @@ class MapNavigator(
         dialog.Destroy()
         self._focus_map_window_silently()
 
+    def _play_user_map_place_sound(self, place):
+        """Play a place's packaged sound once when the student arrives."""
+        path = str(place.get("sound_path") or "") if place else ""
+        place_id = str(place.get("id") or "") if place else ""
+        if not path or not os.path.isfile(path):
+            self._user_map_last_sound_place_id = None
+            return False
+        if place_id and place_id == getattr(self, "_user_map_last_sound_place_id", None):
+            return False
+        if not getattr(self, "sounds_enabled", True):
+            return False
+        self.sound.play_file(path)
+        self._user_map_last_sound_place_id = place_id
+        return True
+
     def _activate_user_map_floor(self, index, announce=True, arrive_at=None, via=None):
         """Show floor ``index``, at its start or at place ``arrive_at`` when the
         student took the stairs or lift ``via`` to get there."""
@@ -2145,6 +2164,8 @@ class MapNavigator(
         self.map_panel._bg_bitmap = None
         self.map_panel.set_position(self.lat, self.lon, False, "")
         self.map_panel.Refresh()
+        self._user_map_last_sound_place_id = None
+        self._play_user_map_place_sound(start)
         if announce:
             name = user_maps.floor_name(self._user_map_data, index)
             if via is not None and start:
@@ -2194,6 +2215,7 @@ class MapNavigator(
         self._user_map_saved_state = None
         self._user_map_graph = None
         self._user_map_node = None
+        self._user_map_last_sound_place_id = None
         if saved:
             self.lat, self.lon, self.street_mode, self.street_label = saved
         self.map_panel._bg_bitmap = None
@@ -3200,7 +3222,6 @@ class MapNavigator(
         # Immediate feedback - don't block UI
         self._suppress_status_until = 0
         self._address_lookup_in_progress = True
-        self._status_update("Looking up address...")
         
         # Do all lookups in background thread
         def _background_lookup():
@@ -3451,6 +3472,11 @@ class MapNavigator(
     def _show_poi_in_listbox(self, force_top: bool = False):
         """Populate listbox with all POIs and select the current one.
         Uses _poi_populating flag to suppress EVT_LISTBOX during fill."""
+        if getattr(self, "_nav_active", False):
+            miab_log("navigation",
+                     "Suppressed POI list restoration during active route.",
+                     self.settings)
+            return
         self._show_list_surface()
         self._poi_populating = True
         labels = []
@@ -3558,6 +3584,12 @@ class MapNavigator(
 
     def _present_poi_list(self):
         if not self._poi_list:
+            return
+        if (getattr(self, "_nav_active", False)
+                or getattr(self, "_nav_destination_committed", False)):
+            miab_log("navigation",
+                     "Suppressed delayed POI results after route selection.",
+                     self.settings)
             return
         # Don't overwrite the listbox if the user has drilled into a submenu
         if getattr(self, '_poi_explore_stack', []):
@@ -4391,6 +4423,15 @@ class MapNavigator(
         poi = self._poi_list[self._poi_index]
         plat = poi["lat"]; plon = poi["lon"]
         name = poi["label"].split(",")[0]
+
+        # The selected result now owns the browsing context.  A live version
+        # of the search may still be running; invalidate it even when this POI
+        # lies inside the already-loaded street area.
+        self._poi_context_generation = getattr(
+            self, "_poi_context_generation", 0) + 1
+        self._pending_poi_live_generation = getattr(
+            self, "_pending_poi_live_generation", 0) + 1
+        self._pending_poi_live_search = None
         
         # Check if POI is in water
         if not _IS_LAND(plat, plon):
@@ -4537,7 +4578,7 @@ class MapNavigator(
                         return
                     # Within radius (park/open area) — load segments as-is
                     test_label = ""
-                self._road_segments  = cached_segments
+                self._replace_road_segments(cached_segments)
                 self._address_points = self._cache_addresses_for_current_gnaf_mode(cache_entry)
                 self._road_fetched   = True
                 self._data_ready     = True
@@ -6464,25 +6505,28 @@ class MapNavigator(
         country = getattr(self, 'last_country_found', '')
         if not country or country == 'Open Water':
             return False
+        match = self._geo_country_entry(country)
+        # Dot Pad output is independent of the visual map zoom.  F8 always
+        # renders the current country on a connected tactile display.
+        if match:
+            self.dotpad.show_shape(
+                match['name'],
+                self._geo_country_rings(match),
+                match['centroid_lon'],
+                (float(self.lon), float(self.lat)),
+            )
         # F8 is also used by the external visual-description workflow.  Once
         # magnified, preserve the current viewport for that capture instead of
         # replacing it with the standard 1x country silhouette.
         if getattr(self, "map_zoom_factor", 1) > 1:
             self.map_panel.dismiss_country_visual()
             return "zoom"
-        match = self._geo_country_entry(country)
         if match:
             self.map_panel.set_flash(
                 match['name'],
                 match['rings_idx'],
                 match['centroid_lon'],
                 match['centroid_lat'],
-            )
-            self.dotpad.show_shape(
-                match['name'],
-                self._geo_country_rings(match),
-                match['centroid_lon'],
-                (float(self.lon), float(self.lat)),
             )
         else:
             # Country not in GeoJSON — just flash the name at current position
@@ -6571,6 +6615,7 @@ class MapNavigator(
             self._status_update("Sounds on.", force=True)
             self.sound._current = None
             self.sound._current_path = None
+            self._last_ambient_sound_place = ""
             self.last_country_found = ""
             threading.Thread(target=self._lookup, daemon=True).start()
 
@@ -6676,6 +6721,22 @@ class MapNavigator(
             return
         self.sound.play_location_sound(country, continent)
 
+    def _update_ambient_sound(self, country, on_land, continent="") -> bool:
+        """Refresh ambience when either country or land/water state changes."""
+        ambient_place = _ambient_sound_place(country, on_land)
+        if ambient_place == getattr(self, "_last_ambient_sound_place", ""):
+            return False
+        self._last_ambient_sound_place = ambient_place
+        game = getattr(self, "_game", None)
+        if getattr(self, "sounds_enabled", True) and not getattr(game, "active", False):
+            self._play_location_sound_if_allowed(ambient_place, continent)
+        miab_log(
+            "navigation",
+            f"Ambient sound: {ambient_place} ({'land' if on_land else 'water'})",
+            getattr(self, "settings", None),
+        )
+        return True
+
     def _refresh_country_context_after_direct_jump(self, lat, lon) -> None:
         """Refresh country metadata after a POI jump bypasses map lookup.
 
@@ -6711,6 +6772,7 @@ class MapNavigator(
             changed = country != self.last_country_found
             self.last_country_found = country
             self.current_continent = continent
+            self._last_ambient_sound_place = country
             self._refresh_info_panel()
             if getattr(self, "sounds_enabled", True) and not self._game.active:
                 self._play_location_sound_if_allowed(country, continent)
@@ -7933,15 +7995,24 @@ class MapNavigator(
                 and self.street_mode
                 and not getattr(self, '_walking_mode', False)):
             arrived = getattr(self, '_nav_arrived', False)
+            cancelled_destination = getattr(
+                self, '_nav_dest_name', '') or 'destination'
             self._nav_active = False
             self._nav_arrived = False
             self._nav_briefing_mode  = False
             self._nav_briefing_steps = []
             self._nav_briefing_step  = 0
             self._nav.reset()
+            self._nav_route = []
+            self._nav_instructions = []
+            self._nav_step = 0
+            self._nav_dest_name = ""
+            self._nav_dest_lat = None
+            self._nav_dest_lon = None
+            self._nav_street_pin = None
             self._set_nav_button_visible(False)
             msg = ("Navigation ended." if arrived
-                   else f"Navigation to {getattr(self, '_nav_dest_name', 'destination')} cancelled.")
+                   else f"Navigation to {cancelled_destination} cancelled.")
             self._announce_transient(msg)
             return True
 
@@ -8793,6 +8864,9 @@ class MapNavigator(
         labels = ([place] if place else
                   user_maps.places_in_grid_cell(data, x, y, cell_size))
         if labels:
+            sounding_place = next(
+                (label for label in labels if label.get("sound_path")), None)
+            self._play_user_map_place_sound(sounding_place)
             messages = []
             for label in labels:
                 message = label["name"]
@@ -8804,6 +8878,7 @@ class MapNavigator(
                 messages.append(message)
             self._status_update("; ".join(messages) + ".", force=True)
         else:
+            self._play_user_map_place_sound(None)
             self._status_update(user_maps.describe_empty_spot(
                 data, x, y, cell_size, get_unit_system()), force=True)
         return True
@@ -9192,15 +9267,23 @@ class MapNavigator(
                 self.current_continent = continent
                 wx.CallAfter(self._refresh_info_panel)
                 self._prefetch_geo_features_for_point(self.lat, self.lon)
-                if getattr(self, 'sounds_enabled', True) and not self._game.active:
-                    self._play_location_sound_if_allowed(
-                        _ambient_sound_place(country, on_land),
-                        continent)
                 miab_log("navigation",
                          f"Entered country: {country}"
                          + (f" (continent: {continent})" if continent else ""),
                          self.settings)
                 self._current_subregion = ""
+
+            # Country context may remain Vietnam or the Philippines for a
+            # short distance offshore.  Ambient sound follows the actual land
+            # polygon instead, and therefore changes at the coastline even
+            # when the contextual country has not changed.
+            ambient_on_land = (
+                bool(polygon_country) or on_polygon_land
+                if _GEO_LAND_POLYGONS else on_land
+            )
+            self._update_ambient_sound(
+                country, ambient_on_land,
+                getattr(self, "current_continent", ""))
 
             if self._game.active:
                 if country == self._game.target_country:
@@ -9383,8 +9466,11 @@ class MapNavigator(
         country = getattr(self, 'last_country_found', '')
         continent = getattr(self, 'current_continent', '')
         restored_sound = False
-        if country and country != "Open Water":
-            self._play_location_sound_if_allowed(country, continent)
+        ambient_place = getattr(self, "_last_ambient_sound_place", "")
+        if not ambient_place:
+            ambient_place = country if country and country != "Open Water" else "ocean"
+        if ambient_place:
+            self._play_location_sound_if_allowed(ambient_place, continent)
             restored_sound = True
         if restored_sound and getattr(self, "_tools_workflow_active", False):
             # A tool-specific exit restored the saved sound successfully;

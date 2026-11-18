@@ -1,7 +1,8 @@
 import math
 import unittest
 
-from route_pois import describe_pois_along, pois_along, street_key
+from route_pois import (
+    describe_pois_along, describe_pois_near_route, pois_along, street_key)
 
 LAT0, LON0 = -26.6585, 153.0952
 
@@ -72,7 +73,7 @@ class PassByTests(unittest.TestCase):
         addresses = [
             {"number": str(n), "street": "First Avenue",
              "lat": at(12, 20 * k)[0], "lon": at(12, 20 * k)[1]}
-            for k, n in enumerate((1, 3, 5, 7, 9), start=1)
+            for k, n in enumerate((1, 3, 5, 7, 9, 13), start=1)
         ] + [
             {"number": str(n), "street": "First Avenue",
              "lat": at(-12, 20 * k)[0], "lon": at(-12, 20 * k)[1]}
@@ -83,6 +84,45 @@ class PassByTests(unittest.TestCase):
         result = pois_along(STRAIGHT, STREETS, pois, addresses)
         self.assertEqual([(side, name) for _a, side, name in result],
                          [("right", "Odd and east")])
+
+    def test_nearby_address_validates_side_for_unnumbered_business(self):
+        # The established pattern is odd on the right and even on the left.
+        addresses = [
+            {"number": str(n), "street": "First Avenue",
+             "lat": at(12, 20 * k)[0], "lon": at(12, 20 * k)[1]}
+            for k, n in enumerate((1, 3, 5, 7, 9), start=1)
+        ] + [
+            {"number": str(n), "street": "First Avenue",
+             "lat": at(-12, 20 * k)[0], "lon": at(-12, 20 * k)[1]}
+            for k, n in enumerate((2, 4, 6, 8, 10), start=1)
+        ]
+        business = poi("Unnumbered cafe", -10, 80, street="First Avenue")
+
+        result = pois_along(STRAIGHT, STREETS, [business], addresses)
+
+        self.assertEqual([(side, name) for _a, side, name in result],
+                         [("left", "Unnumbered cafe")])
+
+    def test_conflicting_nearby_address_suppresses_side_claim(self):
+        addresses = [
+            {"number": str(n), "street": "First Avenue",
+             "lat": at(12, 20 * k)[0], "lon": at(12, 20 * k)[1]}
+            for k, n in enumerate((1, 3, 5, 7, 9, 13), start=1)
+        ] + [
+            {"number": str(n), "street": "First Avenue",
+             "lat": at(-12, 20 * k)[0], "lon": at(-12, 20 * k)[1]}
+            for k, n in enumerate((2, 4, 6, 8, 10), start=1)
+        ]
+        # A locally anomalous odd-number point is closest to the business,
+        # conflicting with the well-established odd-on-right pattern.
+        addresses.append({
+            "number": "11", "street": "First Avenue",
+            "lat": at(-10, 80)[0], "lon": at(-10, 80)[1],
+        })
+        business = poi("Ambiguous cafe", -10, 80, street="First Avenue")
+
+        self.assertEqual(
+            pois_along(STRAIGHT, STREETS, [business], addresses), [])
 
     def test_at_most_five_and_no_repeats(self):
         pois = [poi(f"Shop {k}", 10, 10 + 20 * k) for k in range(8)]
@@ -139,6 +179,13 @@ class PassByTests(unittest.TestCase):
         self.assertEqual(describe_pois_along(STRAIGHT, STREETS, pois),
                          "On your left, you'll pass The Kent Hotel and Crust Pizza.")
 
+    def test_curly_apostrophe_business_variant_is_said_once(self):
+        pois = [poi("Muzza’s Pies", 12, 100, kind="cafe"),
+                poi("Muzza's Gourmet Pies & Cafe", 12, 102, kind="cafe")]
+        self.assertEqual(
+            describe_pois_along(STRAIGHT, STREETS, pois),
+            "On your right, you'll pass Muzza's Gourmet Pies & Cafe.")
+
     def test_corner_stop_is_not_a_place(self):
         stop = poi("Donald St at Beaumont St", 12, 100)
         self.assertEqual(describe_pois_along(STRAIGHT, STREETS, [stop]), "")
@@ -179,6 +226,16 @@ class PassByTests(unittest.TestCase):
 
     def test_nothing_confident_says_nothing(self):
         self.assertEqual(describe_pois_along(STRAIGHT, STREETS, [poi("Middle", 1, 60)]), "")
+
+    def test_uncertain_side_keeps_a_neutral_route_announcement(self):
+        close = poi("Middle", 1, 60, street="First Avenue")
+        self.assertEqual(
+            describe_pois_near_route(STRAIGHT, STREETS, [close]),
+            "Along this stretch: Middle.")
+
+    def test_neutral_fallback_still_rejects_the_wrong_street(self):
+        wrong = poi("Corner Shop", 12, 60, street="George Street")
+        self.assertEqual(describe_pois_near_route(STRAIGHT, STREETS, [wrong]), "")
 
     def test_street_names_compare_loosely(self):
         self.assertEqual(street_key("First Ave"), street_key("first avenue"))

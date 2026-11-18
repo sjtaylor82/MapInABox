@@ -88,6 +88,13 @@ def _apply_renames(pois, renamed):
 
 
 class PoiSearchMixin:
+    def _remember_poi_search_results(self, pois):
+        """Add successful search results to the shared walking/route grid."""
+        known = list(getattr(self, "_all_pois", []) or [])
+        self._all_pois = self._merge_personal_pois(
+            _unique_pois(known + list(pois or [])))
+        self._poi_grid = self._build_poi_grid(self._all_pois)
+
     def _fetch_google_pois(self, category_key="all", radius=1000, name_filter=""):
         """Fetch Google POIs through PoiFetcher."""
         return self._poi_fetcher.fetch_google_pois(
@@ -391,56 +398,6 @@ class PoiSearchMixin:
                     cached_pois = filter_pois_by_category(background, category_key)
                     cached_pois = [p for p in cached_pois if _name_match(p) and _street_match(p)]
                     cached_pois = _prepare_pois(cached_pois, radius_m=max(search_radii))
-                    if name_filter or street_filter:
-                        if cached_pois:
-                            if not _poi_context_is_current():
-                                miab_log(
-                                    "verbose",
-                                    "p discarded cached POI result because the browsing context changed.",
-                                    self.settings,
-                                )
-                                self._loading = False
-                                self._poi_fetch_in_progress = False
-                                return
-                            self._poi_list = cached_pois
-                            self._poi_index = 0
-                            filters = []
-                            if name_filter:
-                                filters.append(f"name '{name_filter}'")
-                            if street_filter:
-                                filters.append(f"street '{street_filter}'")
-                            miab_log(
-                                "verbose",
-                                f"p served keyword search from loaded background POIs: "
-                                f"{len(cached_pois)} {category_key} matching "
-                                f"{', '.join(filters)} via {source}; live search skipped.",
-                                self.settings,
-                            )
-                            wx.CallAfter(self._present_poi_list)
-                        else:
-                            miab_log(
-                                "verbose",
-                                f"p loaded background POIs cover this area; no cached "
-                                f"{category_key} result matching name='{name_filter}' "
-                                f"street='{street_filter}'. Live search skipped.",
-                                self.settings,
-                            )
-                            filters = []
-                            if name_filter:
-                                filters.append(f"'{name_filter}'")
-                            if street_filter:
-                                filters.append(f"on {street_filter}")
-                            what = " ".join(filters) if filters else category_label.lower()
-                            wx.CallAfter(
-                                self._retry_poi_name_search,
-                                category_key,
-                                name_filter,
-                                street_filter,
-                                max(search_radii),
-                            )
-                        self._loading = False
-                        self._poi_fetch_in_progress = False
-                        return
                     if cached_pois:
                         if not _poi_context_is_current():
                             miab_log(
@@ -497,7 +454,7 @@ class PoiSearchMixin:
                         )
                         wx.CallAfter(
                             self._status_update,
-                            "No cached match yet. Searching live nearby...",
+                            "Searching, please wait.",
                             True,
                         )
                     else:
@@ -886,6 +843,12 @@ class PoiSearchMixin:
                 self._loading = False
                 self._poi_fetch_in_progress = False
                 return
+            if pois:
+                # Category and name searches often know about places omitted
+                # from the capped background fetch. Keep successful results in
+                # the shared grid so walking and route instructions can refer
+                # to them later in the same session.
+                self._remember_poi_search_results(pois)
             self._poi_list     = pois
             self._poi_index    = 0
             self._loading      = False

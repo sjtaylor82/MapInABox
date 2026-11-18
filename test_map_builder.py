@@ -391,6 +391,25 @@ class RealDialogTests(unittest.TestCase):
         self._press_ok(move)
         self.assertEqual((move.result["reference"], move.result["distance"]), (office["id"], 30.0))
 
+    def test_place_sound_can_be_added_and_removed(self):
+        import user_map_dialogs
+        floor = user_maps.new_map("School")
+        place = user_maps.add_place(floor, "Library", 5, 5)
+        add_sound = user_map_dialogs.PlaceDialog(
+            None, floor, "metric", mode="edit", place=place)
+        add_sound.sound_path = r"C:\sounds\library.ogg"
+        add_sound.sound_changed = True
+        add_sound.sound_display.SetValue("library.ogg")
+        self._press_ok(add_sound)
+        self.assertEqual(add_sound.result["sound_path"], r"C:\sounds\library.ogg")
+
+        place["sound_path"] = add_sound.result["sound_path"]
+        remove_sound = user_map_dialogs.PlaceDialog(
+            None, floor, "metric", mode="edit", place=place)
+        remove_sound._remove_sound(None)
+        self._press_ok(remove_sound)
+        self.assertEqual(remove_sound.result["sound_path"], "")
+
     def test_join_two_places(self):
         import user_map_dialogs
         floor = user_maps.new_map("School")
@@ -539,6 +558,7 @@ class StudentKeyTests(unittest.TestCase):
 
         class Student:
             _handle_user_map_shortcuts = core.MapNavigator._handle_user_map_shortcuts
+            _play_user_map_place_sound = core.MapNavigator._play_user_map_place_sound
 
         student = Student()
         student._user_map_data = data
@@ -550,6 +570,8 @@ class StudentKeyTests(unittest.TestCase):
         student._status_update = lambda text, force=False: student.said.append(text)
         student.map_panel = mock.Mock()
         student.sound = mock.Mock()
+        student.sounds_enabled = True
+        student._user_map_last_sound_place_id = None
         student._play_spatial_tone_if_allowed = lambda *a: None
         return student
 
@@ -573,6 +595,17 @@ class StudentKeyTests(unittest.TestCase):
         student = self._student()
         student._handle_user_map_shortcuts(wx.WXK_RIGHT, False, False, False)
         self.assertRegex(student.said[-1], r"^Walkway\. Near Mi Casa \(50\), [\d.]+ metres west\.$")
+
+    def test_arriving_at_a_place_plays_its_custom_sound_once(self):
+        import wx
+        student = self._student()
+        gate = user_maps.place_by_id(student._user_map_floor, "place-2")
+        with tempfile.NamedTemporaryFile(suffix=".wav") as sound:
+            gate["sound_path"] = sound.name
+            student._handle_user_map_shortcuts(wx.WXK_RIGHT, False, True, False)
+            student.sound.play_file.assert_called_once_with(sound.name)
+            student._play_user_map_place_sound(gate)
+            student.sound.play_file.assert_called_once_with(sound.name)
 
 
 class DrawingAreaFocusTests(unittest.TestCase):

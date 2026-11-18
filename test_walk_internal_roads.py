@@ -39,3 +39,39 @@ def test_internal_link_labels_do_not_enter_street_lists():
     frame = _StreetSearchFrame.__new__(_StreetSearchFrame)
     frame._nav = type("Nav", (), {"_road_segments": segments})()
     assert frame._street_names_from_segments() == expected
+
+
+def test_walking_entry_prefers_selected_street_over_closer_side_street_endpoint():
+    walker = _Walker()
+    walker._walk_graph = {
+        "nodes": {
+            1: (0.0, 0.0005),
+            2: (0.0, 0.0008),
+        },
+        "intersections": {1, 2},
+        "node_streets": {
+            1: {"Talbot Street"},
+            2: {"Old Cleveland Road", "French Street"},
+        },
+    }
+
+    assert walker._walk_entry_intersection(
+        0.0, 0.0, "Old Cleveland Road") == 2
+
+
+def test_walking_entry_falls_back_to_nearest_intersection():
+    walker = _Walker()
+    walker._walk_graph = {
+        "nodes": {
+            1: (0.0, 0.0005),
+            2: (0.0, 0.0008),
+        },
+        "intersections": {1, 2},
+        "node_streets": {
+            1: {"Talbot Street"},
+            2: {"French Street"},
+        },
+    }
+
+    assert walker._walk_entry_intersection(
+        0.0, 0.0, "Missing Street") == 1

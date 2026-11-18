@@ -3157,6 +3157,11 @@ class ToolsMixin:
                         miab_log("errors",
                                  f"Platform lookup failed for {name!r}: {traceback.format_exc()}",
                                  self.settings)
+                if route.get("source") == "rome2rio":
+                    # Rome2Rio legs do not have the Google/HERE-only fields
+                    # required by _build_detail_text (agency, times, etc.).
+                    # The platform dialog reads departure_platform directly.
+                    continue
                 route["detail_text"] = rt._build_detail_text(route)
             miab_log("navigation", "Platform fetch finished.", self.settings)
             wx.CallAfter(done_cb, routes)
@@ -3190,7 +3195,10 @@ class ToolsMixin:
                     line = leg.get("line_name") or leg.get("vehicle_type") or "Service"
                     direction = leg.get("headsign") or leg.get("arrival_stop") or ""
                     heading = f"{line} to {direction}" if direction else line
-                    result = self._gtfs_stops_for_journey_leg(leg)
+                    # Rome2Rio's line.places is already an ordered stop list.
+                    # Prefer it exactly as returned; GTFS is a fallback for
+                    # providers/routes whose response includes endpoints only.
+                    result = leg.get("rome2rio_stops") or self._gtfs_stops_for_journey_leg(leg)
                     if len(transit_legs) > 1:
                         items.append(f"Service {leg_num}: {heading}")
                     if isinstance(result, dict) and "__candidates__" in result:

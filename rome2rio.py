@@ -75,6 +75,18 @@ def parse_api_routes(payload: dict, page_url: str) -> list[dict]:
         return _clean(
             place.get("shortName") or place.get("canonicalName") or "")
 
+    def place_coordinate(index, axis: str):
+        """Return a coordinate from the public API's supported place shapes."""
+        place = item_at(places, index)
+        keys = (("lat", "latitude") if axis == "lat"
+                else ("lng", "lon", "longitude"))
+        value = next((place.get(key) for key in keys
+                      if place.get(key) is not None), None)
+        try:
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
     def duration_text(seconds) -> str:
         minutes = max(1, round(int(seconds or 0) / 60)) if seconds else 0
         if not minutes:
@@ -108,6 +120,7 @@ def parse_api_routes(payload: dict, page_url: str) -> list[dict]:
                     route_places.append(label)
 
         steps = []
+        route_legs = []
         for segment_index in route.get("segments") or []:
             segment = item_at(segments, segment_index)
             option_indexes = segment.get("options") or []
@@ -138,6 +151,33 @@ def parse_api_routes(payload: dict, page_url: str) -> list[dict]:
                     heading += f"; about {hop_duration}"
                 if heading:
                     steps.append(heading + ".")
+                mode_key = (vehicle.get("kind") or vehicle.get("name") or "").lower()
+                if (len(line_places) >= 2
+                        and mode_key in {"bus", "train", "tram", "subway", "ferry"}):
+                    departure_index = line_places[0]
+                    arrival_index = line_places[-1]
+                    ordered_stops = []
+                    for place_index in line_places:
+                        stop_name = place_name(place_index)
+                        if stop_name:
+                            ordered_stops.append({
+                                "name": stop_name,
+                                "lat": place_coordinate(place_index, "lat"),
+                                "lon": place_coordinate(place_index, "lon"),
+                            })
+                    route_legs.append({
+                        "type": "transit",
+                        "vehicle_type": mode or "Transit",
+                        "line_name": service,
+                        "headsign": destination,
+                        "departure_stop": origin,
+                        "departure_stop_lat": place_coordinate(departure_index, "lat"),
+                        "departure_stop_lon": place_coordinate(departure_index, "lon"),
+                        "arrival_stop": destination,
+                        "arrival_stop_lat": place_coordinate(arrival_index, "lat"),
+                        "arrival_stop_lon": place_coordinate(arrival_index, "lon"),
+                        "rome2rio_stops": ordered_stops,
+                    })
 
         summary_parts = [f"Option {number}: {name}."]
         if duration:
@@ -162,7 +202,7 @@ def parse_api_routes(payload: dict, page_url: str) -> list[dict]:
             "travel_mode": "multimodal",
             "source": "rome2rio",
             "source_url": page_url,
-            "legs": [],
+            "legs": route_legs,
         })
     return parsed
 
@@ -635,7 +675,7 @@ class Rome2RioClient:
                departure_date: datetime.date | None = None) -> list[dict]:
         # Version the key when presentation/parsing changes so cached route
         # dictionaries do not retain obsolete spoken wording.
-        key = f"v10|{_clean(origin).lower()}|{_clean(destination).lower()}"
+        key = f"v11|{_clean(origin).lower()}|{_clean(destination).lower()}"
         entry = self._cache.get(key, {})
         if (isinstance(entry, dict)
                 and time.time() - float(entry.get("timestamp", 0)) < _CACHE_TTL_SECONDS

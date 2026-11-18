@@ -8,6 +8,7 @@ import wx
 
 from geo import bearing_deg, dist_metres, nearest_point_on_segment
 from logging_utils import miab_log
+from street_mode import _street_area_key
 from world_map_panel import _IS_LAND
 
 
@@ -938,7 +939,7 @@ class StreetSurveyMixin:
             if test_label not in ("No street data nearby", "Unknown", "", "No street data"):
                 self.lat = new_lat
                 self.lon = new_lon
-                self._road_segments = cached_segments
+                self._replace_road_segments(cached_segments)
                 self._address_points = self._cache_addresses_for_current_gnaf_mode(cache_entry)
                 self._natural_features = cache_entry.get("natural_features", [])
                 self._road_fetch_lat = self.lat
@@ -1000,8 +1001,8 @@ class StreetSurveyMixin:
                 suburb = geo.get("suburb", "") if geo else ""
             except Exception:
                 suburb = ""
-            current = (getattr(self, "_current_suburb", "") or "").strip().lower()
-            if suburb and suburb.strip().lower() != current:
+            current_label = (getattr(self, "_current_suburb", "") or "").strip()
+            if suburb and _street_area_key(suburb) != _street_area_key(current_label):
                 wx.CallAfter(self._confirm_barrier_crossing, new_lat, new_lon, suburb)
             else:
                 self._barrier_dialog_pending = False

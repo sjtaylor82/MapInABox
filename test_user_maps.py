@@ -1,3 +1,6 @@
+import json
+import zipfile
+
 import user_maps
 
 
@@ -9,6 +12,41 @@ def test_imported_source_suggests_map_beside_it(tmp_path):
 
 def test_import_without_source_has_no_suggested_save_path():
     assert user_maps.suggested_save_path("") == ""
+
+
+def test_place_sound_is_embedded_and_extracted_with_the_map(tmp_path):
+    sound = tmp_path / "library.ogg"
+    sound.write_bytes(b"OggS-test-audio")
+    data = user_maps.new_map("School")
+    place = user_maps.add_place(
+        data, "Library", 10, 20, "Quiet study area", str(sound))
+
+    target = user_maps.save_map(str(tmp_path / "school.miabmap"), data)
+    with zipfile.ZipFile(target) as archive:
+        saved = json.loads(archive.read(user_maps.MAP_JSON))
+        member = saved["places"][0]["sound"]
+        assert member == f"sounds/{place['id']}.ogg"
+        assert archive.read(member) == b"OggS-test-audio"
+        assert "sound_path" not in saved["places"][0]
+
+    loaded, _background = user_maps.load_map(target, str(tmp_path / "extracted"))
+    loaded_place = loaded["places"][0]
+    assert loaded_place["sound"] == member
+    assert loaded_place["sound_path"]
+    assert open(loaded_place["sound_path"], "rb").read() == b"OggS-test-audio"
+
+
+def test_place_sound_rejects_unsupported_file_types(tmp_path):
+    sound = tmp_path / "notes.txt"
+    sound.write_text("not audio")
+    data = user_maps.new_map("School")
+    user_maps.add_place(data, "Library", 10, 20, sound_path=str(sound))
+    try:
+        user_maps.save_map(str(tmp_path / "school.miabmap"), data)
+    except ValueError as exc:
+        assert "WAV, OGG or MP3" in str(exc)
+    else:
+        raise AssertionError("Unsupported place audio was saved")
 
 
 def _place(identifier, name, x, y):
