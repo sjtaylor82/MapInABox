@@ -12,6 +12,7 @@ import {
 } from './geo.js';
 import * as online from './online.js';
 import { initMapView, updateMapView, draw as drawMap } from './mapview.js';
+import * as tilt from './tilt.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -30,6 +31,13 @@ async function boot() {
   initSpeech();
   initMapView($('map-canvas'), $('map-caption'));
   applyVisualAssist();
+  // Phones and tablets: offer tilt, and the browser's voice for people without a screen reader.
+  const touch = tilt.isTouchDevice() && tilt.tiltSupported();
+  $('intro-tilt-row').hidden = !touch;
+  $('intro-tilt').checked = touch && settings.get('tilt') !== false;
+  $('intro-speech').value = settings.get('speech');
+  $('btn-tilt').hidden = !touch;
+  $('btn-level').hidden = true;
   $('start').addEventListener('click', start);
   try {
     await loadWorld((msg) => { $('load-status').textContent = `${msg}…`; });
@@ -43,12 +51,26 @@ async function boot() {
 }
 
 async function start() {
+  // Both must run straight from the tap: iPhone refuses them otherwise.
+  const wantTilt = !$('intro-tilt-row').hidden && $('intro-tilt').checked;
+  const tiltAllowed = wantTilt ? tilt.requestTiltPermission() : Promise.resolve(false);
+  settings.set('speech', $('intro-speech').value);
   audio.unlock();
+  unlockVoice();
   state.started = true;
   $('intro').hidden = true;
   $('app').hidden = false;
   $('map').focus();
   drawMap();
+  if (wantTilt) {
+    // Don't hold up the start waiting for the permission answer.
+    tiltAllowed.then((ok) => {
+      if (ok) setTilt(true, { quiet: true });
+      else say('Tilt is not available. Motion access was not allowed.');
+    });
+  } else {
+    settings.set('tilt', false);
+  }
   const saved = settings.get('position');
   if (saved && Number.isFinite(saved.lat)) {
     state.lat = saved.lat;
@@ -124,6 +146,48 @@ function nextCountry(bearing, direction) {
   }
   audio.edgeTone();
   say(`No other country found to the ${direction} within ${formatDistance(maxKm * 1000)}.`);
+}
+
+// ── Tilt ──────────────────────────────────────────────────────────────────
+
+const TILT_BEARING = { north: 0, east: 90, south: 180, west: 270 };
+
+function onTiltStep(direction, size) {
+  if (!state.started || document.querySelector('dialog[open]')) return;
+  tilt.buzz(size === 'large' ? 30 : 12);
+  step(TILT_BEARING[direction], size === 'large' ? 100 : 5);
+}
+
+function setTilt(on, { quiet = false } = {}) {
+  settings.set('tilt', on);
+  if (on) tilt.startTilt(onTiltStep);
+  else tilt.stopTilt();
+  $('btn-tilt').textContent = on ? 'Tilt: on' : 'Tilt: off';
+  $('btn-tilt').setAttribute('aria-pressed', String(on));
+  $('btn-level').hidden = !on;
+  if (!quiet) say(on ? 'Tilt on. Hold the device how you like, then tap Set level.' : 'Tilt off.');
+  else if (on) say('Tilt on. The way you are holding the device now counts as level. Tilt it to move.');
+}
+
+async function toggleTilt() {
+  if (tilt.tiltActive()) return setTilt(false);
+  if (await tilt.requestTiltPermission()) setTilt(true);
+  else say('Tilt is not available. Motion access was not allowed.');
+}
+
+function setLevelNow() {
+  if (!tilt.tiltActive()) return;
+  say(tilt.setLevel() ? 'Level set.' : 'No tilt reading yet. Move the device a little and try again.');
+}
+
+/** iPhone only lets the page talk after a tap, so say something quietly from the Start tap. */
+function unlockVoice() {
+  if (settings.get('speech') === 'screenreader' || !('speechSynthesis' in window)) return;
+  try {
+    const u = new SpeechSynthesisUtterance(' ');
+    u.volume = 0;
+    speechSynthesis.speak(u);
+  } catch { /* no voice */ }
 }
 
 // ── Information keys ──────────────────────────────────────────────────────
@@ -447,6 +511,10 @@ $('settings-form').addEventListener('submit', saveSettings);
 $('btn-jump').addEventListener('click', () => openJump());
 $('btn-help').addEventListener('click', openHelp);
 $('btn-settings').addEventListener('click', openSettings);
+$('btn-tilt').addEventListener('click', toggleTilt);
+$('btn-level').addEventListener('click', setLevelNow);
+// Tapping the map (a double tap with VoiceOver or TalkBack) sets level while tilting.
+$('map').addEventListener('click', () => { if (tilt.tiltActive()) setLevelNow(); });
 // Keys pressed while focus is on the toolbar still drive the map.
 document.addEventListener('keydown', (e) => {
   if (e.target === $('map') || document.querySelector('dialog[open]')) return;
@@ -454,6 +522,6 @@ document.addEventListener('keydown', (e) => {
 });
 
 // Exported for the browser console while testing.
-window.miab = { state, describe, nearestCity, city, bearingDeg, compassName, lastSpoken };
+window.miab = { state, describe, nearestCity, city, bearingDeg, compassName, lastSpoken, setTilt };
 
 boot();

@@ -15,8 +15,18 @@
 
   <main id="intro">
     <h1>Map in a Box Web</h1>
-    <p>Explore the world by ear. Use the arrow keys to move across the map. Map in a Box tells you the country, city or ocean you are over, and plays a sound for each country.</p>
-    <p>Use a computer with a keyboard. It works with NVDA, JAWS, Narrator and VoiceOver, or with the browser's own voice. Headphones help you hear the tones move from left to right.</p>
+    <p>Explore the world by ear. Move across the map with the arrow keys, or on a phone or tablet by tilting it. Map in a Box tells you the country, city or ocean you are over, and plays a sound for each country.</p>
+    <p>It works with NVDA, JAWS, Narrator, VoiceOver and TalkBack, or with the browser's own voice. Headphones help you hear the tones move from left to right.</p>
+    <label for="intro-speech">Speech</label>
+    <select id="intro-speech">
+      <option value="screenreader">My screen reader is talking</option>
+      <option value="voice">Use the browser's voice (no screen reader)</option>
+      <option value="both">Both</option>
+    </select>
+    <p id="intro-tilt-row" hidden>
+      <label class="check"><input type="checkbox" id="intro-tilt"> Move by tilting this device</label>
+      <span class="small">Hold it comfortably, then tilt forward, back, left or right to move. The further you tilt, the faster you go. Tap the map to make the way you are holding it level again.</span>
+    </p>
     <p id="load-status" role="status">Loading…</p>
     <button id="start" type="button" disabled>Start exploring</button>
     <p class="small">Press F1 at any time for the list of keys. This is an early test version of the web edition. The full Map in a Box is a free download for Windows and macOS.</p>
@@ -26,6 +36,8 @@
     <header id="toolbar">
       <span class="brand" aria-hidden="true">Map in a Box</span>
       <button id="btn-jump" type="button">Jump (J)</button>
+      <button id="btn-tilt" type="button" aria-pressed="false" hidden>Tilt: off</button>
+      <button id="btn-level" type="button" hidden>Set level</button>
       <button id="btn-settings" type="button">Settings (Ctrl+,)</button>
       <button id="btn-help" type="button">Help (F1)</button>
     </header>
