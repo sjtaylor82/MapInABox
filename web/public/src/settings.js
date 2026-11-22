@@ -13,6 +13,7 @@ const DEFAULTS = {
   visualAssist: true,
   geoFeatures: true,
   zoom: 1,
+  stepKm: 5,                // arrow keys and tilt on land
   tilt: null,               // move by tilting a phone or tablet (null: not chosen yet, offered on touch devices)
   position: null,           // { lat, lon } last position
   jumpHistory: [],

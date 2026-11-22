@@ -22,6 +22,9 @@ export function configureAudio(soundList, tables) {
 }
 
 export function unlock() {
+  // iPhone: play through the silent switch, like a media app, rather than
+  // being muted along with ringtones (Safari 16.4 and later).
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch { /* older Safari */ }
   if (!ctx) {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
@@ -29,6 +32,10 @@ export function unlock() {
     master = ctx.createGain();
     master.gain.value = settings.get('volume');
     master.connect(ctx.destination);
+    // Phones suspend audio when the page is hidden; pick it up again on return.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && ctx.state !== 'running') ctx.resume().catch(() => {});
+    });
   }
   if (ctx.state === 'suspended') ctx.resume();
 }
@@ -57,19 +64,38 @@ function soundPathFor(place, continent) {
   const fb = fallbacks[canonical];
   if (fb) stems.push(stem(fb));
   for (const s of stems) {
-    for (const ext of ['ogg', 'mp3']) {
+    for (const ext of ['m4a', 'ogg', 'mp3']) {
       if (available.countries.has(`${s}.${ext}`)) return `sounds/countries/${s}.${ext}`;
       if (available.regions.has(`${s}.${ext}`)) return `sounds/regions/${s}.${ext}`;
     }
   }
   if (continent) {
     const c = stem(continent);
-    for (const ext of ['ogg', 'mp3']) if (available.regions.has(`${c}.${ext}`)) return `sounds/regions/${c}.${ext}`;
+    for (const ext of ['m4a', 'ogg', 'mp3']) if (available.regions.has(`${c}.${ext}`)) return `sounds/regions/${c}.${ext}`;
   }
   return null;
 }
 
-/** Crossfade to the ambience for a country ("ocean" for open water). */
+// Decoded sounds, so returning to a country does not download it again.
+const buffers = new Map(); // path -> Promise<AudioBuffer>
+const BUFFER_LIMIT = 12;
+
+function loadBuffer(path) {
+  if (!buffers.has(path)) {
+    buffers.set(path, fetch(path)
+      .then((r) => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); })
+      .then((data) => ctx.decodeAudioData(data))
+      .catch((err) => { buffers.delete(path); throw err; }));
+    if (buffers.size > BUFFER_LIMIT) buffers.delete(buffers.keys().next().value);
+  }
+  return buffers.get(path);
+}
+
+/**
+ * Crossfade to the ambience for a country ("ocean" for open water).
+ * Sounds are decoded and played through the already-unlocked AudioContext:
+ * iPhone will not start a new <audio> element without a fresh tap.
+ */
 export function playPlace(place, continent) {
   if (!ctx || !settings.get('sounds')) return;
   const path = soundPathFor(place, continent);
@@ -78,23 +104,30 @@ export function playPlace(place, continent) {
   ambient = null;
   if (old) fadeOutAndStop(old);
   if (!path) return;
-  const el = new Audio(path);
-  el.loop = true;
-  el.crossOrigin = 'anonymous';
-  const src = ctx.createMediaElementSource(el);
-  const gain = ctx.createGain();
-  gain.gain.value = 0;
-  src.connect(gain).connect(master);
-  ambient = { path, el, src, gain };
-  el.play().then(() => {
-    gain.gain.setTargetAtTime(0.5, ctx.currentTime, 0.4);
-  }).catch(() => {});
+  const mine = { path, src: null, gain: ctx.createGain() };
+  mine.gain.gain.value = 0;
+  mine.gain.connect(master);
+  ambient = mine;
+  loadBuffer(path).then((buffer) => {
+    if (ambient !== mine) return; // moved on while it downloaded
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+    src.connect(mine.gain);
+    src.start();
+    mine.src = src;
+    mine.gain.gain.setTargetAtTime(0.5, ctx.currentTime, 0.4);
+  }).catch(() => { /* no sound for this place */ });
 }
 
 function fadeOutAndStop(a) {
   try {
     a.gain.gain.setTargetAtTime(0, ctx.currentTime, 0.3);
-    setTimeout(() => { a.el.pause(); a.src.disconnect(); a.gain.disconnect(); }, 1500);
+    setTimeout(() => {
+      try { a.src?.stop(); } catch { /* not started */ }
+      a.src?.disconnect();
+      a.gain.disconnect();
+    }, 1500);
   } catch { /* already gone */ }
 }
 

@@ -54,6 +54,41 @@
       <canvas id="map-canvas" aria-hidden="true"></canvas>
       <p id="map-caption" aria-hidden="true"></p>
     </div>
+    <aside id="panel" aria-label="Controls">
+      <h2 id="step-heading">Step size</h2>
+      <label for="step-size" class="sr-only">Step size</label>
+      <input id="step-size" type="range" min="0" max="4" step="1" value="2" aria-describedby="step-hint">
+      <p id="step-value" aria-hidden="true">5 kilometres</p>
+      <p id="step-hint" class="small">How far each arrow key or tilt moves on land. Smaller steps find more suburbs.</p>
+
+      <h2>Move</h2>
+      <div class="grid move">
+        <button type="button" data-move="0">North</button>
+        <button type="button" data-move="270">West</button>
+        <button type="button" data-move="90">East</button>
+        <button type="button" data-move="180">South</button>
+      </div>
+
+      <h2>Information</h2>
+      <div class="grid">
+        <button type="button" data-key="F2">Repeat</button>
+        <button type="button" data-key="c">Country</button>
+        <button type="button" data-key="r">Region or state</button>
+        <button type="button" data-key="n">Nearest city</button>
+        <button type="button" data-key="g">Nearby features</button>
+        <button type="button" data-key="F5">Continent</button>
+        <button type="button" data-key="i">Country facts</button>
+        <button type="button" data-key="Shift+F1">Capital</button>
+        <button type="button" data-key="$">Currency</button>
+        <button type="button" data-key="Shift+l">Languages</button>
+        <button type="button" data-key="w">Weather</button>
+        <button type="button" data-key="t">Local time</button>
+        <button type="button" data-key="s">Sunrise and sunset</button>
+        <button type="button" data-key="q">Air quality</button>
+        <button type="button" data-key="Shift+i">Wikipedia</button>
+        <button type="button" data-key="l">Latitude and longitude</button>
+      </div>
+    </aside>
   </div>
 
   <dialog id="jump-dialog" aria-labelledby="jump-title">
@@ -100,7 +135,8 @@
       <caption class="sr-only">World map keys</caption>
       <thead><tr><th scope="col">Key</th><th scope="col">Action</th></tr></thead>
       <tbody>
-        <tr><td>Arrow keys</td><td>Move about 5 km</td></tr>
+        <tr><td>Arrow keys</td><td>Move one step (5 km unless you change the step size)</td></tr>
+        <tr><td>Minus, Equals</td><td>Smaller or larger step size: 1, 2, 5, 10 or 25 km</td></tr>
         <tr><td>Shift+Arrows</td><td>Move about 1 km</td></tr>
         <tr><td>Ctrl+Arrows</td><td>Move about 100 km</td></tr>
         <tr><td>Alt+Arrows</td><td>Jump to the next country in that direction</td></tr>

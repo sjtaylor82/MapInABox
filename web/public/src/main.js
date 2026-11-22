@@ -231,7 +231,36 @@ function onTiltStep(direction, size, angle) {
     return;
   }
   tilt.buzz(size === 'large' ? 30 : 12);
-  step(bearing, size === 'large' ? 100 : 5);
+  step(bearing, size === 'large' ? 100 : stepKm());
+}
+
+// ── Step size ─────────────────────────────────────────────────────────────
+
+const STEP_SIZES = [1, 2, 5, 10, 25];
+
+function stepKm() {
+  const km = settings.get('stepKm');
+  return STEP_SIZES.includes(km) ? km : 5;
+}
+
+function stepText(km) {
+  if (settings.get('units') === 'imperial') return formatDistance(km * 1000);
+  return `${km} ${km === 1 ? 'kilometre' : 'kilometres'}`;
+}
+
+function showStep() {
+  const km = stepKm();
+  const slider = $('step-size');
+  slider.value = String(STEP_SIZES.indexOf(km));
+  slider.setAttribute('aria-valuetext', stepText(km));
+  $('step-value').textContent = stepText(km);
+}
+
+function setStepIndex(i, announce = true) {
+  const idx = Math.max(0, Math.min(STEP_SIZES.length - 1, i));
+  settings.set('stepKm', STEP_SIZES[idx]);
+  showStep();
+  if (announce) say(`Step size ${stepText(STEP_SIZES[idx])}.`);
 }
 
 function setTilt(on, { quiet = false } = {}) {
@@ -351,7 +380,7 @@ function onMapKey(e) {
     handled();
     const [bearing, name] = ARROWS[key];
     if (alt && !ctrl) return nextCountry(bearing, name);
-    return step(bearing, ctrl ? 100 : shift ? 1 : 5);
+    return step(bearing, ctrl ? 100 : shift ? 1 : stepKm());
   }
 
   const k = key.length === 1 ? key.toLowerCase() : key;
@@ -406,6 +435,9 @@ const KEYS = {
   PageDown: cycleToneScope,
   j: () => openJump(),
   y: whereAmI,
+  '-': () => setStepIndex(STEP_SIZES.indexOf(stepKm()) - 1),
+  '=': () => setStepIndex(STEP_SIZES.indexOf(stepKm()) + 1),
+  'Shift++': () => setStepIndex(STEP_SIZES.indexOf(stepKm()) + 1),
   'Ctrl+h': () => openJumpHistory(),
   l: () => say(`${formatLat(state.lat)}, ${formatLon(state.lon)}.`),
   c: () => say(noCountry() ? 'Open water.' : `${state.info.country}.`),
@@ -603,6 +635,15 @@ $('btn-jump').addEventListener('click', () => openJump());
 $('btn-help').addEventListener('click', openHelp);
 $('btn-settings').addEventListener('click', openSettings);
 $('btn-tilt').addEventListener('click', toggleTilt);
+showStep();
+// The slider reports its own new value (aria-valuetext), so it doesn't speak as well.
+$('step-size').addEventListener('input', (e) => setStepIndex(Number(e.target.value), false));
+for (const btn of document.querySelectorAll('#panel [data-key]')) {
+  btn.addEventListener('click', () => { if (state.started) KEYS[btn.dataset.key]?.(); });
+}
+for (const btn of document.querySelectorAll('#panel [data-move]')) {
+  btn.addEventListener('click', () => { if (state.started) step(Number(btn.dataset.move), stepKm()); });
+}
 $('btn-where').addEventListener('click', whereAmI);
 $('jump-here').addEventListener('click', whereAmI);
 $('btn-level').addEventListener('click', setLevelNow);

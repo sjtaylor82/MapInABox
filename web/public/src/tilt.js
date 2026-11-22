@@ -11,10 +11,11 @@ const HOLD_MS = 250;    // a tilt must be held this long before the first step
 const TICK_MS = 50;
 
 // [minimum tilt in degrees, milliseconds between steps, step size]
+// No faster than 0.8 seconds, so each place has time to be spoken.
 const TIERS = [
-  [40, 700, 'large'],
-  [25, 450, 'normal'],
-  [DEAD_ZONE, 1000, 'normal'],
+  [40, 900, 'large'],
+  [25, 800, 'normal'],
+  [DEAD_ZONE, 1200, 'normal'],
 ];
 
 let enabled = false;

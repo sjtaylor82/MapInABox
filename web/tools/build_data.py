@@ -21,6 +21,7 @@ import io
 import json
 import math
 import shutil
+import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -182,19 +183,37 @@ def build_tables() -> None:
 
 
 def copy_sounds() -> None:
+    """Convert the sounds to AAC (.m4a), which every browser plays, iPhone
+    included; Safari's Ogg support is patchy. Falls back to copying the
+    originals when ffmpeg is not installed."""
     src = ROOT / "sounds"
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        print("  ffmpeg not found: copying the original files (iPhone may not play .ogg)")
     listing = {}
     for sub in ("countries", "regions"):
         dest = SOUNDS_OUT / sub
         dest.mkdir(parents=True, exist_ok=True)
-        stems = []
+        names = []
         for f in sorted((src / sub).iterdir()):
-            if f.suffix.lower() in (".ogg", ".mp3"):
+            if f.suffix.lower() not in (".ogg", ".mp3"):
+                continue
+            if ffmpeg:
+                target = dest / (f.stem + ".m4a")
+                if not target.exists() or target.stat().st_mtime < f.stat().st_mtime:
+                    subprocess.run(
+                        [ffmpeg, "-y", "-loglevel", "error", "-i", str(f), "-vn",
+                         "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(target)],
+                        check=True)
+                stale = dest / f.name
+                if stale.exists():
+                    stale.unlink()
+            else:
                 target = dest / f.name
                 if not target.exists() or target.stat().st_size != f.stat().st_size:
                     shutil.copy2(f, target)
-                stems.append(f.name)
-        listing[sub] = stems
+            names.append(target.name)
+        listing[sub] = names
     credits = src / "credits.txt"
     if credits.exists():
         shutil.copy2(credits, SOUNDS_OUT / "credits.txt")
