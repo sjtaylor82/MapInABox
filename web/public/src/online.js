@@ -30,13 +30,20 @@ async function getJson(url, timeoutMs = 12000) {
 /** Place search (Photon). Returns [{ label, lat, lon }]. */
 export async function searchOnline(query, near) {
   const params = new URLSearchParams({ q: query.slice(0, 200), limit: '10', lang: 'en' });
-  const base = (await hasApi()) ? 'api/search' : 'https://photon.komoot.io/api/';
-  let json = await getJson(`${base}?${params}`);
+  const direct = 'https://photon.komoot.io/api/';
+  // Photon sometimes refuses Cloudflare's servers, so fall back to it directly.
+  const ask = async () => {
+    if (await hasApi()) {
+      try { return await getJson(`api/search?${params}`); } catch { /* fall through */ }
+    }
+    return getJson(`${direct}?${params}`);
+  };
+  let json = await ask();
   let features = json.features || [];
   if (!features.length && near) {
     params.set('lat', near.lat.toFixed(2));
     params.set('lon', near.lon.toFixed(2));
-    json = await getJson(`${base}?${params}`);
+    json = await ask();
     features = json.features || [];
   }
   const seen = new Set();
