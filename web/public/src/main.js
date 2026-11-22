@@ -36,6 +36,9 @@ async function boot() {
   $('intro-tilt-row').hidden = !touch;
   $('intro-tilt').checked = touch && settings.get('tilt') !== false;
   $('intro-speech').value = settings.get('speech');
+  const hasSaved = !!(settings.get('position') && Number.isFinite(settings.get('position').lat));
+  $('intro-where').querySelector('[value="last"]').hidden = !hasSaved;
+  $('intro-where').value = hasSaved ? 'last' : touch ? 'here' : 'choose';
   $('btn-tilt').hidden = !touch;
   $('btn-level').hidden = true;
   $('start').addEventListener('click', start);
@@ -71,8 +74,12 @@ async function start() {
   } else {
     settings.set('tilt', false);
   }
+  const where = $('intro-where').value;
   const saved = settings.get('position');
-  if (saved && Number.isFinite(saved.lat)) {
+  if (where === 'here') {
+    // If the location can't be found, ask where to start instead of leaving the map nowhere.
+    whereAmI(() => setTimeout(() => openJump('Where would you like to start? Type a city, country or coordinates, then press Enter.'), 2500));
+  } else if (where === 'last' && saved && Number.isFinite(saved.lat)) {
     state.lat = saved.lat;
     state.lon = saved.lon;
     await moved({ tone: false });
@@ -91,13 +98,25 @@ async function moved({ tone = true, prefix = '' } = {}) {
   const info = await describe(state.lat, state.lon, state.info);
   if (seq !== state.seq) return; // the cursor has moved on
   const countryChanged = info.country !== state.info.country;
+  const sameSea = !info.onLand && info.label === state.info.label;
   state.info = info;
-  say(prefix ? `${prefix} ${info.label}` : info.label);
+  let text = info.label;
+  // A sea can stretch for thousands of kilometres. Repeating just its name
+  // sounds like not moving, so say where the nearest land is as well.
+  if (sameSea || (prefix && !info.onLand)) text = `${info.label}. ${landHint(state.lat, state.lon)}`;
+  say(prefix ? `${prefix} ${text}` : text);
   updateMapView(state.lat, state.lon, info.label, info.country);
   if (countryChanged) {
     const place = info.onLand && info.country !== 'Open Water' ? info.country : 'ocean';
     audio.playPlace(place, info.continent);
   }
+}
+
+function landHint(lat, lon) {
+  const { dist, idx } = nearestCity(lat, lon);
+  const c = city(idx);
+  const dir = compassName(bearingDeg(lat, lon, c.lat, c.lon)).replace('-', ' ');
+  return `Nearest land ${c.name}, ${formatDistance(dist * 111 * 1000)} ${dir}.`;
 }
 
 function toneBounds() {
@@ -152,10 +171,12 @@ function nextCountry(bearing, direction) {
 
 let locating = false;
 
-function whereAmI() {
+function whereAmI(onFail = () => {}) {
+  if (typeof onFail !== 'function') onFail = () => {}; // called from a click: the event
   if (locating) return;
   if (!('geolocation' in navigator) || !window.isSecureContext) {
     say('Location is not available in this browser.');
+    onFail();
     return;
   }
   locating = true;
@@ -179,6 +200,7 @@ function whereAmI() {
       } else {
         say('Your location could not be found. Check that location services are on for this device.');
       }
+      onFail();
     },
     { enableHighAccuracy: true, timeout: 20000, maximumAge: 30000 },
   );
@@ -188,10 +210,28 @@ function whereAmI() {
 
 const TILT_BEARING = { north: 0, east: 90, south: 180, west: 270 };
 
-function onTiltStep(direction, size) {
-  if (!state.started || document.querySelector('dialog[open]')) return;
+let tiltCrossing = false;
+
+function onTiltStep(direction, size, angle) {
+  if (!state.started || document.querySelector('dialog[open]') || tiltCrossing) return;
+  const bearing = TILT_BEARING[direction];
+  if (!state.info.onLand) {
+    // Seas are huge: a sharp tilt crosses to the next country in that
+    // direction, and gentler tilts take bigger steps than on land.
+    if (size === 'large') {
+      tilt.buzz(40);
+      tiltCrossing = true;
+      nextCountry(bearing, direction);
+      // Give the landing time to be heard before the tilt carries on.
+      setTimeout(() => { tiltCrossing = false; }, 2500);
+      return;
+    }
+    tilt.buzz(12);
+    step(bearing, angle >= 25 ? 50 : 25);
+    return;
+  }
   tilt.buzz(size === 'large' ? 30 : 12);
-  step(TILT_BEARING[direction], size === 'large' ? 100 : 5);
+  step(bearing, size === 'large' ? 100 : 5);
 }
 
 function setTilt(on, { quiet = false } = {}) {
@@ -440,7 +480,17 @@ function setJumpResults(results) {
   const list = $('jump-results');
   list.replaceChildren(...results.map((r, i) => new Option(r.label, String(i))));
   list.hidden = !results.length;
-  if (results.length) list.selectedIndex = 0;
+  $('jump-go').hidden = !results.length;
+  // On a phone the picker's first entry is already selected, so a "choose"
+  // prompt goes first; otherwise picking that first place would change nothing.
+  if (results.length && tilt.isTouchDevice()) {
+    const prompt = new Option(`${results.length} results. Choose a place…`, '');
+    prompt.disabled = true;
+    list.prepend(prompt);
+    list.selectedIndex = 0;
+  } else if (results.length) {
+    list.selectedIndex = 0;
+  }
 }
 
 async function runJumpSearch() {
@@ -483,10 +533,10 @@ async function chooseJump(r) {
   }
   $('jump-dialog').close();
   const history = (settings.get('jumpHistory') || []).filter((h) => h.label !== r.label);
-  history.unshift({ label: r.label, lat: r.lat, lon: r.lon });
+  history.unshift({ label: r.label, country: r.country, lat: r.lat, lon: r.lon });
   settings.set('jumpHistory', history.slice(0, 5));
   $('map').focus();
-  jumpTo(r.lat, r.lon);
+  jumpTo(r.lat, r.lon, r.country ? `${r.country}.` : '');
 }
 
 // ── Help and settings ─────────────────────────────────────────────────────
@@ -530,14 +580,18 @@ $('jump-input').addEventListener('keydown', (e) => {
 $('jump-results').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
     e.preventDefault();
-    const r = jumpResults[$('jump-results').selectedIndex];
-    if (r) chooseJump(r);
+    chooseSelected();
   }
 });
-$('jump-results').addEventListener('dblclick', () => {
-  const r = jumpResults[$('jump-results').selectedIndex];
+function chooseSelected() {
+  const value = $('jump-results').value;
+  const r = value === '' ? null : jumpResults[Number(value)];
   if (r) chooseJump(r);
-});
+}
+$('jump-results').addEventListener('dblclick', chooseSelected);
+$('jump-go').addEventListener('click', chooseSelected);
+// Phones show the list as a picker: picking a place is the choice, with no Enter key to press.
+$('jump-results').addEventListener('change', () => { if (tilt.isTouchDevice()) chooseSelected(); });
 for (const id of ['jump-dialog', 'help-dialog', 'settings-dialog']) {
   $(id).addEventListener('close', () => { if (state.started) $('map').focus(); });
 }

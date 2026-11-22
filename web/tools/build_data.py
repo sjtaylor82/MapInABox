@@ -88,12 +88,17 @@ def build_countries() -> None:
         gj = mapping(simple)
         polys = gj["coordinates"] if gj["type"] == "MultiPolygon" else [gj["coordinates"]]
         minx, miny, maxx, maxy = geom.bounds
+        # Where a jump to the country lands. Natural Earth's LABEL_X/Y can be
+        # offshore (New Zealand's is in the Tasman Sea), so use a point that is
+        # guaranteed to be inside the simplified outline of the largest part.
+        parts = list(simple.geoms) if simple.geom_type == "MultiPolygon" else [simple]
+        inside = max(parts, key=lambda p: p.area).representative_point()
         out.append({
             "name": name,
             "iso2": props.get("ISO_A2_EH") or props.get("ISO_A2") or "",
             "continent": props.get("CONTINENT") or "",
             "bbox": [round(minx, 3), round(miny, 3), round(maxx, 3), round(maxy, 3)],
-            "label": [float(props.get("LABEL_Y") or 0), float(props.get("LABEL_X") or 0)],
+            "label": [round(inside.y, 4), round(inside.x, 4)],
             "polys": round_coords(polys),
         })
     write_json("countries.json", out)

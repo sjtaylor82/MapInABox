@@ -23,13 +23,20 @@
       <option value="voice">Use the browser's voice (no screen reader)</option>
       <option value="both">Both</option>
     </select>
+    <label for="intro-where">Start at</label>
+    <select id="intro-where">
+      <option value="last">Where I left off</option>
+      <option value="here">My location</option>
+      <option value="choose">A place I choose</option>
+    </select>
     <p id="intro-tilt-row" hidden>
       <label class="check"><input type="checkbox" id="intro-tilt"> Move by tilting this device</label>
-      <span class="small">Hold it comfortably, then tilt forward, back, left or right to move. The further you tilt, the faster you go. Tap the map to make the way you are holding it level again.</span>
+      <span class="small">Hold it comfortably, then tilt forward, back, left or right to move. The further you tilt, the faster you go. Over the sea, a sharp tilt crosses to the next country. Tap the map to make the way you are holding it level again.</span>
     </p>
     <p id="load-status" role="status">Loading…</p>
     <button id="start" type="button" disabled>Start exploring</button>
-    <p class="small">Press F1 at any time for the list of keys. This is an early test version of the web edition. The full Map in a Box is a free download for Windows and macOS.</p>
+    <p class="small">Press F1 at any time for the list of keys. This is an early test version of the web edition.</p>
+    <p>The full Map in a Box, with street mode, walking routes, transport and much more, is a free download for Windows and macOS: <a href="https://github.com/sjtaylor82/MapInABox/releases/latest">download Map in a Box for desktop</a>.</p>
   </main>
 
   <div id="app" hidden>
@@ -57,6 +64,7 @@
     <label for="jump-results" class="sr-only">Results</label>
     <select id="jump-results" size="10" hidden></select>
     <div class="buttons">
+      <button type="button" id="jump-go" hidden>Go</button>
       <button type="button" id="jump-here">Use my location</button>
       <button type="button" data-close>Cancel</button>
     </div>
@@ -128,6 +136,7 @@
       </tbody>
     </table>
     <p>Some browsers keep F6 for themselves. If F6 does nothing, use I.</p>
+    <p><a href="https://github.com/sjtaylor82/MapInABox/releases/latest">Download Map in a Box for Windows and macOS</a>, with street mode, walking routes, transport and much more.</p>
     <p>Your location is only used to move the map. It is not stored anywhere except this browser. Weather, time and search send the map position to those services when you ask for them.</p>
     <div class="buttons"><button type="button" data-close>Close</button></div>
   </dialog>

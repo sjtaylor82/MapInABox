@@ -80,6 +80,8 @@ h1 { font-size: 2.25rem; margin: 0 0 1rem; }
 
 .small { color: var(--muted); font-size: 1rem; }
 
+a { color: var(--accent); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+
 #intro label { display: block; font-weight: 600; margin: 0.75rem 0 0.25rem; }
 
 #intro label.check { font-weight: 400; display: flex; gap: 0.5rem; align-items: center; }
@@ -191,7 +193,19 @@ dialog input[type="text"], dialog select { width: 100%; padding: 0.4rem; }
 
 dialog select[size] { margin-top: 0.75rem; }
 
-.buttons { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; }
+.buttons { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; }
+
+/* Keep a dialog's buttons on screen however long its content is. */
+dialog .buttons {
+  position: sticky;
+  bottom: -1.25rem;
+  background: var(--bg);
+  padding: 0.75rem 0 1.25rem;
+}
+
+@media (pointer: coarse) {
+  button { min-height: 44px; }
+}
 
 table { border-collapse: collapse; width: 100%; font-size: 1rem; }
 

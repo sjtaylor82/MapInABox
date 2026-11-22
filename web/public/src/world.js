@@ -352,7 +352,7 @@ export function searchLocal(query, limit = 15) {
   for (const c of data.countries) {
     const name = fold(c.name);
     if (rest.length === 0 && (name === q || name.startsWith(q))) {
-      results.push({ label: `${c.name}, country`, lat: c.label[0], lon: c.label[1], rank: name === q ? 0 : 2, pop: Infinity });
+      results.push({ label: `${c.name}, country`, country: c.name, lat: c.label[0], lon: c.label[1], rank: name === q ? 0 : 2, pop: Infinity });
     }
   }
   const c = data.cities;
