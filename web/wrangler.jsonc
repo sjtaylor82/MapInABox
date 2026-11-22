@@ -1,5 +1,5 @@
 {
-  "name": "miab-web",
+  "name": "mapinabox",
   "main": "worker/index.js",
   "compatibility_date": "2026-11-01",
   // The site itself. Requests under /api/ go to the Worker first.
