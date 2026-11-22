@@ -35,6 +35,7 @@
   <div id="app" hidden>
     <header id="toolbar">
       <span class="brand" aria-hidden="true">Map in a Box</span>
+      <button id="btn-where" type="button">Where am I (Y)</button>
       <button id="btn-jump" type="button">Jump (J)</button>
       <button id="btn-tilt" type="button" aria-pressed="false" hidden>Tilt: off</button>
       <button id="btn-level" type="button" hidden>Set level</button>
@@ -55,7 +56,10 @@
     <input id="jump-input" type="text" autocomplete="off" spellcheck="false">
     <label for="jump-results" class="sr-only">Results</label>
     <select id="jump-results" size="10" hidden></select>
-    <div class="buttons"><button type="button" data-close>Cancel</button></div>
+    <div class="buttons">
+      <button type="button" id="jump-here">Use my location</button>
+      <button type="button" data-close>Cancel</button>
+    </div>
   </dialog>
 
   <dialog id="settings-dialog" aria-labelledby="settings-title">
@@ -94,6 +98,7 @@
         <tr><td>Alt+Arrows</td><td>Jump to the next country in that direction</td></tr>
         <tr><td>J</td><td>Jump to a place</td></tr>
         <tr><td>Ctrl+H</td><td>Recent jumps</td></tr>
+        <tr><td>Y</td><td>Where am I: go to your real location (the browser asks first)</td></tr>
         <tr><td>F2</td><td>Repeat location. Twice to spell it, three times to copy it</td></tr>
         <tr><td>F3, F4</td><td>Latitude, longitude</td></tr>
         <tr><td>L</td><td>Latitude and longitude</td></tr>
@@ -123,6 +128,7 @@
       </tbody>
     </table>
     <p>Some browsers keep F6 for themselves. If F6 does nothing, use I.</p>
+    <p>Your location is only used to move the map. It is not stored anywhere except this browser. Weather, time and search send the map position to those services when you ask for them.</p>
     <div class="buttons"><button type="button" data-close>Close</button></div>
   </dialog>
 

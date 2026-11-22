@@ -148,6 +148,42 @@ function nextCountry(bearing, direction) {
   say(`No other country found to the ${direction} within ${formatDistance(maxKm * 1000)}.`);
 }
 
+// ── Where am I (device location) ──────────────────────────────────────────
+
+let locating = false;
+
+function whereAmI() {
+  if (locating) return;
+  if (!('geolocation' in navigator) || !window.isSecureContext) {
+    say('Location is not available in this browser.');
+    return;
+  }
+  locating = true;
+  say('Finding your location…');
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      locating = false;
+      const { latitude, longitude, accuracy } = pos.coords;
+      const near = accuracy <= 1000
+        ? `accurate to about ${formatDistance(accuracy)}`
+        : 'only roughly, perhaps from your internet connection';
+      if (document.querySelector('dialog[open]')) document.querySelector('dialog[open]').close();
+      jumpTo(latitude, longitude, `You are here, ${near}.`);
+    },
+    (err) => {
+      locating = false;
+      if (err.code === err.PERMISSION_DENIED) {
+        say('Location access was not allowed. To use Where am I, allow location for this site in your browser settings.');
+      } else if (err.code === err.TIMEOUT) {
+        say('Finding your location took too long. Try again, ideally outdoors or near a window.');
+      } else {
+        say('Your location could not be found. Check that location services are on for this device.');
+      }
+    },
+    { enableHighAccuracy: true, timeout: 20000, maximumAge: 30000 },
+  );
+}
+
 // ── Tilt ──────────────────────────────────────────────────────────────────
 
 const TILT_BEARING = { north: 0, east: 90, south: 180, west: 270 };
@@ -329,6 +365,7 @@ const KEYS = {
   PageUp: cycleToneScope,
   PageDown: cycleToneScope,
   j: () => openJump(),
+  y: whereAmI,
   'Ctrl+h': () => openJumpHistory(),
   l: () => say(`${formatLat(state.lat)}, ${formatLon(state.lon)}.`),
   c: () => say(noCountry() ? 'Open water.' : `${state.info.country}.`),
@@ -512,6 +549,8 @@ $('btn-jump').addEventListener('click', () => openJump());
 $('btn-help').addEventListener('click', openHelp);
 $('btn-settings').addEventListener('click', openSettings);
 $('btn-tilt').addEventListener('click', toggleTilt);
+$('btn-where').addEventListener('click', whereAmI);
+$('jump-here').addEventListener('click', whereAmI);
 $('btn-level').addEventListener('click', setLevelNow);
 // Tapping the map (a double tap with VoiceOver or TalkBack) sets level while tilting.
 $('map').addEventListener('click', () => { if (tilt.tiltActive()) setLevelNow(); });
