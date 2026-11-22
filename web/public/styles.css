@@ -1,0 +1,188 @@
+:root {
+  --bg: #ffffff;
+  --fg: #111111;
+  --muted: #444444;
+  --accent: #0b4f9c;
+  --focus: #c2410c;
+  --panel: #f2f2f2;
+  --map-water: #0d2a4a;
+  --map-land: #e8e2c8;
+  --map-current: #ffd400;
+  --map-border: #1b1b1b;
+  --map-trail: #ff7a3d;
+  --map-cursor: #e0001b;
+  --map-cursor-halo: #ffffff;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101114;
+    --fg: #f2f2f2;
+    --muted: #c4c4c4;
+    --accent: #8cc4ff;
+    --focus: #ffb37a;
+    --panel: #1d1f24;
+    --map-water: #000000;
+    --map-land: #4a4a4a;
+    --map-current: #ffd400;
+    --map-border: #9a9a9a;
+    --map-cursor-halo: #ffffff;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #101114;
+  --fg: #f2f2f2;
+  --muted: #c4c4c4;
+  --accent: #8cc4ff;
+  --focus: #ffb37a;
+  --panel: #1d1f24;
+  --map-water: #000000;
+  --map-land: #4a4a4a;
+  --map-border: #9a9a9a;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 1.125rem/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+:focus-visible {
+  outline: 4px solid var(--focus);
+  outline-offset: 2px;
+}
+
+#intro {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 3rem 16px;
+}
+
+h1 { font-size: 2.25rem; margin: 0 0 1rem; }
+
+.small { color: var(--muted); font-size: 1rem; }
+
+button, select, input {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: var(--accent);
+  color: var(--bg);
+  border: 2px solid var(--accent);
+  border-radius: 6px;
+  padding: 0.5rem 1.1rem;
+  cursor: pointer;
+}
+
+button[disabled] { opacity: 0.5; cursor: progress; }
+
+#start { font-size: 1.3rem; padding: 0.8rem 1.6rem; margin: 0.5rem 0 1rem; }
+
+#app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+#app[hidden] { display: none; }
+
+#toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.5rem 16px;
+  background: var(--panel);
+}
+
+#toolbar .brand { font-weight: 700; margin-right: auto; }
+
+#toolbar button { font-size: 1rem; padding: 0.35rem 0.8rem; }
+
+#map {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--map-water);
+}
+
+#map:focus-visible { outline-offset: -4px; }
+
+#map-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+#map-canvas[hidden] { display: none; }
+
+#map-caption {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  margin: 0;
+  padding: 0.6rem 1rem;
+  background: #000000;
+  color: #ffffff;
+  border: 3px solid #ffd400;
+  border-radius: 8px;
+  font-size: clamp(1.25rem, 3vw, 2rem);
+  font-weight: 700;
+}
+
+#map-caption:empty { display: none; }
+
+body:not(.visual-assist) #map-caption { display: none; }
+
+dialog {
+  width: min(36rem, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  background: var(--bg);
+  color: var(--fg);
+  border: 2px solid var(--fg);
+  border-radius: 10px;
+  padding: 1.25rem;
+}
+
+dialog::backdrop { background: rgb(0 0 0 / 0.6); }
+
+dialog h2 { margin-top: 0; }
+
+dialog label { display: block; margin: 0.75rem 0 0.25rem; font-weight: 600; }
+
+dialog label.check { font-weight: 400; }
+
+dialog input[type="text"], dialog select { width: 100%; padding: 0.4rem; }
+
+dialog select[size] { margin-top: 0.75rem; }
+
+.buttons { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; }
+
+table { border-collapse: collapse; width: 100%; font-size: 1rem; }
+
+th, td { text-align: left; padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--muted); vertical-align: top; }
+
+td:first-child { white-space: nowrap; font-weight: 600; }

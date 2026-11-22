@@ -1,0 +1,14 @@
+{
+  "name": "miab-web",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-11-01",
+  // The site itself. Requests under /api/ go to the Worker first.
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  }
+  // Serve it from your own domain rather than *.workers.dev, which many school
+  // filters block. Add this once the domain is on Cloudflare:
+  // "routes": [{ "pattern": "web.example.org", "custom_domain": true }]
+}

@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Map in a Box Web</title>
+  <meta name="description" content="An accessible world map for blind and low-vision users, in your browser.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230d2a4a'/%3E%3Ccircle cx='32' cy='32' r='20' fill='none' stroke='%23ffd400' stroke-width='5'/%3E%3Ccircle cx='32' cy='32' r='6' fill='%23e0001b'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Two live regions: speech alternates between them so repeats are spoken. -->
+  <div id="live-a" class="sr-only" aria-live="assertive" aria-atomic="true"></div>
+  <div id="live-b" class="sr-only" aria-live="assertive" aria-atomic="true"></div>
+
+  <main id="intro">
+    <h1>Map in a Box Web</h1>
+    <p>Explore the world by ear. Use the arrow keys to move across the map. Map in a Box tells you the country, city or ocean you are over, and plays a sound for each country.</p>
+    <p>Use a computer with a keyboard. It works with NVDA, JAWS, Narrator and VoiceOver, or with the browser's own voice. Headphones help you hear the tones move from left to right.</p>
+    <p id="load-status" role="status">Loading…</p>
+    <button id="start" type="button" disabled>Start exploring</button>
+    <p class="small">Press F1 at any time for the list of keys. This is an early test version of the web edition. The full Map in a Box is a free download for Windows and macOS.</p>
+  </main>
+
+  <div id="app" hidden>
+    <header id="toolbar">
+      <span class="brand" aria-hidden="true">Map in a Box</span>
+      <button id="btn-jump" type="button">Jump (J)</button>
+      <button id="btn-settings" type="button">Settings (Ctrl+,)</button>
+      <button id="btn-help" type="button">Help (F1)</button>
+    </header>
+    <div id="map" tabindex="0" role="application" aria-roledescription="world map"
+         aria-label="World map. Use the arrow keys to move. Press F1 for help.">
+      <canvas id="map-canvas" aria-hidden="true"></canvas>
+      <p id="map-caption" aria-hidden="true"></p>
+    </div>
+  </div>
+
+  <dialog id="jump-dialog" aria-labelledby="jump-title">
+    <h2 id="jump-title">Jump to place</h2>
+    <p id="jump-prompt"></p>
+    <label for="jump-input">Place, country or coordinates</label>
+    <input id="jump-input" type="text" autocomplete="off" spellcheck="false">
+    <label for="jump-results" class="sr-only">Results</label>
+    <select id="jump-results" size="10" hidden></select>
+    <div class="buttons"><button type="button" data-close>Cancel</button></div>
+  </dialog>
+
+  <dialog id="settings-dialog" aria-labelledby="settings-title">
+    <form id="settings-form">
+      <h2 id="settings-title">Settings</h2>
+      <label for="set-units">Distances</label>
+      <select id="set-units" name="units">
+        <option value="metric">Metres and kilometres</option>
+        <option value="imperial">Feet and miles</option>
+      </select>
+      <label for="set-speech">Speech</label>
+      <select id="set-speech" name="speech">
+        <option value="screenreader">My screen reader</option>
+        <option value="voice">The browser's voice</option>
+        <option value="both">Both</option>
+      </select>
+      <label class="check"><input type="checkbox" name="sounds"> Country sounds and tones</label>
+      <label class="check"><input type="checkbox" name="geoFeatures"> Name geographic features (GeoFeatures)</label>
+      <label class="check"><input type="checkbox" name="visualAssist"> Visual Assist map</label>
+      <div class="buttons">
+        <button type="submit">Save</button>
+        <button type="button" data-close>Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="help-dialog" aria-labelledby="help-title">
+    <h2 id="help-title" tabindex="-1">Keys</h2>
+    <table>
+      <caption class="sr-only">World map keys</caption>
+      <thead><tr><th scope="col">Key</th><th scope="col">Action</th></tr></thead>
+      <tbody>
+        <tr><td>Arrow keys</td><td>Move about 5 km</td></tr>
+        <tr><td>Shift+Arrows</td><td>Move about 1 km</td></tr>
+        <tr><td>Ctrl+Arrows</td><td>Move about 100 km</td></tr>
+        <tr><td>Alt+Arrows</td><td>Jump to the next country in that direction</td></tr>
+        <tr><td>J</td><td>Jump to a place</td></tr>
+        <tr><td>Ctrl+H</td><td>Recent jumps</td></tr>
+        <tr><td>F2</td><td>Repeat location. Twice to spell it, three times to copy it</td></tr>
+        <tr><td>F3, F4</td><td>Latitude, longitude</td></tr>
+        <tr><td>L</td><td>Latitude and longitude</td></tr>
+        <tr><td>C</td><td>Current country</td></tr>
+        <tr><td>R</td><td>Current region or state</td></tr>
+        <tr><td>N</td><td>Nearest city</td></tr>
+        <tr><td>G</td><td>Nearby geographic features</td></tr>
+        <tr><td>F5</td><td>Continent</td></tr>
+        <tr><td>F6 or I</td><td>Country facts</td></tr>
+        <tr><td>Shift+F6 or Shift+I</td><td>Wikipedia summary</td></tr>
+        <tr><td>Shift+F1</td><td>Capital city</td></tr>
+        <tr><td>$</td><td>Currency</td></tr>
+        <tr><td>Shift+L</td><td>Languages</td></tr>
+        <tr><td>T</td><td>Local time</td></tr>
+        <tr><td>Z</td><td>Time zone</td></tr>
+        <tr><td>S</td><td>Sunrise and sunset</td></tr>
+        <tr><td>W</td><td>Weather</td></tr>
+        <tr><td>Q</td><td>Air quality</td></tr>
+        <tr><td>Ctrl+Home, Ctrl+End</td><td>North Pole, South Pole</td></tr>
+        <tr><td>Page Up, Page Down</td><td>Spatial tones for the world or the current country</td></tr>
+        <tr><td>F7</td><td>Sounds on or off</td></tr>
+        <tr><td>Shift+F3, Shift+F4</td><td>Volume down, up</td></tr>
+        <tr><td>Shift+F5</td><td>GeoFeatures on or off</td></tr>
+        <tr><td>F9</td><td>Visual Assist on or off</td></tr>
+        <tr><td>Ctrl+Plus, Ctrl+Minus, Ctrl+0</td><td>Map zoom in, out, reset</td></tr>
+        <tr><td>Ctrl+Comma</td><td>Settings</td></tr>
+      </tbody>
+    </table>
+    <p>Some browsers keep F6 for themselves. If F6 does nothing, use I.</p>
+    <div class="buttons"><button type="button" data-close>Close</button></div>
+  </dialog>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

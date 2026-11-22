@@ -1,0 +1,53 @@
+# Map in a Box Web
+
+An early browser edition of Map in a Box. It currently has the world map
+mode: arrow-key exploration, country sounds, spatial tones, jumping, country
+facts, weather, time and Visual Assist. Street mode comes next.
+
+It is plain JavaScript modules with no build step for the code. The map data
+is generated from the desktop data files.
+
+## Build the data
+
+From the repository root:
+
+```
+python web/tools/build_data.py
+```
+
+This writes `web/public/data/` and copies the sounds to `web/public/sounds/`.
+Both are generated and are not committed. Run it again whenever the desktop
+data, sounds or lookup tables change.
+
+## Try it locally
+
+```
+python -m http.server 8765 --directory web/public
+```
+
+Then open http://localhost:8765/. Without the Worker, online search goes
+straight to Photon.
+
+To run it with the Worker as it will be hosted:
+
+```
+cd web
+npx wrangler dev
+```
+
+## Host it
+
+```
+cd web
+npx wrangler deploy
+```
+
+This publishes the site and the `/api/` routes as one Cloudflare Worker.
+Set a custom domain in `wrangler.jsonc` so schools can allow it by name.
+
+## Services it contacts
+
+- Its own domain, for the map, sounds and `/api/search` (Photon, via the Worker).
+- `api.open-meteo.com` and `air-quality-api.open-meteo.com` for weather,
+  time zone, sunrise and air quality, when those keys are pressed.
+- `en.wikipedia.org` for Wikipedia summaries, when asked.
