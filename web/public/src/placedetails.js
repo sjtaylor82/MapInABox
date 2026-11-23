@@ -3,7 +3,11 @@
 // single place is small and quick, unlike whole areas. Shared by the page
 // and the Worker.
 
+// The French server answers only clients that identify themselves (the
+// Worker sends a Map in a Box User-Agent; a browser cannot), and is the most
+// reliable. overpass-api.de refuses many clients and is often busy.
 export const OVERPASS = [
+  'https://overpass.openstreetmap.fr/api/interpreter',
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
 ];
