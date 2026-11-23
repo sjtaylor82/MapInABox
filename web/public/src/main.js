@@ -214,8 +214,8 @@ async function announcePostcode() {
   const pc = await postcodeAt(lat, lon);
   if (!pc) return say('No postcode found for this location.');
   state.lastPostcode = pc.postcode;
-  const where = [pc.place, pc.admin].filter(Boolean).join(', ');
-  say(`Postcode ${pc.postcode}${where ? `, ${where}` : ''}.`);
+  // "Cleveland 4163, Queensland."
+  say(`${pc.place ? `${pc.place} ` : ''}${pc.postcode}${pc.admin ? `, ${pc.admin}` : ''}.`);
 }
 
 /** Two seconds after a move, once you have stopped, say the postcode if it has changed. */
@@ -228,7 +228,7 @@ function schedulePostcode(seq) {
     const pc = await postcodeAt(state.lat, state.lon);
     if (seq !== state.seq || !pc || pc.postcode === state.lastPostcode) return;
     state.lastPostcode = pc.postcode;
-    say(`Postcode ${pc.postcode}.`);
+    say(`${pc.place ? `${pc.place} ` : ''}${pc.postcode}.`); // "Cleveland 4163."
   }, 2000);
 }
 
