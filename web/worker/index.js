@@ -152,7 +152,7 @@ async function placeDetails(url, env, ctx) {
   const lon = Number(url.searchParams.get('lon'));
   if (!name || !Number.isFinite(lat) || !Number.isFinite(lon)) return json({ error: 'Bad request' }, 400);
   const cache = caches.default;
-  const key = new Request(`https://cache.mapinabox/place/v2/${encodeURIComponent(name)}/${lat.toFixed(4)}/${lon.toFixed(4)}`);
+  const key = new Request(`https://cache.mapinabox/place/v3/${encodeURIComponent(name)}/${lat.toFixed(4)}/${lon.toFixed(4)}`);
   const hit = await cache.match(key);
   if (hit) return hit;
 
@@ -234,8 +234,8 @@ async function hereDetails(apiKey, name, lat, lon) {
   const oh = (item.openingHours || [])[0];
   let hoursText = '';
   if (oh) {
-    const now = oh.isOpen === true ? 'Open now' : oh.isOpen === false ? 'Closed now' : '';
-    hoursText = [now, (oh.text || []).join('; ')].filter(Boolean).join('. ');
+    // Not HERE's "open now": answers are kept for a day, so it would go stale.
+    hoursText = (oh.text || []).join('; ');
   }
   return { phone, website, hoursText, address: (item.address && item.address.label) || '' };
 }
