@@ -55,6 +55,7 @@
         <p id="journey-drive" class="place-links" hidden>
           <a id="journey-drive-apple" target="_blank" rel="noopener">Drive with Apple Maps</a>
           <a id="journey-drive-google" target="_blank" rel="noopener">Drive with Google Maps</a>
+          <button type="button" id="journey-drive-food">Find food along the drive</button>
         </p>
         <div id="journey-walk" hidden>
           <button type="button" id="journey-guide">Start walking guidance</button>
@@ -98,10 +99,6 @@
         </div>
       </section>
 
-      <h2 id="step-heading">Step size</h2>
-      <label for="step-size" class="sr-only">Step size</label>
-      <input id="step-size" type="range" min="0" max="4" step="1" value="2">
-      <p id="step-value" aria-hidden="true">5 kilometres</p>
 
       <section id="places-section" data-street-only hidden aria-labelledby="places-title">
         <h2 id="places-title" tabindex="-1">Places nearby</h2>
@@ -171,6 +168,9 @@
           <p id="tilt-move-value" class="picker-value" aria-hidden="true"></p>
           <button type="button" id="btn-practice">Practise steering</button>
         </div>
+        <label for="step-size" class="picker-label">Step size</label>
+        <input id="step-size" type="range" min="0" max="4" step="1" value="2" class="picker">
+        <p id="step-value" class="picker-value" aria-hidden="true">5 kilometres</p>
         <label for="set-units" class="picker-label">Distances</label>
         <input id="set-units" type="range" class="picker">
         <p id="set-units-value" class="picker-value" aria-hidden="true"></p>

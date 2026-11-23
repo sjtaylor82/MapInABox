@@ -244,6 +244,7 @@ async function planDrive() {
   $('journey-drive-apple').href = `https://maps.apple.com/?saddr=${s}&daddr=${d}&dirflg=d`;
   $('journey-drive-google').href = `https://www.google.com/maps/dir/?api=1&origin=${s}&destination=${d}&travelmode=driving`;
   $('journey-drive').hidden = false;
+  st.drive = { from: { lat: a.lat, lon: a.lon, name: a.label }, to: { lat: b.lat, lon: b.lon, name: b.label } };
   const km = formatDistance(haversineM(a.lat, a.lon, b.lat, b.lon));
   const msg = `Driving to ${b.label}, ${km} in a straight line. Open it in Apple Maps or Google Maps for directions.`;
   setPrompt(msg);
@@ -959,7 +960,9 @@ async function roadFood(leg) {
     .sort((a, b) => a.along - b.along)
     .map(({ p, along }) => ({
       ...p,
-      text: `${p.name}, ${kindText(p)}, on the ${word}, ${formatDistance(along)} after ${from}`,
+      text: along < 50
+        ? `${p.name}, ${kindText(p)}, near ${from}`
+        : `${p.name}, ${kindText(p)}, on the ${word}, ${formatDistance(along)} after ${from}`,
     }));
 }
 
@@ -1051,6 +1054,34 @@ async function findFood() {
 }
 
 const WALK_FOOD_M = 50; // food this close to a walking route counts as on the way
+
+/** Food within 100 metres of the road for the drive, in driving order. */
+async function driveFood() {
+  const d = st.drive;
+  if (!d) return;
+  const seq = st.seq;
+  const km = haversineM(d.from.lat, d.from.lon, d.to.lat, d.to.lon) / 1000;
+  say(km > 100 ? 'Looking for food along the drive. A long drive can take a minute.' : 'Looking for food along the drive.');
+  $('journey-drive-food').disabled = true;
+  let found = [];
+  try {
+    found = await roadFood({ kind: 'car', from: d.from, to: d.to });
+  } catch {
+    found = null;
+  }
+  $('journey-drive-food').disabled = false;
+  if (seq !== st.seq || st.drive !== d) return;
+  if (found === null) return say('Food along the drive could not be loaded. Try again in a minute.');
+  st.food = found.slice(0, MAX_FOOD);
+  st.foodIdx = 0;
+  foodPicker.refresh();
+  showFoodLinks();
+  $('journey-food').hidden = !st.food.length;
+  if (!st.food.length) return say('No food places found along the drive.');
+  $('journey-food-list').querySelector('button')?.focus();
+  const more = found.length > MAX_FOOD ? ` The first ${MAX_FOOD} are listed.` : '';
+  say(`${found.length} food places along the drive.${more} ${st.food[0].text}.`);
+}
 
 /** Food within 50 metres of the walking route, in walking order. */
 async function walkFood() {
@@ -1192,6 +1223,7 @@ export function initJourney(h) {
   $('journey-plan').addEventListener('click', plan);
   $('journey-walk-plan').addEventListener('click', walkClick);
   $('journey-drive-plan').addEventListener('click', planDrive);
+  $('journey-drive-food').addEventListener('click', driveFood);
   $('journey-walk-food').addEventListener('click', walkFood);
   $('journey-guide').addEventListener('click', toggleGuiding);
   $('journey-choose').addEventListener('click', chooseOption);
