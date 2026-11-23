@@ -68,7 +68,8 @@ function priceText(p) {
 function optionText(o, i, n) {
   const legs = o.legs.length === 1 ? '' : ` ${o.legs.length} legs.`;
   const price = priceText(o.price);
-  return `${i + 1} of ${n}: ${o.name}. About ${spokenDuration(o.duration)}.${price ? ` ${price}.` : ''}${legs}`;
+  // The position goes last: iPhone VoiceOver does not read a picker's text when it starts with a number.
+  return `${o.name}. About ${spokenDuration(o.duration)}.${price ? ` ${price}.` : ''}${legs} ${i + 1} of ${n}.`;
 }
 
 const KIND_WORD = { subway: 'metro', towncar: 'car', rideshare: 'rideshare' };
@@ -110,7 +111,7 @@ function flightText(f, i, n) {
     return `${h.carrier} ${h.flight}${by}, ${h.from} ${clock(h.depart)} to ${h.to} ${clock(h.arrive)}${h.nextDay ? ' the next day' : ''}${wait}`;
   });
   const changes = f.changes ? `${f.changes} change${f.changes === 1 ? '' : 's'}` : 'Non-stop';
-  return `${i + 1} of ${n}: ${hops.join('; ')}. ${changes}, ${spokenDuration(f.minutes * 60)}.`;
+  return `${hops.join('; ')}. ${changes}, ${spokenDuration(f.minutes * 60)}. ${i + 1} of ${n}.`;
 }
 
 const airport = (name) => String(name || '').replace(/\s*\([A-Z]{3}\)\s*$/, '');
@@ -226,7 +227,7 @@ function chooseOption() {
 
 function legItem(i) {
   const o = st.option;
-  return { value: i, label: `Leg ${i + 1} of ${o.legs.length}: ${legText(o.legs[i])}` };
+  return { value: i, label: `${legText(o.legs[i])} Leg ${i + 1} of ${o.legs.length}.` };
 }
 
 function readAll() {
@@ -479,7 +480,7 @@ async function findFood() {
 }
 
 function foodLabel(i) {
-  return `${i + 1} of ${st.food.length}: ${st.food[i].text}.`;
+  return `${st.food[i].text}. ${i + 1} of ${st.food.length}.`;
 }
 
 /** Apple Maps, Uber Eats and DoorDash links for the chosen food place, as in Places nearby. */
