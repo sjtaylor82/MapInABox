@@ -29,6 +29,7 @@ export default {
     if (url.pathname === '/api/health') return json({ ok: true });
     if (url.pathname === '/api/search') return search(url, ctx);
     if (url.pathname === '/api/reverse') return reverse(url, ctx);
+    if (url.pathname === '/api/geocode') return geocode(url, env, ctx);
     const tile = url.pathname.match(/^\/api\/tile\/(\d+)\/(\d+)\/(\d+)$/);
     if (tile) return mapTile(Number(tile[1]), Number(tile[2]), Number(tile[3]), ctx);
     if (url.pathname === '/api/place') return placeDetails(url, env, ctx);
@@ -37,6 +38,61 @@ export default {
     return json({ error: 'Not found' }, 404);
   },
 };
+
+/**
+ * GET /api/geocode?q=&lat=&lon=: places and street addresses for a typed
+ * name, best first. OpenStreetMap's Nominatim first: in tests it found
+ * street addresses (Ethel St, Burwood), stations and shopping centres where
+ * Photon gave a bus stop or New Jersey, and HERE's geocoder turned
+ * "Burwood Station" into Station St, Concord. HERE is the fallback.
+ * lat and lon, when given, favour results near there. Cached a week (as
+ * Nominatim's usage policy asks). Answers { results: [{ label, lat, lon }] }.
+ */
+async function geocode(url, env, ctx) {
+  const q = (url.searchParams.get('q') || '').trim().slice(0, 200);
+  if (!q) return json({ results: [] });
+  const lat = Number(url.searchParams.get('lat'));
+  const lon = Number(url.searchParams.get('lon'));
+  const near = Number.isFinite(lat) && Number.isFinite(lon);
+  const cache = caches.default;
+  const key = new Request(`https://cache.mapinabox/geocode/v2?q=${encodeURIComponent(q.toLowerCase())}${near ? `&at=${lat.toFixed(2)},${lon.toFixed(2)}` : ''}`);
+  const hit = await cache.match(key);
+  if (hit) return hit;
+
+  let results = [];
+  try {
+    const p = new URLSearchParams({ q, format: 'jsonv2', limit: '5', addressdetails: '0', 'accept-language': 'en' });
+    if (near) p.set('viewbox', `${lon - 0.5},${lat + 0.5},${lon + 0.5},${lat - 0.5}`); // favoured, not a limit
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?${p}`, {
+      headers: { 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(8000),
+    });
+    if (res.ok) {
+      results = (await res.json()).map((r) => ({ label: r.display_name, lat: Number(r.lat), lon: Number(r.lon) }));
+    }
+  } catch { /* HERE below */ }
+
+  if (!results.length && env.HERE_API_KEY) {
+    const p = new URLSearchParams({ q, limit: '5', lang: 'en-AU', apiKey: env.HERE_API_KEY });
+    if (near) p.set('at', `${lat.toFixed(3)},${lon.toFixed(3)}`);
+    for (const endpoint of near ? ['geocode', 'discover'] : ['geocode']) {
+      try {
+        const res = await fetch(`https://${endpoint}.search.hereapi.com/v1/${endpoint}?${p}`, {
+          headers: { 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(8000),
+        });
+        if (!res.ok) continue;
+        results = ((await res.json()).items || []).filter((it) => it.position).map((it) => ({
+          label: (it.address && it.address.label) || it.title, lat: it.position.lat, lon: it.position.lng,
+        }));
+        if (results.length) break;
+      } catch { /* next */ }
+    }
+  }
+  const out = new Response(JSON.stringify({ results }), {
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=604800' },
+  });
+  if (results.length) ctx.waitUntil(cache.put(key, out.clone()));
+  return out;
+}
 
 /** GET /api/reverse?lat=&lon=: the address at a point (Photon reverse), cached a week. */
 async function reverse(url, ctx) {

@@ -1264,6 +1264,15 @@ function setUpPickers() {
     get: () => settings.get('speech'),
     set: (v) => settings.set('speech', v),
   }));
+  pickers.push(makePicker($('set-callouts'), {
+    shown: $('set-callouts-value'),
+    items: () => [
+      ['food', 'Food and drink'], ['all', 'All places'], ['none', 'None'],
+      ...street.PLACE_CATEGORIES.filter(([k]) => k !== 'food'),
+    ].map(([value, label]) => ({ value, label })),
+    get: () => settings.get('walkCallouts') || 'food',
+    set: (v) => settings.set('walkCallouts', v),
+  }));
   pickers.push(makePicker($('set-street-steer'), {
     shown: $('set-street-steer-value'),
     items: () => [

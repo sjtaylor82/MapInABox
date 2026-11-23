@@ -76,28 +76,17 @@
 
       <details id="journey-section">
         <summary><h2 id="journey-title" tabindex="-1">Route</h2></summary>
-        <label for="journey-type" class="picker-label">Type</label>
-        <input id="journey-type" type="range" class="picker">
-        <p id="journey-type-value" class="picker-value" aria-hidden="true"></p>
         <label for="journey-from">From (leave empty to start where you are on the map)</label>
         <input id="journey-from" type="text" autocomplete="off" spellcheck="false">
         <label for="journey-to">To</label>
         <input id="journey-to" type="text" autocomplete="off" spellcheck="false">
-        <div id="journey-date-row">
-          <label for="journey-date" class="picker-label">Travel date, for flight times</label>
-          <input id="journey-date" type="range" class="picker">
-          <p id="journey-date-value" class="picker-value" aria-hidden="true"></p>
-        </div>
-        <button type="button" id="journey-plan">Get route</button>
+        <button type="button" id="journey-walk-plan">Walking route</button>
+        <button type="button" id="journey-plan">Travel options</button>
+        <p id="journey-prompt"></p>
         <div id="journey-walk" hidden>
           <button type="button" id="journey-guide">Start walking guidance</button>
-          <label for="journey-step-list" class="picker-label">Step</label>
-          <input id="journey-step-list" type="range" class="picker">
-          <p id="journey-step-value" class="picker-value" aria-hidden="true"></p>
-          <button type="button" id="journey-step-go">Go to this step</button>
-          <button type="button" id="journey-step-read">Read all steps</button>
+          <ol id="journey-steps"></ol>
         </div>
-        <p id="journey-prompt"></p>
         <div id="journey-options" hidden>
           <label for="journey-option-list" class="picker-label">Option</label>
           <input id="journey-option-list" type="range" class="picker">
@@ -109,6 +98,11 @@
           <input id="journey-leg-list" type="range" class="picker">
           <p id="journey-leg-value" class="picker-value" aria-hidden="true"></p>
           <button type="button" id="journey-read">Read all</button>
+          <div id="journey-date-row">
+            <label for="journey-date" class="picker-label">Travel date, for flight times</label>
+            <input id="journey-date" type="range" class="picker">
+            <p id="journey-date-value" class="picker-value" aria-hidden="true"></p>
+          </div>
           <div id="journey-flights" hidden>
             <p id="journey-flights-note"></p>
             <label for="journey-flight-list" class="picker-label">Flight</label>
@@ -175,6 +169,9 @@
         <label for="set-speech" class="picker-label">Speech</label>
         <input id="set-speech" type="range" class="picker">
         <p id="set-speech-value" class="picker-value" aria-hidden="true"></p>
+        <label for="set-callouts" class="picker-label">Places called out on a walk</label>
+        <input id="set-callouts" type="range" class="picker">
+        <p id="set-callouts-value" class="picker-value" aria-hidden="true"></p>
         <label for="set-street-steer" class="picker-label">Steering in street mode</label>
         <input id="set-street-steer" type="range" class="picker">
         <p id="set-street-steer-value" class="picker-value" aria-hidden="true"></p>

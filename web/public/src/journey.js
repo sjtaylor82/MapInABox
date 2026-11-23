@@ -10,7 +10,7 @@
 
 import { say } from './speech.js';
 import { makePicker } from './picker.js';
-import { formatDistance, compassName, haversineM } from './geo.js';
+import { formatDistance, compassName, haversineM, bearingDeg } from './geo.js';
 import { settings } from './settings.js';
 import * as street from './street.js';
 import { ROAD_KINDS, decodePolyline, encodePolyline } from './rome2rio.js';
@@ -33,7 +33,6 @@ const st = {
   walk: null, stepIdx: 0,
   seq: 0,
 };
-let stepPicker;
 let datePicker; let optionPicker; let legPicker; let flightPicker; let foodPicker;
 
 // ── Wording ───────────────────────────────────────────────────────────────
@@ -170,42 +169,44 @@ function showOnly(...ids) {
 
 // ── Walking route ─────────────────────────────────────────────────────────
 
-/** 'walk' for a walking route, 'travel' for Rome2Rio travel options. */
-function routeType() {
-  return settings.get('routeType') === 'travel' ? 'travel' : 'walk';
-}
-
 /**
  * A typed place as a point: a place already in the street data with that
  * name, nearest first, or else a place search near where you are.
  */
 async function locate(text, here, nearOnly = true) {
   const want = text.toLowerCase();
-  // Places nearby by name first, once the map around here has loaded.
-  await Promise.race([street.ensureRadius(here.lat, here.lon, 2000), new Promise((r) => setTimeout(r, 8000))]);
-  const local = street.placesNear(here.lat, here.lon, 5000, 2000).find((p) => p.name.toLowerCase().includes(want));
-  if (local) return { lat: local.lat, lon: local.lon, label: local.name };
-  const params = new URLSearchParams({ q: text.slice(0, 200), limit: '10', lang: 'en' });
   if (nearOnly) {
-    params.set('lat', here.lat.toFixed(4));
-    params.set('lon', here.lon.toFixed(4));
+    // A place nearby by name first, once the map around here has loaded.
+    await Promise.race([street.ensureRadius(here.lat, here.lon, 2000), new Promise((r) => setTimeout(r, 8000))]);
+    const local = street.placesNear(here.lat, here.lon, 5000, 2000).find((p) => p.name.toLowerCase().includes(want));
+    if (local) return { lat: local.lat, lon: local.lon, label: local.name };
   }
-  let json;
+  const near = nearOnly ? `&lat=${here.lat.toFixed(4)}&lon=${here.lon.toFixed(4)}` : '';
+  let found = [];
   try {
-    json = await api(`api/search?${params}`, {}, 15000);
-  } catch {
-    json = await (await fetch(`https://photon.komoot.io/api/?${params}`)).json();
+    // HERE, through the server: good with street addresses.
+    found = ((await api(`api/geocode?q=${encodeURIComponent(text.slice(0, 200))}${near}`, {}, 15000)).results || [])
+      // "Ethel Street, Burwood, Inner West, Sydney, New South Wales, 2134, Australia" -> "Ethel Street, Burwood"
+      .map((r) => ({ ...r, label: r.label.split(', ').slice(0, 2).join(', ') }));
+  } catch { /* the place search below */ }
+  if (!found.length) {
+    const params = new URLSearchParams({ q: text.slice(0, 200), limit: '10', lang: 'en' });
+    if (nearOnly) {
+      params.set('lat', here.lat.toFixed(4));
+      params.set('lon', here.lon.toFixed(4));
+    }
+    const json = await (await fetch(`https://photon.komoot.io/api/?${params}`)).json();
+    found = (json.features || []).map((f) => {
+      const p = f.properties || {};
+      const [lon, lat] = f.geometry.coordinates;
+      const addr = p.housenumber && p.street ? `${p.housenumber} ${p.street}` : p.street;
+      return { lat, lon, label: [p.name, addr, p.city || p.locality || p.district].filter(Boolean).join(', ') };
+    });
   }
-  const found = (json.features || []).map((f) => {
-    const p = f.properties || {};
-    const [lon, lat] = f.geometry.coordinates;
-    const addr = p.housenumber && p.street ? `${p.housenumber} ${p.street}` : p.street;
-    const label = [p.name, addr, p.city || p.locality || p.district].filter(Boolean).join(', ');
-    return { lat, lon, label, d: haversineM(here.lat, here.lon, lat, lon) };
-  });
-  // A start anywhere takes the search's best match; a destination must be walkable.
+  // A start anywhere takes the best match; a destination must be walkable.
   if (!nearOnly) return found[0] || null;
-  return found.filter((r) => r.d <= WALK_MAX_M).sort((a, b) => a.d - b.d)[0] || null;
+  return found.map((r) => ({ ...r, d: haversineM(here.lat, here.lon, r.lat, r.lon) }))
+    .filter((r) => r.d <= WALK_MAX_M)[0] || null;
 }
 
 const WALK_MAX_M = 50000; // further than this is not a walk: use Travel options
@@ -233,9 +234,27 @@ function stepAction(s) {
   }
 }
 
-function stepText(s, i, n) {
+function stepText(s) {
   const walkOn = s.type !== 'arrive' && s.distance ? `, then walk ${formatDistance(s.distance)}` : '';
-  return `${stepAction(s)}${walkOn}. Step ${i + 1} of ${n}.`;
+  return `${stepAction(s)}${walkOn}.`;
+}
+
+/** The steps as a plain numbered list, read by swiping like any other text. */
+function showSteps() {
+  const ol = $('journey-steps');
+  ol.replaceChildren(...st.walk.steps.map((s, i) => {
+    const li = document.createElement('li');
+    li.textContent = `${i + 1}. ${stepText(s)}`;
+    return li;
+  }));
+}
+
+/** Mark the step guidance has reached. */
+function markStep(i) {
+  for (const [k, li] of [...$('journey-steps').children].entries()) {
+    if (k === i) li.setAttribute('aria-current', 'step');
+    else li.removeAttribute('aria-current');
+  }
 }
 
 async function planWalk(from, to) {
@@ -269,6 +288,19 @@ async function planWalk(from, to) {
     return say(err.message);
   }
   if (seq !== st.seq) return;
+  // Platform numbers ("2;3") are not names; fold tiny steps (inside a
+  // station, a few metres apart) into the next one.
+  const steps = [];
+  for (const step of res.steps) {
+    if (/^[\d;,\s]*$/.test(step.name || '')) step.name = '';
+    const prev = steps[steps.length - 1];
+    if (prev && prev.type !== 'depart' && prev.distance < 10 && step.type !== 'arrive') {
+      steps[steps.length - 1] = { ...step, distance: step.distance + prev.distance };
+      continue;
+    }
+    steps.push(step);
+  }
+  res.steps = steps;
   for (const step of res.steps) {
     if (!step.name && step.lat != null) {
       const n = street.nearestStreet(step.lat, step.lon, 30);
@@ -278,25 +310,12 @@ async function planWalk(from, to) {
   st.walk = res;
   st.walk.toLabel = b.label;
   st.stepIdx = 0;
-  stepPicker.refresh();
+  showSteps();
   showOnly('journey-walk');
   const mins = Math.max(1, Math.round(res.duration / 60));
   const summary = `Walking route to ${b.label}: ${formatDistance(res.distance)}, about ${mins} minute${mins === 1 ? '' : 's'}, ${res.steps.length} steps.`;
   setPrompt(summary);
-  $('journey-step-list').focus();
-  say(`${summary} ${stepText(res.steps[0], 0, res.steps.length)}`);
-}
-
-function readSteps() {
-  if (!st.walk) return;
-  const n = st.walk.steps.length;
-  say(st.walk.steps.map((s, i) => stepText(s, i, n)).join(' '));
-}
-
-function goToStep() {
-  const s = st.walk && st.walk.steps[st.stepIdx];
-  if (!s || s.lat == null) return;
-  hooks.goTo({ lat: s.lat, lon: s.lon, name: `Step ${st.stepIdx + 1}`, kind: stepAction(s) });
+  say(summary);
 }
 
 // ── Live guidance ─────────────────────────────────────────────────────────
@@ -311,7 +330,33 @@ const AT_M = 15;         // within this of a turn: you are at it
 const OFF_ROUTE_M = 45;  // further than this from the route line: off route
 const ARRIVE_M = 20;
 
-const guide = { watch: null, next: 1, warned: -1, off: false, wakeLock: null, line: null };
+const guide = { watch: null, next: 1, warned: -1, off: false, wakeLock: null, line: null, last: null, heading: null, called: new Set() };
+
+const CALLOUT_M = 25;    // places this close, beside or just ahead, are called out
+
+/** The category of places called out on a walk (Settings): 'none', 'all' or a place category. */
+export function calloutCategory() {
+  return settings.get('walkCallouts') || 'food';
+}
+
+/** Call out one place in the chosen category beside or just ahead: "Cafe Julz, cafe, on your left." */
+function calloutPlace(lat, lon) {
+  const cat = calloutCategory();
+  if (cat === 'none' || guide.heading == null) return false;
+  const cats = cat === 'all' ? null : new Set([cat]);
+  for (const p of street.placesNear(lat, lon, CALLOUT_M, 20, cats)) {
+    // The same name within about 100 metres is the same place listed twice.
+    const key = `${p.name}|${p.lat.toFixed(3)}|${p.lon.toFixed(3)}`;
+    if (guide.called.has(key)) continue;
+    const rel = ((p.bearing - guide.heading + 540) % 360) - 180;
+    if (Math.abs(rel) > 110) continue; // behind you: passed already
+    guide.called.add(key);
+    const side = Math.abs(rel) < 20 ? 'ahead' : rel < 0 ? 'on your left' : 'on your right';
+    say(`${p.name}, ${p.kind}, ${side}.`);
+    return true;
+  }
+  return false;
+}
 
 function lineOf(walkRes) {
   if (!guide.line) guide.line = decodePolyline(walkRes.line);
@@ -337,9 +382,16 @@ function distToLine(lat, lon, line) {
 
 function onGuidePosition(pos) {
   const w = st.walk;
-  if (!w) return;
+  if (!w || guide.watch == null) return; // guidance has stopped
   const { latitude: lat, longitude: lon, accuracy } = pos.coords;
   hooks.follow({ lat, lon });
+  street.ensureArea(lat, lon); // places along the way need the map data here
+  // Which way you are walking, from where you were a few metres ago.
+  if (!guide.last || haversineM(guide.last.lat, guide.last.lon, lat, lon) >= 5) {
+    if (guide.last) guide.heading = bearingDeg(guide.last.lat, guide.last.lon, lat, lon);
+    guide.last = { lat, lon };
+  }
+  let spoke = false;
   const steps = w.steps;
   const last = steps[steps.length - 1];
   if (haversineM(lat, lon, last.lat, last.lon) <= ARRIVE_M + Math.min(accuracy, 30)) {
@@ -360,8 +412,9 @@ function onGuidePosition(pos) {
   while (guide.next < steps.length - 1 && haversineM(lat, lon, steps[guide.next].lat, steps[guide.next].lon) <= AT_M) {
     const s = steps[guide.next];
     say(`${stepAction(s)}${s.distance ? `, then walk ${formatDistance(s.distance)}` : ''}.`);
+    spoke = true;
     st.stepIdx = guide.next;
-    stepPicker.refresh();
+    markStep(guide.next);
     guide.next += 1;
   }
   const s = steps[guide.next];
@@ -369,7 +422,10 @@ function onGuidePosition(pos) {
   if (d <= AHEAD_M && guide.warned !== guide.next && s.type !== 'arrive') {
     guide.warned = guide.next;
     say(`In ${formatDistance(Math.round(d / 5) * 5)}, ${stepAction(s).replace(/^./, (c) => c.toLowerCase())}.`);
+    spoke = true;
   }
+  // Places along the way, when no turn is being spoken.
+  if (!spoke && !guide.off) calloutPlace(lat, lon);
 }
 
 async function startGuiding() {
@@ -380,6 +436,9 @@ async function startGuiding() {
   guide.warned = -1;
   guide.off = false;
   guide.line = null;
+  guide.last = null;
+  guide.heading = null;
+  guide.called = new Set();
   try {
     if ('wakeLock' in navigator) guide.wakeLock = await navigator.wakeLock.request('screen');
   } catch { /* the screen may dim */ }
@@ -390,7 +449,7 @@ async function startGuiding() {
     }
   }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 30000 });
   $('journey-guide').textContent = 'Stop walking guidance';
-  say(`Following the route. ${stepText(st.walk.steps[0], 0, st.walk.steps.length)} Keep the page open and the screen on.`);
+  say(`Following the route. ${stepText(st.walk.steps[0])} Keep the page open and the screen on.`);
 }
 
 function stopGuiding(announce = true) {
@@ -407,15 +466,16 @@ function toggleGuiding() {
   else startGuiding();
 }
 
-async function plan() {
-  if (routeType() === 'walk') {
-    const to = $('journey-to').value.trim();
-    if (!to) {
-      $('journey-to').focus();
-      return say('Type where you are going.');
-    }
-    return planWalk($('journey-from').value.trim(), to);
+function walkClick() {
+  const to = $('journey-to').value.trim();
+  if (!to) {
+    $('journey-to').focus();
+    return say('Type where you are going.');
   }
+  return planWalk($('journey-from').value.trim(), to);
+}
+
+async function plan() {
   const from = $('journey-from').value.trim();
   const to = $('journey-to').value.trim();
   if (!to) {
@@ -761,22 +821,6 @@ function goToFood() {
 export function initJourney(h) {
   hooks = h;
   st.date = travelDays()[1].value;
-  makePicker($('journey-type'), {
-    shown: $('journey-type-value'),
-    items: () => [{ value: 'walk', label: 'Walking route' }, { value: 'travel', label: 'Travel options: fly, train, bus or drive' }],
-    get: routeType,
-    set: (v) => {
-      settings.set('routeType', v);
-      $('journey-date-row').hidden = v === 'walk';
-    },
-  });
-  $('journey-date-row').hidden = routeType() === 'walk';
-  stepPicker = makePicker($('journey-step-list'), {
-    shown: $('journey-step-value'),
-    items: () => (st.walk ? st.walk.steps.map((s, i) => ({ value: i, label: stepText(s, i, st.walk.steps.length) })) : []),
-    get: () => st.stepIdx,
-    set: (v) => { st.stepIdx = v; },
-  });
   datePicker = makePicker($('journey-date'), {
     shown: $('journey-date-value'),
     items: travelDays,
@@ -820,14 +864,12 @@ export function initJourney(h) {
   const enter = (id, fn) => $(id).addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); fn(); }
   });
-  enter('journey-from', plan);
-  enter('journey-to', plan);
+  enter('journey-from', walkClick);
+  enter('journey-to', walkClick);
   enter('journey-option-list', chooseOption);
   enter('journey-food-list', goToFood);
-  enter('journey-step-list', goToStep);
   $('journey-plan').addEventListener('click', plan);
-  $('journey-step-go').addEventListener('click', goToStep);
-  $('journey-step-read').addEventListener('click', readSteps);
+  $('journey-walk-plan').addEventListener('click', walkClick);
   $('journey-guide').addEventListener('click', toggleGuiding);
   $('journey-choose').addEventListener('click', chooseOption);
   $('journey-read').addEventListener('click', readAll);
