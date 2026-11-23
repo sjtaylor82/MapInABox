@@ -1,67 +1,50 @@
-// Steering wheel control for phones and tablets.
+// Tilt steering for phones and tablets, held sideways (landscape).
 //
-// Hold the device sideways, screen towards you, like a steering wheel.
-//   Turn it slightly left: north-west. Further left: west.
-//   Turn it slightly right: north-east. Further right: east.
-//   Tilt the top edge away from you to go; tilt further to go faster.
-//   Pull the top edge towards you to go south (south-west and south-east
-//   when turned), and hold it upright again to stop.
+// Hold the device sideways in both hands. The angle you hold it at when it
+// says "Ready" is "still". From there, tilt it gently towards the way you
+// want to go, like rolling a marble on a tray:
+//   top edge down and away: north        towards you: south
+//   left edge down: west                 right edge down: east
+//   and in between for the diagonals.
+// A new direction is spoken first, then movement starts a moment later.
+// Come back to the starting angle and it stops. Nothing needs tapping.
 //
-// The wheel angle is read against gravity, so "straight" needs no setting
-// up. How far forward or back you tilt is measured from the way you were
-// holding the device when you picked it up as a wheel, so whatever angle is
-// comfortable counts as stopped. Put the device down, or hold it upright
-// like a phone, and steering pauses: nothing moves by accident.
+// Hold it upright like a phone, or put it down, and steering pauses. Pick it
+// up sideways again and the new angle counts as still: that is also how to
+// reset "still" after shifting your grip.
 
 const TICK_MS = 50;
-
-// Wheel turn bands, in degrees from straight (left or right).
-const SLIGHT = 12;      // past this: north-west or north-east
-const FULL = 35;        // past this: west or east
-const TOO_FAR = 72;     // past this the device is held as a phone, not a wheel
-const HYSTERESIS = 3;   // a band boundary must be crossed by this much
-const TURN_SETTLE_MS = 200;
-
-// Forward or back tilt, in degrees from the calibrated hold.
-const GO = 15;          // past this, start moving
-const STOP = 9;         // back inside this, stop
-const FAST = 32;        // past this, bigger or quicker steps
-const GO_HOLD_MS = 300; // a tilt must be held this long before moving
-const CALIBRATE_MS = 400;
-const PAUSE_MS = 600;   // how long the device must be put down before steering pauses
-
+const GO_TILT = 0.17;        // about 10 degrees from still: start moving
+const STOP_TILT = 0.10;      // back within about 6 degrees: stop
+const FAST_TILT = 0.34;      // about 20 degrees: quicker steps
+const SECTOR = 45;
+const HYSTERESIS = 8;        // degrees past a sector edge before the direction changes
+const SETTLE_MS = 250;       // a direction must hold this long before it is spoken
+const AFTER_HEADING_MS = 700; // time to hear the direction before the next step
 const STEP_MS = 1100;
 const FAST_STEP_MS = 800;
-const AFTER_HEADING_MS = 700; // time to hear a new heading before the next step
+const CALIBRATE_MS = 500;
+const PAUSE_MS = 700;
 
-// Turn band to heading: [forward or stopped, going back]. Positive = left.
-const HEADING = {
-  '2': [270, 270],
-  '1': [315, 225],
-  '0': [0, 180],
-  '-1': [45, 135],
-  '-2': [90, 90],
-};
-
-const deg = (r) => (r * 180) / Math.PI;
 const rad = (d) => (d * Math.PI) / 180;
+const deg = (r) => (r * 180) / Math.PI;
+const norm = (a) => ((a % 360) + 360) % 360;
+const gap = (a, b) => Math.abs(((a - b + 540) % 360) - 180);
 
 let enabled = false;
-let reading = null;        // latest { roll, pitch } or null when not held as a wheel
+let up = null;              // smoothed "up" in the device's frame { x, y, z }
+let sideways = false;       // the latest reading is a landscape (or flat) hold
 let hasReported = false;
-let mode = 'paused';       // 'paused' | 'calibrating' | 'ready'
+let mode = 'paused';        // 'paused' | 'calibrating' | 'ready'
 let lostSince = 0;
 let calibrateSince = 0;
-let samples = [];
-let neutral = 0;
-let gear = 'stop';         // 'stop' | 'forward' | 'back'
-let pendingGear = null;
-let pendingGearSince = 0;
+let still = null;           // "up" when ready: the still position
+let side = 1;               // 1: top edge to the left (screen up is device +x); -1: to the right
+let dir = null;             // spoken direction, a compass bearing, or null when still
+let pendingDir = null;
+let pendingSince = 0;
+let moving = false;
 let fast = false;
-let turn = 0;              // -2..2
-let pendingTurn = 0;
-let pendingTurnSince = 0;
-let heading = 0;
 let nextStepAt = 0;
 let timer = null;
 let wakeLock = null;
@@ -77,7 +60,7 @@ export function isTouchDevice() {
 
 /**
  * Ask for motion access. iPhone and iPad need this to come from a tap, so
- * call it straight from a click handler. Resolves true when steering can be used.
+ * call it straight from a click handler. Resolves true when allowed.
  */
 export async function requestSteeringPermission() {
   if (!steeringSupported()) return false;
@@ -92,74 +75,67 @@ export async function requestSteeringPermission() {
   return true;
 }
 
-/**
- * The wheel angle and forward tilt from the device's orientation.
- * Works whichever way round the device is held sideways, and whether or not
- * the screen has rotated, because it uses the device's own axes.
- * Returns { roll (left positive), pitch (top away positive) } or null.
- */
-export function wheelFrom(beta, gamma) {
+/** "Up" in the device's frame (x to its right edge, y to its top, z out of the screen). */
+export function upFrom(beta, gamma) {
   const b = rad(beta);
   const g = rad(gamma);
-  // "Up" in the device's frame: x to its right edge, y to its top, z out of the screen.
-  const x = -Math.sin(g) * Math.cos(b);
-  const y = Math.sin(b);
-  const z = Math.cos(b) * Math.cos(g);
-  if (Math.hypot(x, y) < 0.34) return null; // lying nearly flat
-  // Sideways with the top to the left, +x points up; with the top to the right, -x does.
-  const roll = x >= 0 ? deg(Math.atan2(-y, x)) : deg(Math.atan2(y, -x));
-  const pitch = deg(Math.asin(Math.max(-1, Math.min(1, z))));
-  return { roll, pitch };
+  return { x: -Math.sin(g) * Math.cos(b), y: Math.sin(b), z: Math.cos(b) * Math.cos(g) };
 }
 
-function bandFor(roll, current) {
-  const a = Math.abs(roll);
-  const sign = roll >= 0 ? 1 : -1;
-  const cur = Math.abs(current);
-  const sameSide = current === 0 || Math.sign(current) === sign;
-  // Moving out to a bigger band needs the boundary plus hysteresis; back in, minus it.
-  const slight = sameSide && cur >= 1 ? SLIGHT - HYSTERESIS : SLIGHT + HYSTERESIS;
-  const full = sameSide && cur >= 2 ? FULL - HYSTERESIS : FULL + HYSTERESIS;
-  if (a >= full) return 2 * sign;
-  if (a >= slight) return sign;
-  return 0;
+/**
+ * How far the device is tilted from still, as { east, north } in radians,
+ * for a landscape hold with the top edge on `side` (1: to the left).
+ * A marble rolls downhill: the edge that goes down is the way you go.
+ */
+export function tiltFrom(u, s, sideNow) {
+  // Top edge to the left: screen up is device +x, screen right is device -y.
+  // Top edge away turns "up" from the screen's top edge towards its face.
+  const lean = (v) => Math.atan2(v.z, sideNow * v.x);
+  // Right edge down turns "up" towards the device's right-hand side.
+  const roll = (v) => Math.asin(Math.max(-1, Math.min(1, -sideNow * v.y)));
+  let north = lean(u) - lean(s);
+  if (north > Math.PI) north -= 2 * Math.PI;
+  if (north < -Math.PI) north += 2 * Math.PI;
+  return { north, east: -(roll(u) - roll(s)) };
 }
 
-function headingFor(t, g) {
-  return HEADING[String(t)][g === 'back' ? 1 : 0];
+function onOrientation(e) {
+  if (e.beta == null || e.gamma == null) return;
+  hasReported = true;
+  const u = upFrom(e.beta, e.gamma);
+  up = up ? { x: up.x + (u.x - up.x) * 0.4, y: up.y + (u.y - up.y) * 0.4, z: up.z + (u.z - up.z) * 0.4 } : u;
+  const plane = Math.hypot(up.x, up.y);
+  // Landscape when the device's long side is level, or when it is nearly flat.
+  sideways = plane < 0.35 || Math.abs(up.x) >= Math.abs(up.y) * 0.8;
+}
+
+function pointFor(bearing, current) {
+  if (current != null && gap(bearing, current) <= SECTOR / 2 + HYSTERESIS) return current;
+  return norm(Math.round(bearing / SECTOR) * SECTOR);
 }
 
 function emit(name, ...args) {
   try { handlers[name]?.(...args); } catch (err) { console.error(err); }
 }
 
-function onOrientation(e) {
-  if (e.beta == null || e.gamma == null) return;
-  hasReported = true;
-  const w = wheelFrom(e.beta, e.gamma);
-  reading = w && Math.abs(w.roll) <= TOO_FAR ? w : null;
-}
-
-function setHeading(now) {
-  const h = headingFor(turn, gear);
-  if (h === heading) return;
-  heading = h;
-  emit('heading', h, gear);
-  nextStepAt = Math.max(nextStepAt, now + AFTER_HEADING_MS);
+function chooseSide() {
+  if (Math.abs(still.x) > 0.3) return still.x > 0 ? 1 : -1;
+  const angle = (screen.orientation && screen.orientation.angle) ?? window.orientation ?? 90;
+  return norm(angle) === 270 ? -1 : 1;
 }
 
 function tick() {
   if (!enabled) return;
   const now = performance.now();
 
-  if (!reading) {
+  if (!up || !sideways) {
     if (mode === 'paused') return;
     if (!lostSince) lostSince = now;
     if (now - lostSince >= PAUSE_MS) {
-      const wasMoving = gear !== 'stop';
+      const wasMoving = moving;
       mode = 'paused';
-      gear = 'stop';
-      pendingGear = null;
+      moving = false;
+      dir = null;
       emit('paused', wasMoving);
     }
     return;
@@ -169,64 +145,54 @@ function tick() {
   if (mode === 'paused') {
     mode = 'calibrating';
     calibrateSince = now;
-    samples = [];
+    return;
   }
   if (mode === 'calibrating') {
-    samples.push(reading.pitch);
     if (now - calibrateSince < CALIBRATE_MS) return;
-    neutral = samples.reduce((a, b) => a + b, 0) / samples.length;
+    still = { ...up };
+    side = chooseSide();
     mode = 'ready';
-    gear = 'stop';
-    turn = bandFor(reading.roll, 0);
-    pendingTurn = turn;
-    heading = headingFor(turn, gear);
-    emit('ready', heading);
+    moving = false;
+    dir = null;
+    pendingDir = null;
+    emit('ready');
     return;
   }
 
-  // Steering: settle on a turn band before announcing it.
-  const band = bandFor(reading.roll, turn);
-  if (band !== pendingTurn) {
-    pendingTurn = band;
-    pendingTurnSince = now;
-  } else if (band !== turn && now - pendingTurnSince >= TURN_SETTLE_MS) {
-    turn = band;
-    setHeading(now);
-  }
+  const t = tiltFrom(up, still, side);
+  const amount = Math.hypot(t.east, t.north);
+  fast = amount >= FAST_TILT;
 
-  // Go and stop.
-  const delta = reading.pitch - neutral;
-  let target = gear;
-  if (delta >= GO) target = 'forward';
-  else if (delta <= -GO) target = 'back';
-  else if (Math.abs(delta) <= STOP) target = 'stop';
-  fast = Math.abs(delta) >= FAST;
-
-  if (target !== gear) {
-    if (target === 'stop') {
-      gear = 'stop';
-      pendingGear = null;
-      // Back to the forward heading without saying so: "Stopped" is what matters here.
-      heading = headingFor(turn, gear);
-      emit('stop');
-    } else if (pendingGear !== target) {
-      pendingGear = target;
-      pendingGearSince = now;
-    } else if (now - pendingGearSince >= GO_HOLD_MS) {
-      const from = gear;
-      gear = target;
-      pendingGear = null;
-      nextStepAt = now;
-      emit('go', gear, from);
-      setHeading(now);
+  if (amount <= STOP_TILT || (!moving && dir == null && amount < GO_TILT)) {
+    pendingDir = null;
+    if (dir != null) {
+      dir = null;
+      const wasMoving = moving;
+      moving = false;
+      emit('stop', wasMoving);
     }
-  } else {
-    pendingGear = null;
+    return;
   }
 
-  if (gear !== 'stop' && now >= nextStepAt) {
+  const point = pointFor(norm(deg(Math.atan2(t.east, t.north))), dir);
+  if (point !== dir) {
+    if (point !== pendingDir) {
+      pendingDir = point;
+      pendingSince = now;
+    } else if (now - pendingSince >= SETTLE_MS) {
+      dir = point;
+      pendingDir = null;
+      nextStepAt = now + AFTER_HEADING_MS;
+      emit('heading', dir, moving);
+    }
+  }
+  if (dir != null && now >= nextStepAt) {
+    if (!moving) {
+      moving = true;
+      emit('go', dir);
+    }
     nextStepAt = now + (fast ? FAST_STEP_MS : STEP_MS);
-    emit('step', heading, fast);
+    emit('step', dir, fast);
   }
 }
 
@@ -242,25 +208,26 @@ function onVisibility() {
   if (!enabled) return;
   if (document.visibilityState === 'visible') keepAwake();
   else {
-    // Coming back to the page must not carry on moving from where it left off.
-    reading = null;
+    // Coming back to the page starts again from still.
+    up = null;
     mode = 'paused';
-    gear = 'stop';
+    moving = false;
+    dir = null;
   }
 }
 
 /**
- * Start steering. handlers: { ready(heading), heading(heading, gear),
- * go(gear, from), step(heading, fast), stop(), paused(wasMoving) }.
+ * Start steering. handlers: { ready(), heading(bearing, moving), go(bearing),
+ * step(bearing, fast), stop(wasMoving), paused(wasMoving) }.
  */
 export function startSteering(h) {
   if (enabled) return;
   handlers = h || {};
   enabled = true;
-  reading = null;
+  up = null;
   mode = 'paused';
-  gear = 'stop';
-  pendingGear = null;
+  moving = false;
+  dir = null;
   lostSince = 0;
   window.addEventListener('deviceorientation', onOrientation);
   document.addEventListener('visibilitychange', onVisibility);
@@ -274,38 +241,26 @@ export function stopSteering() {
   document.removeEventListener('visibilitychange', onVisibility);
   clearInterval(timer);
   timer = null;
-  reading = null;
+  up = null;
   mode = 'paused';
-  gear = 'stop';
+  moving = false;
+  dir = null;
   if (wakeLock) wakeLock.release().catch(() => {});
   wakeLock = null;
-}
-
-/** Count the way the device is held now as stopped. Returns false if it isn't held as a wheel. */
-export function centre() {
-  if (!enabled || !reading) return false;
-  neutral = reading.pitch;
-  const wasMoving = gear !== 'stop';
-  gear = 'stop';
-  pendingGear = null;
-  mode = 'ready';
-  if (wasMoving) emit('stop');
-  heading = headingFor(turn, gear);
-  return true;
 }
 
 export function steeringActive() {
   return enabled;
 }
 
-/** True once the device has actually reported its orientation (desktops never do). */
+/** True once the device has reported its orientation (desktops never do). */
 export function steeringReporting() {
   return hasReported;
 }
 
-/** { mode, gear, heading, fast } for the visible status line. */
+/** { mode: 'off' | 'paused' | 'calibrating' | 'ready', moving, heading, fast } */
 export function steeringStatus() {
-  return { mode: enabled ? mode : 'off', gear, heading, fast };
+  return { mode: enabled ? mode : 'off', moving, heading: dir, fast };
 }
 
 export function buzz(ms = 15) {

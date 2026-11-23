@@ -15,7 +15,7 @@
 
   <main id="intro">
     <h1>Map in a Box Web</h1>
-    <p>Explore the world by ear. Move across the map with the arrow keys, or on a phone or tablet by holding it like a steering wheel. Map in a Box tells you the country, city or ocean you are over, and plays a sound for each country. Street mode takes you down to the streets of a town, with the places along them.</p>
+    <p>Explore the world by ear. Move across the map with the arrow keys, or on a phone or tablet by tilting it gently. Map in a Box tells you the country, city or ocean you are over, and plays a sound for each country. Street mode takes you down to the streets of a town, with the places along them.</p>
     <p>It works with NVDA, JAWS, Narrator, VoiceOver and TalkBack, or with the browser's own voice. Headphones help you hear the tones move from left to right.</p>
     <label for="intro-speech">Speech</label>
     <select id="intro-speech">
@@ -30,8 +30,8 @@
       <option value="choose">A place I choose</option>
     </select>
     <p id="intro-steer-row" hidden>
-      <label class="check"><input type="checkbox" id="intro-steer"> Steer by holding this device like a steering wheel</label>
-      <span class="small">Hold it sideways with the screen towards you. Turn it a little left for north-west, further for west; right for north-east and east. Tilt the top away from you to go, and further to go faster. Pull the top towards you to go south. Hold it upright to stop. Put it down, or hold it like a phone, and nothing moves.</span>
+      <label class="check"><input type="checkbox" id="intro-steer"> Steer by tilting this device</label>
+      <span class="small">Hold it sideways in both hands at a comfortable angle. When it says Ready, that angle is still. Tilt it gently towards the way you want to go: top edge away for north, towards you for south, left edge down for west, right edge down for east. Each direction is spoken before you move. Come back to the starting angle to stop. Nothing needs tapping.</span>
     </p>
     <p id="load-status" role="status">Loading…</p>
     <button id="start" type="button" disabled>Start exploring</button>
@@ -42,14 +42,13 @@
   <div id="app" hidden>
     <header id="toolbar">
       <span class="brand" aria-hidden="true">Map in a Box</span>
-      <button id="btn-where" type="button">Where am I (Y)</button>
+      <button id="btn-help" type="button">Help (F1)</button>
       <button id="btn-jump" type="button">Jump (J)</button>
-      <button id="btn-street" type="button" aria-pressed="false">Street mode (F11)</button>
+      <button id="btn-settings" type="button">Settings (Ctrl+,)</button>
       <button id="btn-steer" type="button" aria-pressed="false" hidden>Steering: off</button>
       <button id="btn-street-steer" type="button" hidden>Steering: pick turns</button>
-      <button id="btn-centre" type="button" hidden>Set stopped position</button>
-      <button id="btn-settings" type="button">Settings (Ctrl+,)</button>
-      <button id="btn-help" type="button">Help (F1)</button>
+      <button id="btn-street" type="button" aria-pressed="false">Street mode (F11)</button>
+      <button id="btn-where" type="button">Where am I (Y)</button>
     </header>
     <div id="map" tabindex="0" role="application" aria-roledescription="world map"
          aria-label="World map. Use the arrow keys to move. Press F1 for help.">
@@ -74,23 +73,23 @@
 
       <h2>Information</h2>
       <div class="grid">
-        <button type="button" data-key="p" data-street-only hidden>Places nearby</button>
-        <button type="button" data-key="F2">Repeat</button>
-        <button type="button" data-key="c">Country</button>
-        <button type="button" data-key="r">Region or state</button>
-        <button type="button" data-key="n">Nearest city</button>
-        <button type="button" data-key="g">Nearby features</button>
-        <button type="button" data-key="F5">Continent</button>
-        <button type="button" data-key="i">Country facts</button>
+        <button type="button" data-key="q">Air quality</button>
         <button type="button" data-key="Shift+F1">Capital</button>
+        <button type="button" data-key="F5">Continent</button>
+        <button type="button" data-key="c">Country</button>
+        <button type="button" data-key="i">Country facts</button>
         <button type="button" data-key="$">Currency</button>
         <button type="button" data-key="Shift+l">Languages</button>
-        <button type="button" data-key="w">Weather</button>
-        <button type="button" data-key="t">Local time</button>
-        <button type="button" data-key="s">Sunrise and sunset</button>
-        <button type="button" data-key="q">Air quality</button>
-        <button type="button" data-key="Shift+i">Wikipedia</button>
         <button type="button" data-key="l">Latitude and longitude</button>
+        <button type="button" data-key="t">Local time</button>
+        <button type="button" data-key="g">Nearby features</button>
+        <button type="button" data-key="n">Nearest city</button>
+        <button type="button" data-key="p" data-street-only hidden>Places nearby</button>
+        <button type="button" data-key="r">Region or state</button>
+        <button type="button" data-key="F2">Repeat</button>
+        <button type="button" data-key="s">Sunrise and sunset</button>
+        <button type="button" data-key="w">Weather</button>
+        <button type="button" data-key="Shift+i">Wikipedia</button>
       </div>
     </aside>
   </div>
@@ -137,7 +136,7 @@
       <label for="set-street-steer">Steering in street mode</label>
       <select id="set-street-steer" name="streetSteer">
         <option value="pick">Pick turns: follow the street and stop at each corner to choose the next one</option>
-        <option value="free">Free: go straight the way I steer, across blocks too</option>
+        <option value="free">Free: go straight the way I tilt, across blocks too</option>
       </select>
       <label class="check"><input type="checkbox" name="sounds"> Country sounds and tones</label>
       <label class="check"><input type="checkbox" name="geoFeatures"> Name geographic features (GeoFeatures)</label>
@@ -205,8 +204,9 @@
         <tr><td>J, Y, F2 and the information keys</td><td>Work as on the world map</td></tr>
       </tbody>
     </table>
-    <h3>Steering wheel (phones and tablets)</h3>
-    <p>Turn on Steering, then hold the device sideways with the screen towards you, like a steering wheel. When it says Steering ready, it is stopped. Turn it a little left for north-west and further left for west, a little right for north-east and further right for east. Each new heading is spoken. Tilt the top edge away from you to go, and further to go faster. Pull the top towards you to go south: south-west or south-east when turned. Hold it upright again to stop. Put the device down or hold it like a phone and steering pauses, so nothing moves by accident. Tap the map, or Set stopped position, to make the way you are holding it count as stopped. In street mode, the Steering: pick turns or free button (also in Settings) chooses how steering moves. Pick turns follows the street and stops at each corner: hold the device upright, turn it to hear each way out ("Turn left onto Ann Street, heading west"), then tilt away to take the one you picked, or pull back to go back. Free goes straight the way you steer, across blocks too.</p>
+    <h3>Steering (phones and tablets)</h3>
+    <p>Turn on Steering, then hold the device sideways in both hands at a comfortable angle. When it says Ready, that angle counts as still. Tilt it gently towards the way you want to go, like rolling a marble on a tray: top edge away for north, towards you for south, left edge down for west, right edge down for east, and in between for the diagonals. Each new direction is spoken, and you start moving a moment later. Tilt further to go faster. Come back to the starting angle and it stops. Hold it upright like a phone, or put it down, and steering pauses; pick it up sideways again and the new angle counts as still, which is how to reset it.</p>
+    <p>In street mode, the Steering: pick turns or free button (also in Settings) chooses how steering moves. Pick turns follows the street. At a corner it stops until you come back to still; then tilt towards the way you want to hear it, for example "Turn left onto Ann Street, heading west", and hold the tilt to take it. Free goes straight the way you tilt, across blocks too.</p>
     <p>Some browsers keep F6 for themselves. If F6 does nothing, use I.</p>
     <p><a href="https://github.com/sjtaylor82/MapInABox/releases/latest">Download Map in a Box for Windows and macOS</a>, with street mode, walking routes, transport and much more.</p>
     <p>Your location is only used to move the map. It is not stored anywhere except this browser. Weather, time and search send the map position to those services when you ask for them.</p>

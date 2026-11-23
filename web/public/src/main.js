@@ -28,6 +28,7 @@ const state = {
   streetName: '',     // the street being followed in street mode
   streetLabel: '',    // what was last said for the street position
   corner: null,       // picking turns: { options, idx, arrival, armed } while stopped at a corner
+  travel: null,       // picking turns: the bearing of travel along the current street
 };
 
 // ── Start-up ──────────────────────────────────────────────────────────────
@@ -45,7 +46,6 @@ async function boot() {
   $('intro-where').querySelector('[value="last"]').hidden = !hasSaved;
   $('intro-where').value = hasSaved ? 'last' : touch ? 'here' : 'choose';
   $('btn-steer').hidden = !touch;
-  $('btn-centre').hidden = true;
   $('start').addEventListener('click', start);
   try {
     await loadWorld((msg) => { $('load-status').textContent = `${msg}…`; });
@@ -73,7 +73,7 @@ async function start() {
   if (wantSteer) {
     // Don't hold up the start waiting for the permission answer.
     steerAllowed.then((ok) => {
-      if (ok) setSteering(true, { quiet: true });
+      if (ok) setSteering(true);
       else say('Steering is not available. Motion access was not allowed.');
     });
   } else {
@@ -348,8 +348,9 @@ function arriveAlong(r, pick, heading) {
   state.lon = r.lon;
   state.streetName = r.name;
   const note = r.end ? `End of ${r.name}.` : '';
-  if (!pick || !r.corner) return movedStreet({ note });
   const arrival = bearingDeg(from[0], from[1], r.lat, r.lon);
+  if (pick) state.travel = arrival;
+  if (!pick || !r.corner) return movedStreet({ note });
   const options = street.cornerOptions(r.lat, r.lon);
   // Only stop where there is a real choice, not counting the way back.
   const ahead = options.filter((o) => street.bearingGap(o.bearing, (arrival + 180) % 360) > 35);
@@ -358,7 +359,7 @@ function arriveAlong(r, pick, heading) {
   movedStreet({
     note,
     keepCorner: true,
-    suffix: `${options.length} ways. Hold it upright, turn to choose, then tilt away to go. ${optionText(cornerChoice())}`,
+    suffix: `A corner with ${options.length} ways. Come back to still, then tilt towards the way you want.`,
   });
 }
 
@@ -439,10 +440,8 @@ function choosePlace() {
   movedStreet({ prefix: `${p.name}, ${p.kind}.` });
 }
 
-// ── Steering wheel ────────────────────────────────────────────────────────
+// ── Tilt steering ─────────────────────────────────────────────────────────
 
-let crossing = false;
-let steerMoved = false;
 let steerIntroduced = false;
 
 function headingWord(h) {
@@ -454,15 +453,17 @@ function steerBlocked() {
   return !state.started || !!document.querySelector('dialog[open]');
 }
 
+const atCorner = () => state.mode === 'street' && !!state.corner;
+
 const steerHandlers = {
-  ready(heading) {
+  ready() {
     steering.buzz(30);
     audio.steerClick(true);
     showSteerStatus();
     if (steerBlocked()) return;
     say(steerIntroduced
-      ? `Steering ready. ${headingWord(heading)}.`
-      : `Steering ready, stopped, facing ${headingWord(heading).toLowerCase()}. Tilt the top away from you to go.`);
+      ? 'Ready. Hold it like this to stay still.'
+      : 'Ready. Hold it like this to stay still. Tilt it gently towards the way you want to go, and come back to stop.');
     steerIntroduced = true;
   },
   heading(heading) {
@@ -470,8 +471,8 @@ const steerHandlers = {
     audio.steerClick();
     showSteerStatus();
     if (steerBlocked()) return;
-    if (state.corner && state.mode === 'street') {
-      // At a corner the wheel picks one of the ways out.
+    if (atCorner() && state.corner.armed) {
+      // At a corner, the tilt picks one of the ways out.
       state.corner.idx = nearestOption(state.corner.options, heading);
       say(optionText(cornerChoice()));
       return;
@@ -480,33 +481,33 @@ const steerHandlers = {
   },
   go() {
     steering.buzz(25);
-    steerMoved = false;
     showSteerStatus();
+    if (!atCorner()) state.travel = null; // a fresh start goes the way you tilt
   },
   step(heading, fast) {
     showSteerStatus();
     onSteerStep(heading, fast);
   },
-  stop() {
+  stop(wasMoving) {
     steering.buzz(15);
+    audio.steerClick(true);
     showSteerStatus();
-    if (state.corner) {
-      // Arriving while tilted forward must not set off at once: stop first, then go.
+    if (atCorner()) {
+      // Arriving at a corner while tilted must not set off at once: come back to still first.
       state.corner.armed = true;
-      if (!steerBlocked()) say(`Stopped. ${optionText(cornerChoice())}`);
+      if (!steerBlocked()) say('Still. Tilt towards the way you want.');
       return;
     }
-    if (!steerBlocked() && steerMoved) say('Stopped.');
+    if (!steerBlocked() && wasMoving) say('Stopped.');
   },
   paused(wasMoving) {
     showSteerStatus();
-    if (!steerBlocked()) say(wasMoving ? 'Stopped. Steering paused.' : 'Steering paused.');
+    if (!steerBlocked()) say(`${wasMoving ? 'Stopped. ' : ''}Steering paused. Hold it sideways to steer.`);
   },
 };
 
 function onSteerStep(bearing, fast) {
-  if (steerBlocked() || crossing) return;
-  steerMoved = true;
+  if (steerBlocked()) return;
   if (state.mode === 'street') {
     const m = streetStepM() * (fast ? 2 : 1);
     if (streetSteerMode() === 'free') return streetMove(bearing, m);
@@ -514,23 +515,14 @@ function onSteerStep(bearing, fast) {
       if (state.corner.armed) takeCorner(m);
       return;
     }
-    streetFollow(bearing, m, true);
+    // Between corners, keep along the street the way you are travelling,
+    // unless you have tilted right round.
+    const dir = state.travel != null && street.bearingGap(bearing, state.travel) <= 120 ? state.travel : bearing;
+    streetFollow(dir, m, true);
     return;
   }
-  if (!state.info.onLand) {
-    // Seas are huge: a fast tilt crosses to the next country that way,
-    // and a gentle one takes bigger steps than on land.
-    if (fast) {
-      steering.buzz(40);
-      crossing = true;
-      nextCountry(bearing, compassName(bearing).replace('-', ' '));
-      // Give the landing time to be heard before steering carries on.
-      setTimeout(() => { crossing = false; }, 2500);
-      return;
-    }
-    step(bearing, 50);
-    return;
-  }
+  // Seas are huge, so steps over water are bigger.
+  if (!state.info.onLand) return step(bearing, fast ? 100 : 50);
   step(bearing, fast ? Math.max(25, stepKm() * 4) : stepKm());
 }
 
@@ -539,10 +531,9 @@ function showSteerStatus() {
   const st = steering.steeringStatus();
   el.hidden = st.mode === 'off';
   if (st.mode === 'off') return;
-  const where = headingWord(st.heading).toLowerCase();
-  if (st.mode !== 'ready') el.textContent = 'Steering paused: hold the device sideways like a wheel.';
-  else if (st.gear === 'stop') el.textContent = `Steering: stopped, facing ${where}.`;
-  else el.textContent = `Steering: going ${where}${st.fast ? ', fast' : ''}.`;
+  if (st.mode !== 'ready') el.textContent = 'Steering paused: hold the device sideways.';
+  else if (st.moving) el.textContent = `Steering: going ${headingWord(st.heading).toLowerCase()}${st.fast ? ', fast' : ''}.`;
+  else el.textContent = 'Steering: still. Tilt gently to go.';
 }
 
 // ── Step size ─────────────────────────────────────────────────────────────
@@ -609,36 +600,26 @@ function toggleStreetSteer() {
   state.corner = null;
   showStreetSteer();
   say(streetSteerMode() === 'free'
-    ? 'Steering free: it goes straight the way you steer, across blocks too.'
+    ? 'Steering free: it goes straight the way you tilt, across blocks too.'
     : 'Steering picks turns: it follows the street and stops at each corner so you can choose the next one.');
 }
 
-function setSteering(on, { quiet = false } = {}) {
+function setSteering(on) {
   settings.set('steering', on);
   if (on) steering.startSteering(steerHandlers);
   else steering.stopSteering();
   $('btn-steer').textContent = on ? 'Steering: on' : 'Steering: off';
   $('btn-steer').setAttribute('aria-pressed', String(on));
-  $('btn-centre').hidden = !on;
   showSteerStatus();
   if (!on) return say('Steering off.');
   steerIntroduced = false;
-  const how = 'Hold the device sideways with the screen towards you, like a steering wheel.';
-  say(quiet ? `Steering on. ${how}` : `Steering on. ${how} Turn it to steer, tilt the top away to go, and hold it upright to stop.`);
+  say('Steering on. Hold the device sideways in both hands, at a comfortable angle.');
 }
 
 async function toggleSteering() {
   if (steering.steeringActive()) return setSteering(false);
   if (await steering.requestSteeringPermission()) setSteering(true);
   else say('Steering is not available. Motion access was not allowed.');
-}
-
-function centreNow() {
-  if (!steering.steeringActive()) return;
-  say(steering.centre()
-    ? 'Stopped. The way you are holding it now counts as stopped.'
-    : 'Hold the device sideways like a steering wheel first, then try again.');
-  showSteerStatus();
 }
 
 /** iPhone only lets the page talk after a tap, so say something quietly from the Start tap. */
@@ -1027,9 +1008,6 @@ for (const btn of document.querySelectorAll('#panel [data-move]')) {
 }
 $('btn-where').addEventListener('click', whereAmI);
 $('jump-here').addEventListener('click', whereAmI);
-$('btn-centre').addEventListener('click', centreNow);
-// Tapping the map (a double tap with VoiceOver or TalkBack) sets the stopped position while steering.
-$('map').addEventListener('click', () => { if (steering.steeringActive()) centreNow(); });
 // Keys pressed while focus is on the toolbar still drive the map.
 document.addEventListener('keydown', (e) => {
   if (e.target === $('map') || document.querySelector('dialog[open]')) return;
