@@ -431,3 +431,41 @@ export function drawStreets(g, w, h, lat, lon, zoom, colours) {
     g.fillText(name, x, y - 12);
   }
 }
+
+// ── Picking turns at a corner ─────────────────────────────────────────────
+
+/**
+ * The ways out of the corner at exactly (lat, lon), as reached by followStep:
+ * [{ name, bearing, wi, vi, dir }], sorted by compass bearing.
+ */
+export function cornerOptions(lat, lon) {
+  const node = nodeAt(lat, lon);
+  if (!node) return [];
+  const out = [];
+  for (const [wi, vi] of node.refs) {
+    const pts = ways[wi].pts;
+    for (const dir of [1, -1]) {
+      const j = vi + dir;
+      if (j < 0 || j >= pts.length) continue;
+      const bearing = bearingDeg(lat, lon, pts[j][0], pts[j][1]);
+      const name = ways[wi].name;
+      if (out.some((o) => o.name === name && angleDiff(o.bearing, bearing) < 20)) continue;
+      out.push({ name, bearing, wi, vi, dir });
+    }
+  }
+  return out.sort((a, b) => a.bearing - b.bearing);
+}
+
+/** Set off along one of cornerOptions, for up to distM metres (stopping at the next corner). */
+export function takeBranch(opt, distM) {
+  const [lat, lon] = ways[opt.wi].pts[opt.vi];
+  const start = opt.dir > 0
+    ? { wi: opt.wi, si: opt.vi, t: 0, dir: 1, lat, lon }
+    : { wi: opt.wi, si: opt.vi - 1, t: 1, dir: -1, lat, lon };
+  return walkAlong(start, distM, opt.bearing);
+}
+
+/** angleDiff for main.js: degrees between two bearings, 0 to 180. */
+export function bearingGap(a, b) {
+  return angleDiff(a, b);
+}

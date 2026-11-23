@@ -27,6 +27,7 @@ const state = {
   mode: 'world',      // 'world' | 'street'
   streetName: '',     // the street being followed in street mode
   streetLabel: '',    // what was last said for the street position
+  corner: null,       // picking turns: { options, idx, arrival, armed } while stopped at a corner
 };
 
 // ── Start-up ──────────────────────────────────────────────────────────────
@@ -257,12 +258,14 @@ function showMode() {
     ? 'Street map. Use the arrow keys to move. Press P for places nearby, F11 for the world map.'
     : 'World map. Use the arrow keys to move. Press F11 for street mode, F1 for help.');
   for (const el of document.querySelectorAll('[data-street-only]')) el.hidden = !inStreet;
+  showStreetSteer();
   setStreetDrawer(inStreet ? street.drawStreets : null);
   showStep();
 }
 
-async function movedStreet({ tone = true, prefix = '', note = '' } = {}) {
+async function movedStreet({ tone = true, prefix = '', note = '', suffix = '', keepCorner = false } = {}) {
   const seq = ++state.seq;
+  if (!keepCorner) state.corner = null;
   const { lat, lon } = state;
   settings.set('position', { lat, lon });
   if (tone) audio.spatialTone(lat, lon, toneBounds());
@@ -282,7 +285,7 @@ async function movedStreet({ tone = true, prefix = '', note = '' } = {}) {
   state.streetLabel = label;
   const near = street.nearestStreet(lat, lon, 25, state.streetName);
   state.streetName = near ? near.name : '';
-  say([prefix, note, label.endsWith('.') ? label : `${label}.`].filter(Boolean).join(' '));
+  say([prefix, note, label.endsWith('.') ? label : `${label}.`, suffix].filter(Boolean).join(' '));
   updateMapView(lat, lon, label, null);
   // Keep the country and region up to date for C, R and the other keys.
   describe(lat, lon, state.info).then((info) => {
@@ -315,8 +318,13 @@ function streetMove(bearing, m) {
 
 let noStreetSaidAt = 0;
 
+/** Steering in street mode: 'pick' turns at corners, or go 'free'. */
+function streetSteerMode() {
+  return settings.get('streetSteer') === 'free' ? 'free' : 'pick';
+}
+
 /** Follow the streets the way nearest a heading, stopping at the next corner. */
-function streetFollow(bearing, m) {
+function streetFollow(bearing, m, pick = false) {
   if (!street.areaReady(state.lat, state.lon)) return streetMove(bearing, m);
   const r = street.followStep(state.lat, state.lon, bearing, m, state.streetName);
   if (!r) return streetMove(bearing, m); // not on a street yet: head straight for one
@@ -330,10 +338,64 @@ function streetFollow(bearing, m) {
     }
     return;
   }
+  arriveAlong(r, pick, bearing);
+}
+
+/** After a step along the streets. When picking turns, stop at a corner with a choice of ways. */
+function arriveAlong(r, pick, heading) {
+  const from = [state.lat, state.lon];
   state.lat = r.lat;
   state.lon = r.lon;
   state.streetName = r.name;
-  movedStreet({ note: r.end ? `End of ${r.name}.` : '' });
+  const note = r.end ? `End of ${r.name}.` : '';
+  if (!pick || !r.corner) return movedStreet({ note });
+  const arrival = bearingDeg(from[0], from[1], r.lat, r.lon);
+  const options = street.cornerOptions(r.lat, r.lon);
+  // Only stop where there is a real choice, not counting the way back.
+  const ahead = options.filter((o) => street.bearingGap(o.bearing, (arrival + 180) % 360) > 35);
+  if (ahead.length < 2) return movedStreet({ note });
+  state.corner = { options, idx: nearestOption(options, heading), arrival, armed: false };
+  movedStreet({
+    note,
+    keepCorner: true,
+    suffix: `${options.length} ways. Hold it upright, turn to choose, then tilt away to go. ${optionText(cornerChoice())}`,
+  });
+}
+
+function nearestOption(options, heading) {
+  let best = 0;
+  options.forEach((o, i) => {
+    if (street.bearingGap(o.bearing, heading) < street.bearingGap(options[best].bearing, heading)) best = i;
+  });
+  return best;
+}
+
+function cornerChoice() {
+  return state.corner.options[state.corner.idx];
+}
+
+/** "Turn left onto Ann Street, heading west." relative to the way you arrived at the corner. */
+function optionText(o) {
+  const rel = ((o.bearing - state.corner.arrival + 540) % 360) - 180;
+  const same = o.name === state.streetName;
+  const onto = same ? 'along' : 'onto';
+  const side = rel < 0 ? 'left' : 'right';
+  const a = Math.abs(rel);
+  let action;
+  if (a <= 20) action = 'Straight on';
+  else if (a > 155) action = 'Back';
+  else if (a < 55) action = `Bear ${side}`;
+  else if (a < 125) action = `Turn ${side}`;
+  else action = `Sharp ${side}`;
+  return `${action} ${onto} ${o.name}, heading ${compassName(o.bearing).replace('-', ' ')}.`;
+}
+
+/** Set off from a corner along the chosen way. */
+function takeCorner(m) {
+  const o = cornerChoice();
+  state.corner = null;
+  state.streetName = o.name;
+  arriveAlong(street.takeBranch(o, m), true, o.bearing);
 }
 
 // ── Places nearby ─────────────────────────────────────────────────────────
@@ -407,7 +469,14 @@ const steerHandlers = {
     steering.buzz(12);
     audio.steerClick();
     showSteerStatus();
-    if (!steerBlocked()) say(`${headingWord(heading)}.`);
+    if (steerBlocked()) return;
+    if (state.corner && state.mode === 'street') {
+      // At a corner the wheel picks one of the ways out.
+      state.corner.idx = nearestOption(state.corner.options, heading);
+      say(optionText(cornerChoice()));
+      return;
+    }
+    say(`${headingWord(heading)}.`);
   },
   go() {
     steering.buzz(25);
@@ -421,6 +490,12 @@ const steerHandlers = {
   stop() {
     steering.buzz(15);
     showSteerStatus();
+    if (state.corner) {
+      // Arriving while tilted forward must not set off at once: stop first, then go.
+      state.corner.armed = true;
+      if (!steerBlocked()) say(`Stopped. ${optionText(cornerChoice())}`);
+      return;
+    }
     if (!steerBlocked() && steerMoved) say('Stopped.');
   },
   paused(wasMoving) {
@@ -434,8 +509,12 @@ function onSteerStep(bearing, fast) {
   steerMoved = true;
   if (state.mode === 'street') {
     const m = streetStepM() * (fast ? 2 : 1);
-    if (settings.get('streetSteer') === 'free') streetMove(bearing, m);
-    else streetFollow(bearing, m);
+    if (streetSteerMode() === 'free') return streetMove(bearing, m);
+    if (state.corner) {
+      if (state.corner.armed) takeCorner(m);
+      return;
+    }
+    streetFollow(bearing, m, true);
     return;
   }
   if (!state.info.onLand) {
@@ -513,6 +592,25 @@ function setStepIndex(i, announce = true) {
   settings.set(inStreet ? 'streetStepM' : 'stepKm', sizes[idx]);
   showStep();
   if (announce) say(`Step size ${inStreet ? streetStepText(sizes[idx]) : stepText(sizes[idx])}.`);
+}
+
+function showStreetSteer() {
+  const btn = $('btn-street-steer');
+  btn.hidden = state.mode !== 'street' || $('btn-steer').hidden;
+  btn.textContent = streetSteerLabel();
+}
+
+function streetSteerLabel() {
+  return streetSteerMode() === 'free' ? 'Steering: free' : 'Steering: pick turns';
+}
+
+function toggleStreetSteer() {
+  settings.set('streetSteer', streetSteerMode() === 'free' ? 'pick' : 'free');
+  state.corner = null;
+  showStreetSteer();
+  say(streetSteerMode() === 'free'
+    ? 'Steering free: it goes straight the way you steer, across blocks too.'
+    : 'Steering picks turns: it follows the street and stops at each corner so you can choose the next one.');
 }
 
 function setSteering(on, { quiet = false } = {}) {
@@ -852,7 +950,7 @@ function openSettings() {
   f.sounds.checked = settings.get('sounds');
   f.visualAssist.checked = settings.get('visualAssist');
   f.geoFeatures.checked = settings.get('geoFeatures');
-  f.streetSteer.value = settings.get('streetSteer') === 'free' ? 'free' : 'follow';
+  f.streetSteer.value = streetSteerMode();
   $('settings-dialog').showModal();
   f.units.focus();
 }
@@ -864,6 +962,7 @@ function saveSettings(e) {
   settings.set('speech', f.speech.value);
   settings.set('geoFeatures', f.geoFeatures.checked);
   settings.set('streetSteer', f.streetSteer.value);
+  showStreetSteer();
   audio.setSoundsEnabled(f.sounds.checked);
   settings.set('visualAssist', f.visualAssist.checked);
   applyVisualAssist();
@@ -910,6 +1009,7 @@ $('btn-jump').addEventListener('click', () => openJump());
 $('btn-help').addEventListener('click', openHelp);
 $('btn-settings').addEventListener('click', openSettings);
 $('btn-steer').addEventListener('click', toggleSteering);
+$('btn-street-steer').addEventListener('click', toggleStreetSteer);
 $('btn-street').addEventListener('click', () => { if (state.started) toggleStreetMode(); });
 showStep();
 // The slider reports its own new value (aria-valuetext), so it doesn't speak as well.

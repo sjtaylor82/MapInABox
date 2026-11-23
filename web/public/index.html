@@ -46,6 +46,7 @@
       <button id="btn-jump" type="button">Jump (J)</button>
       <button id="btn-street" type="button" aria-pressed="false">Street mode (F11)</button>
       <button id="btn-steer" type="button" aria-pressed="false" hidden>Steering: off</button>
+      <button id="btn-street-steer" type="button" hidden>Steering: pick turns</button>
       <button id="btn-centre" type="button" hidden>Set stopped position</button>
       <button id="btn-settings" type="button">Settings (Ctrl+,)</button>
       <button id="btn-help" type="button">Help (F1)</button>
@@ -135,8 +136,8 @@
       </select>
       <label for="set-street-steer">Steering in street mode</label>
       <select id="set-street-steer" name="streetSteer">
-        <option value="follow">Follow the streets, taking the turn nearest my heading</option>
-        <option value="free">Free: go straight that way, across blocks too</option>
+        <option value="pick">Pick turns: follow the street and stop at each corner to choose the next one</option>
+        <option value="free">Free: go straight the way I steer, across blocks too</option>
       </select>
       <label class="check"><input type="checkbox" name="sounds"> Country sounds and tones</label>
       <label class="check"><input type="checkbox" name="geoFeatures"> Name geographic features (GeoFeatures)</label>
@@ -205,7 +206,7 @@
       </tbody>
     </table>
     <h3>Steering wheel (phones and tablets)</h3>
-    <p>Turn on Steering, then hold the device sideways with the screen towards you, like a steering wheel. When it says Steering ready, it is stopped. Turn it a little left for north-west and further left for west, a little right for north-east and further right for east. Each new heading is spoken. Tilt the top edge away from you to go, and further to go faster. Pull the top towards you to go south: south-west or south-east when turned. Hold it upright again to stop. Put the device down or hold it like a phone and steering pauses, so nothing moves by accident. Tap the map, or Set stopped position, to make the way you are holding it count as stopped. In street mode, steering follows the streets or goes freely, as chosen in Settings.</p>
+    <p>Turn on Steering, then hold the device sideways with the screen towards you, like a steering wheel. When it says Steering ready, it is stopped. Turn it a little left for north-west and further left for west, a little right for north-east and further right for east. Each new heading is spoken. Tilt the top edge away from you to go, and further to go faster. Pull the top towards you to go south: south-west or south-east when turned. Hold it upright again to stop. Put the device down or hold it like a phone and steering pauses, so nothing moves by accident. Tap the map, or Set stopped position, to make the way you are holding it count as stopped. In street mode, the Steering: pick turns or free button (also in Settings) chooses how steering moves. Pick turns follows the street and stops at each corner: hold the device upright, turn it to hear each way out ("Turn left onto Ann Street, heading west"), then tilt away to take the one you picked, or pull back to go back. Free goes straight the way you steer, across blocks too.</p>
     <p>Some browsers keep F6 for themselves. If F6 does nothing, use I.</p>
     <p><a href="https://github.com/sjtaylor82/MapInABox/releases/latest">Download Map in a Box for Windows and macOS</a>, with street mode, walking routes, transport and much more.</p>
     <p>Your location is only used to move the map. It is not stored anywhere except this browser. Weather, time and search send the map position to those services when you ask for them.</p>

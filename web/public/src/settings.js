@@ -15,7 +15,7 @@ const DEFAULTS = {
   zoom: 1,
   stepKm: 5,                // arrow keys and steering on land
   streetStepM: 20,          // arrow keys and steering in street mode, metres
-  streetSteer: 'follow',    // steering in street mode: 'follow' the streets or go 'free'
+  streetSteer: 'pick',      // steering in street mode: 'pick' turns at corners or go 'free'
   steering: null,           // steering wheel on a phone or tablet (null: not chosen yet, offered on touch devices)
   position: null,           // { lat, lon } last position
   jumpHistory: [],
