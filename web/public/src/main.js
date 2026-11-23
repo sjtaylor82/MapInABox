@@ -1345,6 +1345,13 @@ $('btn-where').addEventListener('click', whereAmI);
 $('btn-journey').addEventListener('click', openJourney);
 initJourney({
   getHere: () => ({ lat: state.lat, lon: state.lon, label: state.streetLabel || state.info.label || state.info.city }),
+  // Live walking guidance: keep the map on where you really are, quietly.
+  follow: (p) => {
+    state.lat = p.lat;
+    state.lon = p.lon;
+    updateMapView(p.lat, p.lon, null, null);
+    settings.set('position', { lat: p.lat, lon: p.lon });
+  },
   // A food place on the journey: go there, in street mode if it is on.
   goTo: (p) => {
     $('map').focus();

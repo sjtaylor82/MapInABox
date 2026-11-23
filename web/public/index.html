@@ -41,7 +41,7 @@
       <button id="btn-street-steer" type="button" hidden>Steering: pick turns</button>
       <button id="btn-street" type="button" aria-pressed="false">Street mode (F11)</button>
       <button id="btn-where" type="button">Where am I (Y)</button>
-      <button id="btn-journey" type="button">Journey planner</button>
+      <button id="btn-journey" type="button">Route</button>
     </header>
     <div id="map" tabindex="0" role="application" aria-roledescription="world map"
          aria-label="World map. Use the arrow keys to move. Press F1 for help.">
@@ -83,15 +83,28 @@
       </section>
 
       <details id="journey-section">
-        <summary><h2 id="journey-title" tabindex="-1">Journey planner</h2></summary>
+        <summary><h2 id="journey-title" tabindex="-1">Route</h2></summary>
+        <label for="journey-type" class="picker-label">Type</label>
+        <input id="journey-type" type="range" class="picker">
+        <p id="journey-type-value" class="picker-value" aria-hidden="true"></p>
         <label for="journey-from">From (leave empty to start where you are on the map)</label>
         <input id="journey-from" type="text" autocomplete="off" spellcheck="false">
         <label for="journey-to">To</label>
         <input id="journey-to" type="text" autocomplete="off" spellcheck="false">
-        <label for="journey-date" class="picker-label">Travel date, for flight times</label>
-        <input id="journey-date" type="range" class="picker">
-        <p id="journey-date-value" class="picker-value" aria-hidden="true"></p>
-        <button type="button" id="journey-plan">Plan journey</button>
+        <div id="journey-date-row">
+          <label for="journey-date" class="picker-label">Travel date, for flight times</label>
+          <input id="journey-date" type="range" class="picker">
+          <p id="journey-date-value" class="picker-value" aria-hidden="true"></p>
+        </div>
+        <button type="button" id="journey-plan">Get route</button>
+        <div id="journey-walk" hidden>
+          <button type="button" id="journey-guide">Start walking guidance</button>
+          <label for="journey-step-list" class="picker-label">Step</label>
+          <input id="journey-step-list" type="range" class="picker">
+          <p id="journey-step-value" class="picker-value" aria-hidden="true"></p>
+          <button type="button" id="journey-step-go">Go to this step</button>
+          <button type="button" id="journey-step-read">Read all steps</button>
+        </div>
         <p id="journey-prompt"></p>
         <div id="journey-options" hidden>
           <label for="journey-option-list" class="picker-label">Option</label>

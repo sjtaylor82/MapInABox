@@ -10,7 +10,8 @@
 
 import { say } from './speech.js';
 import { makePicker } from './picker.js';
-import { formatDistance } from './geo.js';
+import { formatDistance, compassName, haversineM } from './geo.js';
+import { settings } from './settings.js';
 import * as street from './street.js';
 import { ROAD_KINDS, decodePolyline, encodePolyline } from './rome2rio.js';
 
@@ -29,8 +30,10 @@ const st = {
   flights: [], flightIdx: 0, flightsFor: -1,
   flightCache: new Map(),
   food: [], foodIdx: 0,
+  walk: null, stepIdx: 0,
   seq: 0,
 };
+let stepPicker;
 let datePicker; let optionPicker; let legPicker; let flightPicker; let foodPicker;
 
 // ── Wording ───────────────────────────────────────────────────────────────
@@ -162,10 +165,248 @@ function setPrompt(text) {
 }
 
 function showOnly(...ids) {
-  for (const id of ['journey-options', 'journey-legs', 'journey-food']) $(id).hidden = !ids.includes(id);
+  for (const id of ['journey-options', 'journey-legs', 'journey-food', 'journey-walk']) $(id).hidden = !ids.includes(id);
+}
+
+// ── Walking route ─────────────────────────────────────────────────────────
+
+/** 'walk' for a walking route, 'travel' for Rome2Rio travel options. */
+function routeType() {
+  return settings.get('routeType') === 'travel' ? 'travel' : 'walk';
+}
+
+/**
+ * A typed place as a point: a place already in the street data with that
+ * name, nearest first, or else a place search near where you are.
+ */
+async function locate(text, here) {
+  const want = text.toLowerCase();
+  // Places nearby by name first, once the map around here has loaded.
+  await Promise.race([street.ensureRadius(here.lat, here.lon, 2000), new Promise((r) => setTimeout(r, 8000))]);
+  const local = street.placesNear(here.lat, here.lon, 5000, 2000).find((p) => p.name.toLowerCase().includes(want));
+  if (local) return { lat: local.lat, lon: local.lon, label: local.name };
+  const params = new URLSearchParams({ q: text.slice(0, 200), limit: '10', lang: 'en', lat: here.lat.toFixed(4), lon: here.lon.toFixed(4) });
+  let json;
+  try {
+    json = await api(`api/search?${params}`, {}, 15000);
+  } catch {
+    json = await (await fetch(`https://photon.komoot.io/api/?${params}`)).json();
+  }
+  const found = (json.features || []).map((f) => {
+    const p = f.properties || {};
+    const [lon, lat] = f.geometry.coordinates;
+    const addr = p.housenumber && p.street ? `${p.housenumber} ${p.street}` : p.street;
+    const label = [p.name, addr, p.city || p.locality || p.district].filter(Boolean).join(', ');
+    return { lat, lon, label, d: haversineM(here.lat, here.lon, lat, lon) };
+  }).filter((r) => r.d <= WALK_MAX_M).sort((a, b) => a.d - b.d);
+  return found[0] || null;
+}
+
+const WALK_MAX_M = 50000; // further than this is not a walk: use Travel options
+
+const TURN = {
+  left: 'turn left', right: 'turn right', 'slight left': 'bear left', 'slight right': 'bear right',
+  'sharp left': 'turn sharp left', 'sharp right': 'turn sharp right', straight: 'go straight on', uturn: 'turn round',
+};
+
+/** What to do at a step, without the distance: "Turn left onto Middle Street". */
+function stepAction(s) {
+  // Footpaths often have no name: say which street the turn is by instead.
+  const by = !s.name && s.near ? `, by ${s.near}` : '';
+  const onto = s.name ? ` onto ${s.name}` : by;
+  const along = s.name ? ` along ${s.name}` : by;
+  const turn = TURN[s.modifier] || 'continue';
+  switch (s.type) {
+    case 'depart': return `Start${along}, heading ${compassName(s.bearing || 0).replace('-', ' ')}`;
+    case 'arrive': return 'Arrive at your destination';
+    case 'roundabout': case 'rotary': return `At the roundabout, take exit ${s.exit || 1}${onto}`;
+    case 'end of road': return `At the end of the road, ${turn}${onto}`;
+    case 'fork': return `At the fork, ${turn}${onto}`;
+    case 'new name': case 'continue': return `Continue${onto || along}`;
+    default: return `${turn[0].toUpperCase()}${turn.slice(1)}${onto}`;
+  }
+}
+
+function stepText(s, i, n) {
+  const walkOn = s.type !== 'arrive' && s.distance ? `, then walk ${formatDistance(s.distance)}` : '';
+  return `${stepAction(s)}${walkOn}. Step ${i + 1} of ${n}.`;
+}
+
+async function planWalk(from, to) {
+  stopGuiding(false);
+  const here = hooks.getHere();
+  const seq = ++st.seq;
+  showOnly();
+  say(`Finding a walking route to ${to}…`);
+  setPrompt('');
+  let a = null;
+  let b = null;
+  try {
+    a = from ? await locate(from, here) : { lat: here.lat, lon: here.lon, label: here.label || 'where you are' };
+    if (a) b = await locate(to, a);
+  } catch { /* reported below */ }
+  if (seq !== st.seq) return;
+  if (!a || !b) {
+    const msg = `${!a ? from : to} was not found within ${formatDistance(WALK_MAX_M)}. Try a street address, or Travel options for longer trips.`;
+    setPrompt(msg);
+    return say(msg);
+  }
+  let res;
+  try {
+    res = await api(`api/walk?from=${a.lat.toFixed(5)},${a.lon.toFixed(5)}&to=${b.lat.toFixed(5)},${b.lon.toFixed(5)}`, {}, 30000);
+  } catch (err) {
+    if (seq !== st.seq) return;
+    setPrompt(err.message);
+    return say(err.message);
+  }
+  if (seq !== st.seq) return;
+  for (const step of res.steps) {
+    if (!step.name && step.lat != null) {
+      const n = street.nearestStreet(step.lat, step.lon, 30);
+      if (n) step.near = n.name;
+    }
+  }
+  st.walk = res;
+  st.walk.toLabel = b.label;
+  st.stepIdx = 0;
+  stepPicker.refresh();
+  showOnly('journey-walk');
+  const mins = Math.max(1, Math.round(res.duration / 60));
+  const summary = `Walking route to ${b.label}: ${formatDistance(res.distance)}, about ${mins} minute${mins === 1 ? '' : 's'}, ${res.steps.length} steps.`;
+  setPrompt(summary);
+  $('journey-step-list').focus();
+  say(`${summary} ${stepText(res.steps[0], 0, res.steps.length)}`);
+}
+
+function readSteps() {
+  if (!st.walk) return;
+  const n = st.walk.steps.length;
+  say(st.walk.steps.map((s, i) => stepText(s, i, n)).join(' '));
+}
+
+function goToStep() {
+  const s = st.walk && st.walk.steps[st.stepIdx];
+  if (!s || s.lat == null) return;
+  hooks.goTo({ lat: s.lat, lon: s.lon, name: `Step ${st.stepIdx + 1}`, kind: stepAction(s) });
+}
+
+// ── Live guidance ─────────────────────────────────────────────────────────
+//
+// Follows the device's location along the walking route: the next turn is
+// announced as you approach it ("In 30 metres, turn left onto ...") and
+// again when you reach it, going off the route is announced, and arriving
+// ends it. Works while the page is open and the screen is on.
+
+const AHEAD_M = 40;      // announce the next turn this far before it
+const AT_M = 15;         // within this of a turn: you are at it
+const OFF_ROUTE_M = 45;  // further than this from the route line: off route
+const ARRIVE_M = 20;
+
+const guide = { watch: null, next: 1, warned: -1, off: false, wakeLock: null, line: null };
+
+function lineOf(walkRes) {
+  if (!guide.line) guide.line = decodePolyline(walkRes.line);
+  return guide.line;
+}
+
+function distToLine(lat, lon, line) {
+  let best = Infinity;
+  const k = Math.cos((lat * Math.PI) / 180);
+  for (let i = 0; i + 1 < line.length; i++) {
+    const [la1, lo1] = line[i];
+    const [la2, lo2] = line[i + 1];
+    const ax = (lo1 - lon) * 111000 * k;
+    const ay = (la1 - lat) * 111000;
+    const dx = (lo2 - lo1) * 111000 * k;
+    const dy = (la2 - la1) * 111000;
+    const len2 = dx * dx + dy * dy;
+    const t = len2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2)) : 0;
+    best = Math.min(best, Math.hypot(ax + t * dx, ay + t * dy));
+  }
+  return best;
+}
+
+function onGuidePosition(pos) {
+  const w = st.walk;
+  if (!w) return;
+  const { latitude: lat, longitude: lon, accuracy } = pos.coords;
+  hooks.follow({ lat, lon });
+  const steps = w.steps;
+  const last = steps[steps.length - 1];
+  if (haversineM(lat, lon, last.lat, last.lon) <= ARRIVE_M + Math.min(accuracy, 30)) {
+    say(`You have arrived at ${w.toLabel}.`);
+    stopGuiding(false);
+    return;
+  }
+  // Off the route?
+  const off = distToLine(lat, lon, lineOf(w)) > OFF_ROUTE_M + Math.min(accuracy, 40);
+  if (off && !guide.off) {
+    guide.off = true;
+    say('You are off the route. Choose Get route again for a new one from here.');
+  } else if (!off && guide.off) {
+    guide.off = false;
+    say('Back on the route.');
+  }
+  // Move on past any turns already reached.
+  while (guide.next < steps.length - 1 && haversineM(lat, lon, steps[guide.next].lat, steps[guide.next].lon) <= AT_M) {
+    const s = steps[guide.next];
+    say(`${stepAction(s)}${s.distance ? `, then walk ${formatDistance(s.distance)}` : ''}.`);
+    st.stepIdx = guide.next;
+    stepPicker.refresh();
+    guide.next += 1;
+  }
+  const s = steps[guide.next];
+  const d = haversineM(lat, lon, s.lat, s.lon);
+  if (d <= AHEAD_M && guide.warned !== guide.next && s.type !== 'arrive') {
+    guide.warned = guide.next;
+    say(`In ${formatDistance(Math.round(d / 5) * 5)}, ${stepAction(s).replace(/^./, (c) => c.toLowerCase())}.`);
+  }
+}
+
+async function startGuiding() {
+  if (!st.walk) return;
+  if (!('geolocation' in navigator)) return say('Location is not available in this browser.');
+  stopGuiding(false);
+  guide.next = 1;
+  guide.warned = -1;
+  guide.off = false;
+  guide.line = null;
+  try {
+    if ('wakeLock' in navigator) guide.wakeLock = await navigator.wakeLock.request('screen');
+  } catch { /* the screen may dim */ }
+  guide.watch = navigator.geolocation.watchPosition(onGuidePosition, (err) => {
+    if (err.code === err.PERMISSION_DENIED) {
+      say('Location access was not allowed, so the route cannot be followed.');
+      stopGuiding(false);
+    }
+  }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 30000 });
+  $('journey-guide').textContent = 'Stop walking guidance';
+  say(`Following the route. ${stepText(st.walk.steps[0], 0, st.walk.steps.length)} Keep the page open and the screen on.`);
+}
+
+function stopGuiding(announce = true) {
+  if (guide.watch != null) navigator.geolocation.clearWatch(guide.watch);
+  guide.watch = null;
+  if (guide.wakeLock) guide.wakeLock.release().catch(() => {});
+  guide.wakeLock = null;
+  if ($('journey-guide')) $('journey-guide').textContent = 'Start walking guidance';
+  if (announce) say('Walking guidance stopped.');
+}
+
+function toggleGuiding() {
+  if (guide.watch != null) stopGuiding(true);
+  else startGuiding();
 }
 
 async function plan() {
+  if (routeType() === 'walk') {
+    const to = $('journey-to').value.trim();
+    if (!to) {
+      $('journey-to').focus();
+      return say('Type where you are going.');
+    }
+    return planWalk($('journey-from').value.trim(), to);
+  }
   const from = $('journey-from').value.trim();
   const to = $('journey-to').value.trim();
   if (!to) {
@@ -511,6 +752,22 @@ function goToFood() {
 export function initJourney(h) {
   hooks = h;
   st.date = travelDays()[1].value;
+  makePicker($('journey-type'), {
+    shown: $('journey-type-value'),
+    items: () => [{ value: 'walk', label: 'Walking route' }, { value: 'travel', label: 'Travel options: fly, train, bus or drive' }],
+    get: routeType,
+    set: (v) => {
+      settings.set('routeType', v);
+      $('journey-date-row').hidden = v === 'walk';
+    },
+  });
+  $('journey-date-row').hidden = routeType() === 'walk';
+  stepPicker = makePicker($('journey-step-list'), {
+    shown: $('journey-step-value'),
+    items: () => (st.walk ? st.walk.steps.map((s, i) => ({ value: i, label: stepText(s, i, st.walk.steps.length) })) : []),
+    get: () => st.stepIdx,
+    set: (v) => { st.stepIdx = v; },
+  });
   datePicker = makePicker($('journey-date'), {
     shown: $('journey-date-value'),
     items: travelDays,
@@ -558,7 +815,11 @@ export function initJourney(h) {
   enter('journey-to', plan);
   enter('journey-option-list', chooseOption);
   enter('journey-food-list', goToFood);
+  enter('journey-step-list', goToStep);
   $('journey-plan').addEventListener('click', plan);
+  $('journey-step-go').addEventListener('click', goToStep);
+  $('journey-step-read').addEventListener('click', readSteps);
+  $('journey-guide').addEventListener('click', toggleGuiding);
   $('journey-choose').addEventListener('click', chooseOption);
   $('journey-read').addEventListener('click', readAll);
   $('journey-food-find').addEventListener('click', findFood);

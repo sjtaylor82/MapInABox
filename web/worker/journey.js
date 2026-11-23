@@ -28,6 +28,7 @@ export function journeyRoute(request, url, env, ctx) {
     case '/api/journey': return request.method === 'GET' ? journey(url, env, ctx) : null;
     case '/api/flights': return request.method === 'GET' ? flights(url, env, ctx) : null;
     case '/api/road': return request.method === 'GET' ? road(url, ctx) : null;
+    case '/api/walk': return request.method === 'GET' ? walk(url, ctx) : null;
     case '/api/food': return request.method === 'POST' ? food(request) : null;
     default: return null;
   }
@@ -141,6 +142,49 @@ async function road(url, ctx) {
       } catch { /* try the next server */ }
     }
     throw new Error('The road routing service could not be reached.');
+  });
+}
+
+/**
+ * GET /api/walk?from=lat,lon&to=lat,lon: a walking route with its turns
+ * (OSRM foot profile on routing.openstreetmap.de), cached for a week.
+ * Each step: { type, modifier, exit, name, distance, lat, lon, bearing }.
+ */
+async function walk(url, ctx) {
+  const from = position(url.searchParams.get('from'));
+  const to = position(url.searchParams.get('to'));
+  if (!from || !to) return json({ error: 'Bad walking route search.' }, 400);
+  const lonLat = (p) => p.split(',').reverse().join(',');
+  return cachedJson(`https://cache.mapinabox/walk/v1/${from}/${to}`, 7 * 24 * 3600, ctx, async () => {
+    for (const base of OSRM.foot) {
+      try {
+        const res = await fetch(`${base}${lonLat(from)};${lonLat(to)}?steps=true&overview=full&geometries=polyline`, {
+          headers: { 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(20000),
+        });
+        if (!res.ok) continue;
+        const data = await res.json();
+        const r = data.routes && data.routes[0];
+        if (data.code !== 'Ok' || !r) continue;
+        const steps = [];
+        for (const leg of r.legs || []) {
+          for (const stp of leg.steps || []) {
+            const m = stp.maneuver || {};
+            steps.push({
+              type: m.type || '',
+              modifier: m.modifier || '',
+              exit: m.exit || 0,
+              name: stp.name || stp.ref || '',
+              distance: Math.round(stp.distance || 0),
+              lat: m.location ? m.location[1] : null,
+              lon: m.location ? m.location[0] : null,
+              bearing: m.bearing_after ?? null,
+            });
+          }
+        }
+        return { distance: Math.round(r.distance), duration: Math.round(r.duration), line: r.geometry, steps };
+      } catch { /* try the next server */ }
+    }
+    throw new Error('The walking route service could not be reached.');
   });
 }
 
