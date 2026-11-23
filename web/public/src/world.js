@@ -325,6 +325,12 @@ export async function describe(lat, lon, state) {
     if (lat >= -60 && distKm <= 75 && nearest.country) result.country = nearest.country;
     const context = await contextItems(lat, lon, 1);
     result.label = context[0] || (await lookupPrecise(lat, lon)) || (await lookupAny(lat, lon)) || oceanName(lat, lon);
+    // Small islands are missing from the simplified country outlines. One
+    // named as an island near a country is land in that country, so it gets
+    // the country's sound however you arrive (not the ocean's on a fresh start).
+    if (result.country !== 'Open Water' && /\b(Island|Islands|Isle|Islet|Cay|Atoll)\b/i.test(result.label)) {
+      result.onLand = true;
+    }
   }
   result.continent = continentFor(result.country);
   return result;
