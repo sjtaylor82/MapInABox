@@ -30,7 +30,7 @@ export default {
     if (url.pathname === '/api/search') return search(url, ctx);
     const tile = url.pathname.match(/^\/api\/tile\/(\d+)\/(\d+)\/(\d+)$/);
     if (tile) return mapTile(Number(tile[1]), Number(tile[2]), Number(tile[3]), ctx);
-    if (url.pathname === '/api/place') return placeDetails(url, ctx);
+    if (url.pathname === '/api/place') return placeDetails(url, env, ctx);
     const area = url.pathname.match(/^\/api\/area\/(\d+)\/(\d+)\/(\d+)$/);
     if (area) return streetArea(Number(area[1]), Number(area[2]), Number(area[3]), ctx);
     return json({ error: 'Not found' }, 404);
@@ -146,15 +146,19 @@ async function streetArea(z, x, y, ctx) {
 const DETAILS_TTL = 24 * 3600;
 
 /** GET /api/place?name=&lat=&lon=: phone, hours, website and address for one place. */
-async function placeDetails(url, ctx) {
+async function placeDetails(url, env, ctx) {
   const name = (url.searchParams.get('name') || '').trim().slice(0, 200);
   const lat = Number(url.searchParams.get('lat'));
   const lon = Number(url.searchParams.get('lon'));
   if (!name || !Number.isFinite(lat) || !Number.isFinite(lon)) return json({ error: 'Bad request' }, 400);
   const cache = caches.default;
-  const key = new Request(`https://cache.mapinabox/place/v1/${encodeURIComponent(name)}/${lat.toFixed(4)}/${lon.toFixed(4)}`);
+  const key = new Request(`https://cache.mapinabox/place/v2/${encodeURIComponent(name)}/${lat.toFixed(4)}/${lon.toFixed(4)}`);
   const hit = await cache.match(key);
   if (hit) return hit;
+
+  // OpenStreetMap first.
+  let osm = null;
+  let osmAnswered = false;
   const body = new URLSearchParams({ data: detailsQuery(name, lat, lon) });
   for (const mirror of OVERPASS) {
     try {
@@ -162,17 +166,78 @@ async function placeDetails(url, ctx) {
         method: 'POST',
         body,
         headers: { 'User-Agent': USER_AGENT, 'Content-Type': 'application/x-www-form-urlencoded' },
-        signal: AbortSignal.timeout(12000),
+        signal: AbortSignal.timeout(10000),
       });
       if (!res.ok) continue;
-      const out = new Response(JSON.stringify({ details: pickDetails(await res.json()) }), {
-        headers: { 'Content-Type': 'application/json', 'Cache-Control': `public, max-age=${DETAILS_TTL}` },
-      });
-      ctx.waitUntil(cache.put(key, out.clone()));
-      return out;
+      osm = pickDetails(await res.json());
+      osmAnswered = true;
+      break;
     } catch { /* next */ }
   }
-  return json({ error: 'The place details service is busy.' }, 502);
+
+  // HERE fills in the phone, hours, website and address OpenStreetMap lacks.
+  let details = osm ? { ...osm } : null;
+  if (env.HERE_API_KEY && !(osm && osm.phone && osm.hours)) {
+    const here = await hereDetails(env.HERE_API_KEY, name, lat, lon).catch(() => null);
+    if (here) {
+      details = details || { phone: '', hours: '', website: '', address: '', cuisine: '', wheelchair: '', delivery: '', takeaway: '' };
+      details.phone ||= here.phone;
+      details.website ||= here.website;
+      details.address ||= here.address;
+      if (!details.hours && here.hoursText) details.hoursText = here.hoursText;
+      details.source = osm ? 'openstreetmap and here' : 'here';
+    }
+  }
+  if (!osmAnswered && !details) return json({ error: 'The place details service is busy.' }, 502);
+  const out = new Response(JSON.stringify({ details }), {
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': `public, max-age=${DETAILS_TTL}` },
+  });
+  ctx.waitUntil(cache.put(key, out.clone()));
+  return out;
+}
+
+/** Word overlap between two names, ignoring filler words (as here_poi._name_similarity). */
+function nameSimilarity(query, result) {
+  const filler = new Set(['the', 'a', 'an', 'and', 'of', 'at', 'in', 'on', 'by', 'for']);
+  const words = (s) => new Set(String(s).toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/)
+    .filter((w) => w.length > 1 && !filler.has(w)));
+  const q = words(query);
+  const r = words(result);
+  if (!q.size) return 1;
+  let both = 0;
+  for (const w of q) if (r.has(w)) both += 1;
+  return both / q.size;
+}
+
+/** HERE Discover, as the desktop's here_poi.py: the best match within 150 metres. */
+async function hereDetails(apiKey, name, lat, lon) {
+  const params = new URLSearchParams({ at: `${lat},${lon}`, q: name, limit: '3', lang: 'en-US', apiKey });
+  const res = await fetch(`https://discover.search.hereapi.com/v1/discover?${params}`, {
+    headers: { 'User-Agent': USER_AGENT },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  const item = (data.items || []).find((c) => {
+    const p = c.position || {};
+    const dy = ((p.lat ?? lat) - lat) * 111000;
+    const dx = ((p.lng ?? lon) - lon) * 111000 * Math.cos((lat * Math.PI) / 180);
+    return nameSimilarity(name, c.title || '') >= 0.4 && Math.hypot(dx, dy) <= 150;
+  });
+  if (!item) return null;
+  let phone = '';
+  let website = '';
+  for (const ct of item.contacts || []) {
+    if (!phone && ct.phone && ct.phone[0]) phone = ct.phone[0].value || '';
+    if (!website && ct.www && ct.www[0]) website = ct.www[0].value || '';
+  }
+  const oh = (item.openingHours || [])[0];
+  let hoursText = '';
+  if (oh) {
+    const now = oh.isOpen === true ? 'Open now' : oh.isOpen === false ? 'Closed now' : '';
+    hoursText = [now, (oh.text || []).join('; ')].filter(Boolean).join('. ');
+  }
+  return { phone, website, hoursText, address: (item.address && item.address.label) || '' };
 }
 
 function clampInt(v, min, max, dflt) {

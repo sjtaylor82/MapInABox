@@ -598,18 +598,23 @@ async function placeDetails() {
   const p = placeResults[state.placeIdx || 0];
   if (!p) return;
   let d = p.details; // already here when the street data came from Overpass
-  if (!d) {
+  if (!d || !d.phone || !d.hours) {
+    // Ask the server: it checks OpenStreetMap and fills the gaps from HERE.
     say(`Looking up ${p.name}…`);
     try {
-      d = await online.placeDetails(p.name, p.lat, p.lon);
-    } catch {
-      d = null; // still give the address below
-    }
+      const more = await online.placeDetails(p.name, p.lat, p.lon);
+      if (more) {
+        d = { ...(d || {}) };
+        for (const [k, v] of Object.entries(more)) if (v && !d[k]) d[k] = v;
+        p.details = d;
+      }
+    } catch { /* still give what we have, and the address below */ }
   }
   if (placeResults[state.placeIdx || 0] !== p) return; // chose another meanwhile
   const parts = [];
   if (d && d.phone) parts.push(`Phone ${d.phone}`);
   if (d && d.hours) parts.push(`Hours: ${speakableHours(d.hours)}`);
+  else if (d && d.hoursText) parts.push(`Hours: ${d.hoursText}`);
   if (d && d.address) {
     parts.push(`Address: ${d.address}`);
   } else {
@@ -622,8 +627,8 @@ async function placeDetails() {
   if (d && d.cuisine) parts.push(`Cuisine: ${d.cuisine}`);
   if (d && d.website) parts.push('Has a website');
   if (d && d.wheelchair) parts.push(`Wheelchair access: ${d.wheelchair}`);
-  const missing = !(d && (d.phone || d.hours || d.website));
-  const text = `${p.name}. ${parts.join('. ')}.${missing ? ' OpenStreetMap has no phone or hours for it: Open in Apple Maps may have them.' : ''}`;
+  const missing = !(d && (d.phone || d.hours || d.hoursText || d.website));
+  const text = `${p.name}. ${parts.join('. ')}.${missing ? ' No phone number or opening hours are known for it.' : ''}`;
   $('place-details-text').textContent = text;
   $('place-call').hidden = !(d && d.phone);
   if (d && d.phone) {
