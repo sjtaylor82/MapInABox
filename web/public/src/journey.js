@@ -210,7 +210,8 @@ async function candidates(text, here, nearOnly = true, maxM = WALK_MAX_M) {
       });
     } catch { /* nothing found */ }
   }
-  out.push(...found);
+  // Short labels: "Burwood, Burwood Road, Burwood" at most, not the whole address down to the country.
+  out.push(...found.map((r) => ({ ...r, label: r.label.split(', ').slice(0, 3).join(', ') })));
   // The same place from both sources, or listed twice: keep one.
   const list = [];
   for (const r of out) {
@@ -913,6 +914,7 @@ function alongLine(line, cum, lat, lon) {
   const k = Math.cos(lat * Math.PI / 180) * 111320;
   let best = Infinity;
   let along = 0;
+  let side = '';
   for (let i = 0; i < line.length - 1; i += 1) {
     const ax = (line[i][1] - lon) * k; const ay = (line[i][0] - lat) * 111320;
     const bx = (line[i + 1][1] - lon) * k; const by = (line[i + 1][0] - lat) * 111320;
@@ -921,9 +923,14 @@ function alongLine(line, cum, lat, lon) {
     const t = len2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2)) : 0;
     const px = ax + t * dx; const py = ay + t * dy;
     const d = Math.hypot(px, py);
-    if (d < best) { best = d; along = cum[i] + t * Math.sqrt(len2); }
+    if (d < best) {
+      best = d;
+      along = cum[i] + t * Math.sqrt(len2);
+      // Which side of the way you travel the point is on (it sits at the origin).
+      side = dx * (-ay) - dy * (-ax) > 0 ? 'left' : 'right';
+    }
   }
-  return { cross: best, along };
+  return { cross: best, along, side };
 }
 
 function cumulative(line) {
@@ -1000,16 +1007,16 @@ async function roadFood(leg) {
     found = await tileFoodAlong(line, cum);
   }
   const from = leg.from?.name || 'the start';
-  const word = leg.kind === 'walk' ? 'walk' : leg.kind === 'bus' ? 'bus route' : 'drive';
   return found
     .map((p) => ({ p, ...alongLine(line, cum, p.lat, p.lon) }))
     .filter((x) => x.cross <= limit)
     .sort((a, b) => a.along - b.along)
-    .map(({ p, along }) => ({
+    .map(({ p, along, side, cross }) => ({
       ...p,
+      // Every place listed is beside the route; say where along it, and which side.
       text: along < 50
         ? `${p.name}, ${kindText(p)}, near ${from}`
-        : `${p.name}, ${kindText(p)}, on the ${word}, ${formatDistance(along)} after ${from}`,
+        : `${p.name}, ${kindText(p)}, ${formatDistance(along)} along${cross > 8 ? `, on your ${side}` : ''}`,
     }));
 }
 
