@@ -1,10 +1,10 @@
 // Street mode data: streets and places around the cursor, from OpenStreetMap.
 //
-// Tiles (see streetquery.js) are loaded as the cursor reaches them. Streets
+// Tiles (OpenFreeMap vector tiles, see vectortile.js) are loaded as the cursor reaches them. Streets
 // are indexed on a grid of small cells so the nearest street, corner or
 // place can be found quickly on every step.
 
-import { tileOf, tileBounds } from './streetquery.js';
+import { tileOf, tileBounds } from './vectortile.js';
 import { streetTile } from './online.js';
 import { formatDistance, compassName, bearingDeg } from './geo.js';
 
@@ -332,13 +332,37 @@ function walkAlong(start, distM, heading) {
           if (diff <= 100 && (!onward || diff < onward.diff)) onward = { wj, nj, dj, diff };
         }
       }
-      if (!onward) {
+      if (onward) {
+        wi = onward.wj;
+        pts = ways[wi].pts;
+        dir = onward.dj;
+        idx = onward.nj;
+        continue;
+      }
+      // Map tiles cut streets at their edges, so the same street may carry
+      // on a few metres away in the next tile. Pick it up there.
+      let near = null;
+      for (const [wj, sj] of segmentsNear(cur[0], cur[1], 10)) {
+        if (wj === prevWay || ways[wj].name !== name) continue;
+        const p = project(wj, sj, cur[0], cur[1]);
+        if (p.dist > 10) continue;
+        const [a, b] = [ways[wj].pts[sj], ways[wj].pts[sj + 1]];
+        for (const dj of [1, -1]) {
+          const remaining = dj > 0 ? (1 - p.t) * p.len : p.t * p.len;
+          if (remaining < 1) continue;
+          const bearing = dj > 0 ? bearingDeg(a[0], a[1], b[0], b[1]) : bearingDeg(b[0], b[1], a[0], a[1]);
+          const diff = angleDiff(bearing, lastBearing);
+          if (diff <= 60 && (!near || diff + p.dist < near.score)) near = { score: diff + p.dist, wj, sj, dj, lat: p.lat, lon: p.lon };
+        }
+      }
+      if (!near) {
         return { lat: cur[0], lon: cur[1], name, corner: false, end: true };
       }
-      wi = onward.wj;
+      wi = near.wj;
       pts = ways[wi].pts;
-      dir = onward.dj;
-      idx = onward.nj;
+      dir = near.dj;
+      idx = near.dj > 0 ? near.sj + 1 : near.sj;
+      cur = [near.lat, near.lon];
     }
   }
   return { lat: cur[0], lon: cur[1], name: ways[wi].name, corner: false, end: false };

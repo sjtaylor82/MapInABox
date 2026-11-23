@@ -2,7 +2,7 @@
 // when it is there, so schools only need to allow one domain; when the page
 // is served without the Worker (local testing) they go to the public service.
 
-import { buildQuery, compact, OVERPASS_MIRRORS } from './streetquery.js';
+import { ZOOM, TILEJSON, streetData } from './vectortile.js';
 
 let apiAvailable = null;
 
@@ -29,40 +29,29 @@ async function getJson(url, timeoutMs = 12000) {
   }
 }
 
+let tileTemplate = null;
+
 /**
- * Streets and places for one street tile: { ways, pois }. Through the Worker,
- * which caches each tile for everyone; straight from Overpass without it.
+ * Streets and places for one map tile: { ways, pois }. The tile comes from
+ * OpenFreeMap, through the Worker when it is there (so schools only need to
+ * allow one address), or straight from OpenFreeMap otherwise.
  */
 export async function streetTile(ty, tx) {
+  let bytes = null;
   if (await hasApi()) {
-    // The Worker shares each tile with everyone once it has it. Overpass
-    // often turns the Worker away, so when it can't get a tile, ask Overpass
-    // straight from this browser instead.
     try {
-      const r = await fetch(`api/streets?ty=${ty}&tx=${tx}`, { headers: { Accept: 'application/json' } });
-      if (r.ok) return await r.json();
+      const r = await fetch(`api/tile/${ZOOM}/${tx}/${ty}`);
+      if (r.ok) bytes = new Uint8Array(await r.arrayBuffer());
     } catch { /* fall through */ }
   }
-  // Straight to the public Overpass servers, in turn.
-  let lastError = 'could not be reached';
-  for (const mirror of OVERPASS_MIRRORS) {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 45000);
-    try {
-      const r = await fetch(mirror, {
-        method: 'POST',
-        body: new URLSearchParams({ data: buildQuery(ty, tx) }),
-        signal: ctrl.signal,
-      });
-      if (r.ok) return compact(await r.json());
-      lastError = r.status === 429 || r.status >= 502 ? 'is busy' : `answered ${r.status}`;
-    } catch (err) {
-      lastError = err.name === 'AbortError' ? 'took too long' : 'could not be reached';
-    } finally {
-      clearTimeout(timer);
-    }
+  if (!bytes) {
+    if (!tileTemplate) tileTemplate = (await getJson(TILEJSON)).tiles[0];
+    const url = tileTemplate.replace('{z}', ZOOM).replace('{x}', tx).replace('{y}', ty);
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`The street map service answered ${r.status}.`);
+    bytes = new Uint8Array(await r.arrayBuffer());
   }
-  throw new Error(`The street data service ${lastError}. Try again in a minute.`);
+  return streetData(bytes, ty, tx);
 }
 
 /** Place search (Photon). Returns [{ label, lat, lon }]. */

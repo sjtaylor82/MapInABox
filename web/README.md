@@ -5,7 +5,9 @@ An early browser edition of Map in a Box. It has the world map mode
 facts, weather, time and Visual Assist) and a first street mode: moving by
 metres with the nearest street or corner spoken, following streets to the
 next corner, and a list of places nearby. Street data comes from
-OpenStreetMap, one tile of about 2 km at a time.
+OpenFreeMap vector tiles of OpenStreetMap (© OpenMapTiles © OpenStreetMap
+contributors), one zoom-14 tile of about 2 km at a time, decoded in
+`public/src/vectortile.js`.
 
 On phones and tablets you can steer by tilting (`public/src/steering.js`),
 upright or sideways: the angle at "Ready" is still, a firm tilt one way
@@ -33,7 +35,7 @@ python -m http.server 8765 --directory web/public
 ```
 
 Then open http://localhost:8765/. Without the Worker, online search goes
-straight to Photon and street mode straight to the public Overpass servers.
+straight to Photon and street mode straight to OpenFreeMap.
 
 To run it with the Worker as it will be hosted:
 
@@ -55,9 +57,8 @@ Set a custom domain in `wrangler.jsonc` so schools can allow it by name.
 ## Services it contacts
 
 - Its own domain, for the map, sounds, `/api/search` (Photon, via the Worker)
-  and `/api/streets` (OpenStreetMap streets and places from Overpass, via the
-  Worker, cached for two weeks per tile). A tile nobody has asked for yet can
-  take up to a minute when the public Overpass servers are busy.
+  and `/api/tile/14/x/y` (OpenFreeMap vector tiles of OpenStreetMap streets
+  and places, via the Worker, cached for a week per tile).
 - `api.open-meteo.com` and `air-quality-api.open-meteo.com` for weather,
   time zone, sunrise and air quality, when those keys are pressed.
 - `en.wikipedia.org` for Wikipedia summaries, when asked.

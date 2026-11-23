@@ -358,7 +358,7 @@ async function movedStreet({ tone = true, prefix = '', note = '', suffix = '', k
  */
 async function waitForArea(lat, lon, seq) {
   const timer = setInterval(() => {
-    if (seq === state.seq) say('Still loading streets. The first visit to an area can take up to a minute.');
+    if (seq === state.seq) say('Still loading streets.');
   }, 15000);
   try {
     return await street.ensureArea(lat, lon);

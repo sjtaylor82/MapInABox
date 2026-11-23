@@ -5,10 +5,10 @@
 //
 //   GET /api/health              { ok: true }
 //   GET /api/search?q=&lat=&lon= Photon place search, cached for a week
-//   GET /api/streets?ty=&tx=     Streets and places for one street tile
-//                                (OpenStreetMap via Overpass), cached for two weeks
+//   GET /api/tile/14/x/y         One OpenFreeMap vector tile (OpenStreetMap
+//                                streets and places), cached for a week
 
-import { buildQuery, compact, validTile, OVERPASS_MIRRORS } from '../public/src/streetquery.js';
+import { ZOOM, TILEJSON, validTile } from '../public/src/vectortile.js';
 
 const PHOTON = 'https://photon.komoot.io/api/';
 const SEARCH_TTL = 7 * 24 * 3600;
@@ -21,7 +21,8 @@ export default {
 
     if (url.pathname === '/api/health') return json({ ok: true });
     if (url.pathname === '/api/search') return search(url, ctx);
-    if (url.pathname === '/api/streets') return streets(url, ctx);
+    const tile = url.pathname.match(/^\/api\/tile\/(\d+)\/(\d+)\/(\d+)$/);
+    if (tile) return mapTile(Number(tile[1]), Number(tile[2]), Number(tile[3]), ctx);
     return json({ error: 'Not found' }, 404);
   },
 };
@@ -55,52 +56,42 @@ async function search(url, ctx) {
   return out;
 }
 
-const STREETS_TTL = 14 * 24 * 3600;
+const TILE_TTL = 7 * 24 * 3600;
 const USER_AGENT = 'MapInABoxWeb/0.1 (+https://github.com/sjtaylor82/MapInABox)';
+let tileTemplate = null;
+let templateAt = 0;
 
-async function streets(url, ctx) {
-  const ty = Number(url.searchParams.get('ty'));
-  const tx = Number(url.searchParams.get('tx'));
-  if (!validTile(ty, tx)) return json({ error: 'Bad tile' }, 400);
+/** The current OpenFreeMap tile address, from its TileJSON (it changes with each weekly build). */
+async function tileUrl(z, x, y) {
+  if (!tileTemplate || Date.now() - templateAt > 3600 * 1000) {
+    const res = await fetch(TILEJSON, { headers: { 'User-Agent': USER_AGENT } });
+    if (!res.ok) throw new Error(`TileJSON answered ${res.status}`);
+    tileTemplate = (await res.json()).tiles[0];
+    templateAt = Date.now();
+  }
+  return tileTemplate.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+}
 
+async function mapTile(z, x, y, ctx) {
+  if (z !== ZOOM || !validTile(y, x)) return json({ error: 'Bad tile' }, 400);
   const cache = caches.default;
-  const key = new Request(`https://cache.mapinabox/streets/v1/${ty}/${tx}`);
+  const key = new Request(`https://cache.mapinabox/tile/v1/${z}/${x}/${y}`);
   const hit = await cache.match(key);
   if (hit) return hit;
-
-  const body = new URLSearchParams({ data: buildQuery(ty, tx) });
-  // The public Overpass servers are often busy, and they often turn away
-  // Cloudflare's shared addresses. Give up after about 45 seconds so the
-  // page can ask Overpass itself, from the user's own connection.
-  const deadline = Date.now() + 45000;
-  let lastError = 'no answer';
-  for (let round = 0; round < 1; round++) {
-    for (const mirror of OVERPASS_MIRRORS) {
-      const left = deadline - Date.now();
-      if (left < 5000) break;
-      try {
-        const res = await fetch(mirror, {
-          method: 'POST',
-          body,
-          headers: { 'User-Agent': USER_AGENT, 'Content-Type': 'application/x-www-form-urlencoded' },
-          signal: AbortSignal.timeout(Math.min(40000, left)),
-        });
-        if (!res.ok) {
-          lastError = res.status === 429 || res.status >= 502 ? 'is busy' : `answered ${res.status}`;
-          continue;
-        }
-        const data = compact(await res.json());
-        const out = new Response(JSON.stringify(data), {
-          headers: { 'Content-Type': 'application/json', 'Cache-Control': `public, max-age=${STREETS_TTL}` },
-        });
-        ctx.waitUntil(cache.put(key, out.clone()));
-        return out;
-      } catch (err) {
-        lastError = err.name === 'TimeoutError' ? 'took too long' : 'could not be reached';
-      }
-    }
+  try {
+    const res = await fetch(await tileUrl(z, x, y), { headers: { 'User-Agent': USER_AGENT } });
+    if (!res.ok) return json({ error: `The street map service answered ${res.status}.` }, 502);
+    const out = new Response(res.body, {
+      headers: {
+        'Content-Type': 'application/vnd.mapbox-vector-tile',
+        'Cache-Control': `public, max-age=${TILE_TTL}`,
+      },
+    });
+    ctx.waitUntil(cache.put(key, out.clone()));
+    return out;
+  } catch {
+    return json({ error: 'The street map service could not be reached.' }, 502);
   }
-  return json({ error: `The street data service ${lastError}. Try again in a minute.` }, 502);
 }
 
 function clampInt(v, min, max, dflt) {
