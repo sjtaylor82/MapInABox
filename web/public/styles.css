@@ -278,3 +278,6 @@ input.picker { width: 100%; height: 2rem; accent-color: var(--accent); }
 #places-categories { border: 1px solid var(--muted); border-radius: 6px; margin: 0.75rem 0 0; padding: 0.25rem 0.75rem 0.5rem; }
 #places-categories legend { font-weight: 600; padding: 0 0.25rem; }
 #places-categories label { display: flex; gap: 0.5rem; align-items: center; margin: 0.4rem 0; }
+
+.place-links { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0; }
+.place-links a { padding: 0.4rem 0.8rem; border: 2px solid var(--accent); border-radius: 6px; font-size: 1rem; }

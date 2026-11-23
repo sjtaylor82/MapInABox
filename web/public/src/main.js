@@ -541,6 +541,7 @@ function listPlaces(focusList) {
   placeResults = found;
   state.placeIdx = 0;
   placesPicker.refresh();
+  showPlaceLinks();
   $('places-list').hidden = !found.length;
   $('places-go').hidden = !found.length;
   if (!found.length) {
@@ -553,6 +554,30 @@ function listPlaces(focusList) {
   $('places-prompt').textContent = `${how}, nearest first. Swipe up or down on Place to hear them, then choose Go there. Switch categories on or off below.`;
   if (focusList) $('places-list').focus();
   say(`${how}. ${street.placeText(found[0])}.`);
+}
+
+/**
+ * Links for the chosen place. Apple Maps has hours, phone, directions and,
+ * where a restaurant really delivers, an "Order" button. Uber Eats and
+ * DoorDash have no public way to check a restaurant is on them, so their
+ * links search for it by name; on a phone they open the app if it is installed.
+ */
+function showPlaceLinks() {
+  const p = placeResults[state.placeIdx || 0];
+  $('places-links').hidden = !p;
+  if (!p) return;
+  const q = encodeURIComponent(p.name);
+  $('place-maps').href = `https://maps.apple.com/?q=${q}&ll=${p.lat},${p.lon}`;
+  $('place-maps').textContent = `Open ${p.name} in Apple Maps`;
+  const food = p.category === 'food';
+  $('place-ubereats').hidden = !food;
+  $('place-doordash').hidden = !food;
+  if (food) {
+    $('place-ubereats').href = `https://www.ubereats.com/search?q=${q}`;
+    $('place-ubereats').textContent = `Search Uber Eats for ${p.name}`;
+    $('place-doordash').href = `https://www.doordash.com/search/store/${q}/`;
+    $('place-doordash').textContent = `Search DoorDash for ${p.name}`;
+  }
 }
 
 function choosePlace() {
@@ -1145,7 +1170,7 @@ function setUpPickers() {
     shown: $('places-value'),
     items: () => placeResults.map((p, i) => ({ value: i, label: `${street.placeText(p)}. ${i + 1} of ${placeResults.length}` })),
     get: () => state.placeIdx || 0,
-    set: (i) => { state.placeIdx = i; },
+    set: (i) => { state.placeIdx = i; showPlaceLinks(); },
   });
   jumpPicker = makePicker($('jump-results'), {
     shown: $('jump-results-value'),
