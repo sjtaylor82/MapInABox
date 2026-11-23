@@ -14,6 +14,7 @@ import { formatDistance, compassName, haversineM, bearingDeg } from './geo.js';
 import { settings } from './settings.js';
 import * as street from './street.js';
 import { ROAD_KINDS, decodePolyline, encodePolyline } from './rome2rio.js';
+import { postcodeAt } from './postcode.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -621,6 +622,7 @@ function enterStretch(i) {
   st.food = here.map((p) => ({ ...p, text: `${p.name}, ${p.kind}, in ${formatDistance(Math.max(0, Math.round((p.along - from) / 10) * 10))}` }));
   st.foodIdx = 0;
   foodPicker.refresh();
+  addSuburbs(st.food).then(() => foodPicker.refresh()); // suburbs follow a moment later
   showFoodLinks();
   $('journey-food').hidden = false;
   const cat = calloutCategory();
@@ -1015,7 +1017,7 @@ async function roadFood(leg) {
       ...p,
       // Every place listed is beside the route; say where along it, and which side.
       text: along < 50
-        ? `${p.name}, ${kindText(p)}, near ${from}`
+        ? `${p.name}, ${kindText(p)}, near ${from.split(', ')[0]}`
         : `${p.name}, ${kindText(p)}, ${formatDistance(along)} along${cross > 8 ? `, on your ${side}` : ''}`,
     }));
 }
@@ -1091,6 +1093,7 @@ async function findFood() {
     }
   }
   st.food = all.slice(0, MAX_FOOD);
+  await addSuburbs(st.food);
   st.foodIdx = 0;
   foodPicker.refresh();
   showFoodLinks();
@@ -1127,6 +1130,7 @@ async function driveFood() {
   if (seq !== st.seq || st.drive !== d) return;
   if (found === null) return say('Food along the drive could not be loaded. Try again in a minute.');
   st.food = found.slice(0, MAX_FOOD);
+  await addSuburbs(st.food);
   st.foodIdx = 0;
   foodPicker.refresh();
   showFoodLinks();
@@ -1134,7 +1138,7 @@ async function driveFood() {
   if (!st.food.length) return say('No food places found along the drive.');
   $('journey-food-list').querySelector('button')?.focus();
   const more = found.length > MAX_FOOD ? ` The first ${MAX_FOOD} are listed.` : '';
-  say(`${found.length} food places along the drive.${more} ${st.food[0].text}.`);
+  say(`${found.length} food places along the drive.${more} ${foodLabel(0)}`);
 }
 
 /** Food within 50 metres of the walking route, in walking order. */
@@ -1155,6 +1159,7 @@ async function walkFood() {
   }
   along.sort((a, b) => a.along - b.along);
   st.food = along.slice(0, MAX_FOOD);
+  await addSuburbs(st.food);
   st.foodIdx = 0;
   foodPicker.refresh();
   showFoodLinks();
@@ -1164,6 +1169,21 @@ async function walkFood() {
   say(`${st.food.length} food places along this walk. ${foodLabel(0)}`);
 }
 
+/** Each food place's suburb, from the postcode data, for the list: "…, in Granville". */
+async function addSuburbs(list) {
+  for (const p of list) {
+    if (p.suburb !== undefined) continue;
+    const pc = await postcodeAt(p.lat, p.lon).catch(() => null);
+    p.suburb = pc && pc.place ? pc.place : '';
+  }
+}
+
+/** A food place's text with its suburb, unless it already says it ("near Burwood"). */
+function withSuburb(p) {
+  if (!p.suburb || p.text.includes(p.suburb)) return p.text;
+  return `${p.text}, in ${p.suburb}`;
+}
+
 /** The food places as buttons; choosing one picks it for Go there and the links below. */
 function showFoodList() {
   const ul = $('journey-food-list');
@@ -1171,7 +1191,7 @@ function showFoodList() {
     const li = document.createElement('li');
     const b = document.createElement('button');
     b.type = 'button';
-    b.textContent = p.text;
+    b.textContent = withSuburb(p);
     b.addEventListener('click', () => {
       st.foodIdx = i;
       showFoodLinks();
@@ -1185,7 +1205,8 @@ function showFoodList() {
 }
 
 function foodLabel(i) {
-  return `${st.food[i].text}. ${i + 1} of ${st.food.length}.`;
+  const p = st.food[i];
+  return `${withSuburb(p)}. ${i + 1} of ${st.food.length}.`;
 }
 
 /** Apple Maps, Uber Eats and DoorDash links for the chosen food place, as in Places nearby. */
