@@ -89,8 +89,11 @@ function addWay(w) {
 }
 
 function addPlace(p) {
-  if (poiIds.has(p.id)) return;
+  // The same place can arrive from neighbouring tiles: one name at one spot is one place.
+  const key = `${p.n}|${p.la.toFixed(5)}|${p.lo.toFixed(5)}`;
+  if (poiIds.has(p.id) || poiIds.has(key)) return;
   poiIds.add(p.id);
+  poiIds.add(key);
   const poi = { name: p.n, kind: p.k, lat: p.la, lon: p.lo };
   pois.push(poi);
   pushCell(poiGrid, ckey(cellOf(poi.lat), cellOf(poi.lon)), poi);

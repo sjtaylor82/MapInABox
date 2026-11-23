@@ -311,7 +311,11 @@ export function streetData(bytes, ty, tx) {
   for (const [i, f] of (layers.poi || []).entries()) {
     const name = f.tags.name_en || f.tags.name || '';
     if (!name || f.type !== 1 || !f.geometry[0]) continue;
-    const [la, lo] = toLatLon(f.geometry[0][0][0], f.geometry[0][0][1], f.extent);
+    const [px, py] = f.geometry[0][0];
+    // Tiles repeat places from a wide margin around their edges; keep each
+    // place only in the tile it is really in, or it is listed several times.
+    if (px < 0 || py < 0 || px >= f.extent || py >= f.extent) continue;
+    const [la, lo] = toLatLon(px, py, f.extent);
     pois.push({ id: `${ty}/${tx}/p${i}`, n: name, k: placeKind(f.tags), la, lo });
   }
   return { ways, pois };
