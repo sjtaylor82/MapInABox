@@ -354,3 +354,5 @@ body:not(.visual-assist) #map { min-height: 2.5rem; height: 2.5rem; }
 
 /* Text boxes take the theme's colours, with a clear border. */
 input[type="text"] { background: var(--bg); color: var(--fg); border: 2px solid var(--muted); border-radius: 4px; padding: 0.35rem 0.5rem; }
+
+.menu-text p { margin: 0.2rem 0; }

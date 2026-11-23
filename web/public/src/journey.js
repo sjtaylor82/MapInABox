@@ -15,6 +15,7 @@ import { settings } from './settings.js';
 import * as street from './street.js';
 import { ROAD_KINDS, decodePolyline, encodePolyline } from './rome2rio.js';
 import { postcodeAt } from './postcode.js';
+import { showMenu } from './menu.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -1222,6 +1223,7 @@ function foodLabel(i) {
 
 /** Apple Maps, Uber Eats and DoorDash links for the chosen food place, as in Places nearby. */
 function showFoodLinks() {
+  $('journey-food-menu-box').hidden = true;
   const p = st.food[st.foodIdx];
   $('journey-food-links').hidden = !p;
   if (!p) return;
@@ -1316,6 +1318,10 @@ export function initJourney(h) {
   $('journey-read').addEventListener('click', readAll);
   $('journey-food-find').addEventListener('click', findFood);
   $('journey-food-go').addEventListener('click', goToFood);
+  $('journey-food-menu').addEventListener('click', () => {
+    const p = st.food[st.foodIdx];
+    if (p) showMenu($('journey-food-menu-box'), { name: p.name, lat: p.lat, lon: p.lon, website: p.website || (p.details && p.details.website) });
+  });
   datePicker.refresh();
 }
 

@@ -16,6 +16,7 @@ import * as steering from './steering.js';
 import * as street from './street.js';
 import { makePicker } from './picker.js';
 import { postcodeAt } from './postcode.js';
+import { showMenu } from './menu.js';
 import { speakableHours } from './placedetails.js';
 import { initJourney, openJourney } from './journey.js';
 
@@ -579,6 +580,7 @@ function listPlaces(focusList) {
  */
 function showPlaceLinks() {
   $('place-details').hidden = true;
+  $('place-menu').hidden = true;
   const p = placeResults[state.placeIdx || 0];
   $('places-links').hidden = !p;
   if (!p) return;
@@ -586,6 +588,7 @@ function showPlaceLinks() {
   $('place-maps').href = `https://maps.apple.com/?q=${q}&ll=${p.lat},${p.lon}`;
   $('place-maps').textContent = `Open ${p.name} in Apple Maps`;
   const food = p.category === 'food';
+  $('places-menu').hidden = !food;
   $('place-ubereats').hidden = !food;
   $('place-doordash').hidden = !food;
   if (food) {
@@ -1368,6 +1371,10 @@ $('places-list').addEventListener('keydown', (e) => {
 });
 $('places-go').addEventListener('click', choosePlace);
 $('places-details').addEventListener('click', placeDetails);
+$('places-menu').addEventListener('click', () => {
+  const p = placeResults[state.placeIdx || 0];
+  if (p) showMenu($('place-menu'), { name: p.name, lat: p.lat, lon: p.lon, website: p.details && p.details.website });
+});
 $('places-find').addEventListener('click', () => { if (state.started) openPlaces(); });
 for (const id of ['jump-dialog', 'help-dialog']) {
   $(id).addEventListener('close', () => { if (state.started) $('map').focus(); });

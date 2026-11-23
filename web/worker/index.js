@@ -14,6 +14,7 @@ import { ZOOM, TILEJSON, validTile } from '../public/src/vectortile.js';
 import { OVERPASS, detailsQuery, pickDetails } from '../public/src/placedetails.js';
 import { AREA_SERVERS, areaQuery, areaData } from '../public/src/overpassarea.js';
 import { journeyRoute } from './journey.js';
+import { menuRoute } from './menu.js';
 
 const PHOTON = 'https://photon.komoot.io/api/';
 const SEARCH_TTL = 7 * 24 * 3600;
@@ -22,6 +23,8 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
+    const menuAnswer = menuRoute(request, url, env, ctx);
+    if (menuAnswer) return menuAnswer;
     const planned = journeyRoute(request, url, env, ctx);
     if (planned) return planned;
     if (request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
