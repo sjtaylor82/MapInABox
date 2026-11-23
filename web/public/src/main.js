@@ -525,22 +525,30 @@ function buildCategorySwitches() {
 }
 
 /** P, or Find places: list the places around you in the Places nearby picker. */
-function openPlaces() {
+async function openPlaces() {
   if (state.mode !== 'street') return say('Places nearby are in street mode. Press F11 first.');
   if (!street.areaReady(state.lat, state.lon)) return say('The streets are still loading.');
   buildCategorySwitches();
+  // Places a kilometre away can be in the next map area: load those first.
+  const { lat, lon } = state;
+  let slow = setTimeout(() => say('Finding places…'), 800);
+  await street.ensureRadius(lat, lon, PLACES_RADIUS);
+  clearTimeout(slow);
   $('places-pick').hidden = false;
   listPlaces(true);
 }
 
+const PLACES_RADIUS = 1000; // metres
+const PLACES_MAX = 200;
+
 /** Fill the Place picker with the nearest places in the categories switched on. */
 function listPlaces(focusList) {
   const cats = enabledCategories();
-  let radius = 300;
-  let found = street.placesNear(state.lat, state.lon, radius, 60, cats);
+  let radius = PLACES_RADIUS;
+  let found = street.placesNear(state.lat, state.lon, radius, PLACES_MAX, cats);
   if (found.length < 5) {
-    radius = 1000;
-    found = street.placesNear(state.lat, state.lon, radius, 60, cats);
+    radius = 3000; // the country: look further
+    found = street.placesNear(state.lat, state.lon, radius, PLACES_MAX, cats);
   }
   placeResults = found;
   state.placeIdx = 0;
@@ -555,7 +563,7 @@ function listPlaces(focusList) {
     if (focusList) $('places-categories').querySelector('input').focus();
     return say(why);
   }
-  const how = `${found.length} places`;
+  const how = `${found.length} places within ${formatDistance(radius)}`;
   $('places-prompt').hidden = true;
   if (focusList) $('places-list').focus();
   say(`${how}. ${street.placeText(found[0])}.`);

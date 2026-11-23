@@ -150,6 +150,19 @@ export function ensureArea(lat, lon) {
   return main;
 }
 
+/** Load every tile within radiusM metres of a point. Resolves when they have all answered. */
+export function ensureRadius(lat, lon, radiusM) {
+  const dLat = radiusM / M;
+  const dLon = radiusM / (M * Math.max(0.01, Math.cos(rad(lat))));
+  const a = tileOf(lat + dLat, lon - dLon);
+  const b = tileOf(lat - dLat, lon + dLon);
+  const loads = [];
+  for (let ty = Math.min(a.ty, b.ty); ty <= Math.max(a.ty, b.ty); ty++) {
+    for (let tx = Math.min(a.tx, b.tx); tx <= Math.max(a.tx, b.tx); tx++) loads.push(loadTile(ty, tx));
+  }
+  return Promise.all(loads);
+}
+
 /** 'overpass' or 'openfreemap': where the tile under a point came from. */
 export function areaSource(lat, lon) {
   const { ty, tx } = tileOf(lat, lon);
