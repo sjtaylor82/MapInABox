@@ -179,13 +179,17 @@ function routeType() {
  * A typed place as a point: a place already in the street data with that
  * name, nearest first, or else a place search near where you are.
  */
-async function locate(text, here) {
+async function locate(text, here, nearOnly = true) {
   const want = text.toLowerCase();
   // Places nearby by name first, once the map around here has loaded.
   await Promise.race([street.ensureRadius(here.lat, here.lon, 2000), new Promise((r) => setTimeout(r, 8000))]);
   const local = street.placesNear(here.lat, here.lon, 5000, 2000).find((p) => p.name.toLowerCase().includes(want));
   if (local) return { lat: local.lat, lon: local.lon, label: local.name };
-  const params = new URLSearchParams({ q: text.slice(0, 200), limit: '10', lang: 'en', lat: here.lat.toFixed(4), lon: here.lon.toFixed(4) });
+  const params = new URLSearchParams({ q: text.slice(0, 200), limit: '10', lang: 'en' });
+  if (nearOnly) {
+    params.set('lat', here.lat.toFixed(4));
+    params.set('lon', here.lon.toFixed(4));
+  }
   let json;
   try {
     json = await api(`api/search?${params}`, {}, 15000);
@@ -198,8 +202,10 @@ async function locate(text, here) {
     const addr = p.housenumber && p.street ? `${p.housenumber} ${p.street}` : p.street;
     const label = [p.name, addr, p.city || p.locality || p.district].filter(Boolean).join(', ');
     return { lat, lon, label, d: haversineM(here.lat, here.lon, lat, lon) };
-  }).filter((r) => r.d <= WALK_MAX_M).sort((a, b) => a.d - b.d);
-  return found[0] || null;
+  });
+  // A start anywhere takes the search's best match; a destination must be walkable.
+  if (!nearOnly) return found[0] || null;
+  return found.filter((r) => r.d <= WALK_MAX_M).sort((a, b) => a.d - b.d)[0] || null;
 }
 
 const WALK_MAX_M = 50000; // further than this is not a walk: use Travel options
@@ -242,12 +248,15 @@ async function planWalk(from, to) {
   let a = null;
   let b = null;
   try {
-    a = from ? await locate(from, here) : { lat: here.lat, lon: here.lon, label: here.label || 'where you are' };
+    // From can be anywhere, so a walk can be looked up for a place you are not.
+    a = from ? await locate(from, here, false) : { lat: here.lat, lon: here.lon, label: here.label || 'where you are' };
     if (a) b = await locate(to, a);
   } catch { /* reported below */ }
   if (seq !== st.seq) return;
   if (!a || !b) {
-    const msg = `${!a ? from : to} was not found within ${formatDistance(WALK_MAX_M)}. Try a street address, or Travel options for longer trips.`;
+    const msg = !a
+      ? `${from} was not found. Try a street address or the name of a place.`
+      : `${to} was not found within ${formatDistance(WALK_MAX_M)} of ${from || 'the map position'}. Type a From near it, jump the map there first, or choose Travel options.`;
     setPrompt(msg);
     return say(msg);
   }
