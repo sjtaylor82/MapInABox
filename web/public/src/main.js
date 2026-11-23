@@ -1350,6 +1350,7 @@ for (const btn of document.querySelectorAll('#panel [data-move]')) {
   });
 }
 $('btn-where').addEventListener('click', whereAmI);
+$('btn-position').addEventListener('click', () => { if (state.started) repeatLocation(); });
 $('btn-journey').addEventListener('click', openJourney);
 initJourney({
   getHere: () => ({ lat: state.lat, lon: state.lon, label: state.streetLabel || state.info.label || state.info.city }),
