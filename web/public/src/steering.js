@@ -1,54 +1,48 @@
 // Tilt steering for phones and tablets, held sideways (landscape).
 //
-// Hold the device sideways in both hands. The angle you hold it at when it
-// says "Ready" is "still". From there, tilt it gently towards the way you
-// want to go, like rolling a marble on a tray:
-//   top edge down and away: north        towards you: south
-//   left edge down: west                 right edge down: east
-//   and in between for the diagonals.
-// A new direction is spoken first, then movement starts a moment later.
-// Come back to the starting angle and it stops. Nothing needs tapping.
+// It works like the arrow keys. Hold the device sideways in both hands; the
+// angle you hold it at when it says "Ready" is "still". Then tilt it firmly
+// one way to move once that way:
+//   top edge away from you: north        towards you: south
+//   lower the right end: east            lower the left end: west
+// Come back to still (a soft click) before the next move. Hold the tilt and
+// it repeats, like holding down an arrow key. Only the four directions
+// count: a tilt halfway between two does nothing.
 //
 // Hold it upright like a phone, or put it down, and steering pauses. Pick it
 // up sideways again and the new angle counts as still: that is also how to
 // reset "still" after shifting your grip.
 
 const TICK_MS = 50;
-const GO_TILT = 0.17;        // about 10 degrees from still: start moving
-const STOP_TILT = 0.10;      // back within about 6 degrees: stop
-const FAST_TILT = 0.34;      // about 20 degrees: quicker steps
-const SECTOR = 45;
-const HYSTERESIS = 8;        // degrees past a sector edge before the direction changes
-const SETTLE_MS = 250;       // a direction must hold this long before it is spoken
-const AFTER_HEADING_MS = 700; // time to hear the direction before the next step
-const STEP_MS = 1100;
-const FAST_STEP_MS = 800;
+const GO_TILT = 0.21;        // about 12 degrees from still: move
+const STILL_TILT = 0.10;     // back within about 6 degrees: still again
+const DOMINANCE = 1.5;       // the main tilt must be this much bigger than the other
+const SETTLE_MS = 120;       // a direction must hold this long before it counts
 const CALIBRATE_MS = 500;
 const PAUSE_MS = 700;
 
 const rad = (d) => (d * Math.PI) / 180;
 const deg = (r) => (r * 180) / Math.PI;
 const norm = (a) => ((a % 360) + 360) % 360;
-const gap = (a, b) => Math.abs(((a - b + 540) % 360) - 180);
 
 let enabled = false;
 let up = null;              // smoothed "up" in the device's frame { x, y, z }
-let sideways = false;       // the latest reading is a landscape (or flat) hold
+let sideways = false;
 let hasReported = false;
 let mode = 'paused';        // 'paused' | 'calibrating' | 'ready'
 let lostSince = 0;
 let calibrateSince = 0;
-let still = null;           // "up" when ready: the still position
-let side = 1;               // 1: top edge to the left (screen up is device +x); -1: to the right
-let dir = null;             // spoken direction, a compass bearing, or null when still
+let still = null;
+let side = 1;               // 1: top edge to the left; -1: to the right
+let latched = null;         // direction moved in since last still, or null
 let pendingDir = null;
 let pendingSince = 0;
-let moving = false;
-let fast = false;
-let nextStepAt = 0;
+let nextRepeatAt = 0;
+let lastTilt = { north: 0, east: 0 };
 let timer = null;
 let wakeLock = null;
 let handlers = {};
+let repeatMs = () => 1200;
 
 export function steeringSupported() {
   return typeof window.DeviceOrientationEvent !== 'undefined';
@@ -85,18 +79,26 @@ export function upFrom(beta, gamma) {
 /**
  * How far the device is tilted from still, as { east, north } in radians,
  * for a landscape hold with the top edge on `side` (1: to the left).
- * A marble rolls downhill: the edge that goes down is the way you go.
+ * The end that goes down is the way you go, like a marble on a tray.
  */
 export function tiltFrom(u, s, sideNow) {
   // Top edge to the left: screen up is device +x, screen right is device -y.
-  // Top edge away turns "up" from the screen's top edge towards its face.
   const lean = (v) => Math.atan2(v.z, sideNow * v.x);
-  // Right edge down turns "up" towards the device's right-hand side.
   const roll = (v) => Math.asin(Math.max(-1, Math.min(1, -sideNow * v.y)));
   let north = lean(u) - lean(s);
   if (north > Math.PI) north -= 2 * Math.PI;
   if (north < -Math.PI) north += 2 * Math.PI;
   return { north, east: -(roll(u) - roll(s)) };
+}
+
+/** The one direction a tilt points (0, 90, 180 or 270), or null if it is too small or between two. */
+export function directionOf(t) {
+  const n = Math.abs(t.north);
+  const e = Math.abs(t.east);
+  const big = Math.max(n, e);
+  if (big < GO_TILT || big < DOMINANCE * Math.min(n, e)) return null;
+  if (n >= e) return t.north > 0 ? 0 : 180;
+  return t.east > 0 ? 90 : 270;
 }
 
 function onOrientation(e) {
@@ -107,11 +109,6 @@ function onOrientation(e) {
   const plane = Math.hypot(up.x, up.y);
   // Landscape when the device's long side is level, or when it is nearly flat.
   sideways = plane < 0.35 || Math.abs(up.x) >= Math.abs(up.y) * 0.8;
-}
-
-function pointFor(bearing, current) {
-  if (current != null && gap(bearing, current) <= SECTOR / 2 + HYSTERESIS) return current;
-  return norm(Math.round(bearing / SECTOR) * SECTOR);
 }
 
 function emit(name, ...args) {
@@ -132,11 +129,9 @@ function tick() {
     if (mode === 'paused') return;
     if (!lostSince) lostSince = now;
     if (now - lostSince >= PAUSE_MS) {
-      const wasMoving = moving;
       mode = 'paused';
-      moving = false;
-      dir = null;
-      emit('paused', wasMoving);
+      latched = null;
+      emit('paused');
     }
     return;
   }
@@ -152,48 +147,48 @@ function tick() {
     still = { ...up };
     side = chooseSide();
     mode = 'ready';
-    moving = false;
-    dir = null;
+    latched = null;
     pendingDir = null;
     emit('ready');
     return;
   }
 
   const t = tiltFrom(up, still, side);
-  const amount = Math.hypot(t.east, t.north);
-  fast = amount >= FAST_TILT;
+  lastTilt = t;
+  const amount = Math.hypot(t.north, t.east);
 
-  if (amount <= STOP_TILT || (!moving && dir == null && amount < GO_TILT)) {
+  if (amount <= STILL_TILT) {
     pendingDir = null;
-    if (dir != null) {
-      dir = null;
-      const wasMoving = moving;
-      moving = false;
-      emit('stop', wasMoving);
+    if (latched != null) {
+      latched = null;
+      emit('still');
     }
     return;
   }
 
-  const point = pointFor(norm(deg(Math.atan2(t.east, t.north))), dir);
-  if (point !== dir) {
-    if (point !== pendingDir) {
-      pendingDir = point;
-      pendingSince = now;
-    } else if (now - pendingSince >= SETTLE_MS) {
-      dir = point;
-      pendingDir = null;
-      nextStepAt = now + AFTER_HEADING_MS;
-      emit('heading', dir, moving);
+  const dir = directionOf(t);
+  if (latched != null) {
+    // Holding the same tilt repeats; any other tilt waits for still first.
+    if (dir === latched && now >= nextRepeatAt) {
+      nextRepeatAt = now + repeatMs(latched);
+      emit('move', latched, true, t);
     }
+    return;
   }
-  if (dir != null && now >= nextStepAt) {
-    if (!moving) {
-      moving = true;
-      emit('go', dir);
-    }
-    nextStepAt = now + (fast ? FAST_STEP_MS : STEP_MS);
-    emit('step', dir, fast);
+  if (dir == null) {
+    pendingDir = null;
+    return;
   }
+  if (dir !== pendingDir) {
+    pendingDir = dir;
+    pendingSince = now;
+    return;
+  }
+  if (now - pendingSince < SETTLE_MS) return;
+  latched = dir;
+  pendingDir = null;
+  nextRepeatAt = now + repeatMs(dir);
+  emit('move', dir, false, t);
 }
 
 async function keepAwake() {
@@ -211,23 +206,22 @@ function onVisibility() {
     // Coming back to the page starts again from still.
     up = null;
     mode = 'paused';
-    moving = false;
-    dir = null;
+    latched = null;
   }
 }
 
 /**
- * Start steering. handlers: { ready(), heading(bearing, moving), go(bearing),
- * step(bearing, fast), stop(wasMoving), paused(wasMoving) }.
+ * Start steering. handlers: { ready(), move(bearing, repeat, tilt), still(), paused() }.
+ * repeat(bearing) gives the milliseconds between repeats while a tilt is held.
  */
-export function startSteering(h) {
+export function startSteering(h, repeat) {
   if (enabled) return;
   handlers = h || {};
+  if (repeat) repeatMs = repeat;
   enabled = true;
   up = null;
   mode = 'paused';
-  moving = false;
-  dir = null;
+  latched = null;
   lostSince = 0;
   window.addEventListener('deviceorientation', onOrientation);
   document.addEventListener('visibilitychange', onVisibility);
@@ -243,8 +237,7 @@ export function stopSteering() {
   timer = null;
   up = null;
   mode = 'paused';
-  moving = false;
-  dir = null;
+  latched = null;
   if (wakeLock) wakeLock.release().catch(() => {});
   wakeLock = null;
 }
@@ -258,9 +251,13 @@ export function steeringReporting() {
   return hasReported;
 }
 
-/** { mode: 'off' | 'paused' | 'calibrating' | 'ready', moving, heading, fast } */
+/** { mode: 'off' | 'paused' | 'calibrating' | 'ready', direction, tilt: { north, east } in degrees } */
 export function steeringStatus() {
-  return { mode: enabled ? mode : 'off', moving, heading: dir, fast };
+  return {
+    mode: enabled ? mode : 'off',
+    direction: latched,
+    tilt: { north: Math.round(deg(lastTilt.north)), east: Math.round(deg(lastTilt.east)) },
+  };
 }
 
 export function buzz(ms = 15) {

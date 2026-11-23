@@ -15,7 +15,7 @@
 
   <main id="intro">
     <h1>Map in a Box Web</h1>
-    <p>Explore the world by ear. Move across the map with the arrow keys, or on a phone or tablet by tilting it gently. Map in a Box tells you the country, city or ocean you are over, and plays a sound for each country. Street mode takes you down to the streets of a town, with the places along them.</p>
+    <p>Explore the world by ear. Move across the map with the arrow keys, or on a phone or tablet by tilting it. Map in a Box tells you the country, city or ocean you are over, and plays a sound for each country. Street mode takes you down to the streets of a town, with the places along them.</p>
     <p>It works with NVDA, JAWS, Narrator, VoiceOver and TalkBack, or with the browser's own voice. Headphones help you hear the tones move from left to right.</p>
     <label for="intro-speech">Speech</label>
     <select id="intro-speech">
@@ -31,7 +31,7 @@
     </select>
     <p id="intro-steer-row" hidden>
       <label class="check"><input type="checkbox" id="intro-steer"> Steer by tilting this device</label>
-      <span class="small">Hold it sideways in both hands at a comfortable angle. When it says Ready, that angle is still. Tilt it gently towards the way you want to go: top edge away for north, towards you for south, left edge down for west, right edge down for east. Each direction is spoken before you move. Come back to the starting angle to stop. Nothing needs tapping.</span>
+      <span class="small">It works like the arrow keys. Hold it sideways in both hands at a comfortable angle; when it says Ready, that angle is still. Tilt it firmly one way to move: top edge away for north, towards you for south, lower the right end for east, the left end for west. A tone plays from that side. Come back to still before the next move, or hold the tilt to keep going. The first time, a short practice teaches the four tilts.</span>
     </p>
     <p id="load-status" role="status">Loading…</p>
     <button id="start" type="button" disabled>Start exploring</button>
@@ -57,6 +57,9 @@
     </div>
     <aside id="panel" aria-label="Controls">
       <p id="steer-status" hidden></p>
+      <label for="tilt-move" data-steer-only hidden>Each tilt moves</label>
+      <select id="tilt-move" data-steer-only hidden></select>
+      <button type="button" id="btn-practice" data-steer-only hidden>Practise tilting</button>
       <h2 id="step-heading">Step size</h2>
       <label for="step-size" class="sr-only">Step size</label>
       <input id="step-size" type="range" min="0" max="4" step="1" value="2" aria-describedby="step-hint">
@@ -205,8 +208,9 @@
       </tbody>
     </table>
     <h3>Steering (phones and tablets)</h3>
-    <p>Turn on Steering, then hold the device sideways in both hands at a comfortable angle. When it says Ready, that angle counts as still. Tilt it gently towards the way you want to go, like rolling a marble on a tray: top edge away for north, towards you for south, left edge down for west, right edge down for east, and in between for the diagonals. Each new direction is spoken, and you start moving a moment later. Tilt further to go faster. Come back to the starting angle and it stops. Hold it upright like a phone, or put it down, and steering pauses; pick it up sideways again and the new angle counts as still, which is how to reset it.</p>
-    <p>In street mode, the Steering: pick turns or free button (also in Settings) chooses how steering moves. Pick turns follows the street. At a corner it stops until you come back to still; then tilt towards the way you want to hear it, for example "Turn left onto Ann Street, heading west", and hold the tilt to take it. Free goes straight the way you tilt, across blocks too.</p>
+    <p>Tilt steering works like the arrow keys. Turn on Steering, then hold the device sideways in both hands at a comfortable angle. When it says Ready, that angle counts as still. Tilt it firmly one way to move once: top edge away from you for north, towards you for south, lower the right end for east, lower the left end for west. A tone plays from that side: right for east, left for west, higher for north, lower for south. Come back to still (a soft click) before the next move, or hold the tilt to keep moving. A tilt halfway between two directions does nothing. Hold the device upright like a phone, or put it down, and steering pauses; pick it up sideways again and the new angle counts as still, which is how to reset it.</p>
+    <p>Each tilt moves lets you choose how far a tilt goes: one step, the next town or suburb, or the next country on the world map; one step or the next corner in street mode. Practise tilting runs the short practice again.</p>
+    <p>In street mode, the Steering: pick turns or free button (also in Settings) chooses how steering moves. Pick turns follows the street. At a corner it stops; come back to still, then tilt towards the way you want to hear it, for example "Turn left onto Ann Street", and hold the tilt to take it. Free goes straight the way you tilt, across blocks too.</p>
     <p>Some browsers keep F6 for themselves. If F6 does nothing, use I.</p>
     <p><a href="https://github.com/sjtaylor82/MapInABox/releases/latest">Download Map in a Box for Windows and macOS</a>, with street mode, walking routes, transport and much more.</p>
     <p>Your location is only used to move the map. It is not stored anywhere except this browser. Weather, time and search send the map position to those services when you ask for them.</p>

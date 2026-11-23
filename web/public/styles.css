@@ -265,3 +265,7 @@ table { border-collapse: collapse; width: 100%; font-size: 1rem; }
 th, td { text-align: left; padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--muted); vertical-align: top; }
 
 td:first-child { white-space: nowrap; font-weight: 600; }
+
+#panel label[for="tilt-move"] { display: block; font-weight: 600; margin: 0.75rem 0 0.25rem; }
+#panel #tilt-move { width: 100%; padding: 0.4rem; }
+#panel #btn-practice { margin-top: 0.5rem; font-size: 1rem; }

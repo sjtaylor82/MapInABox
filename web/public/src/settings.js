@@ -16,6 +16,9 @@ const DEFAULTS = {
   stepKm: 5,                // arrow keys and steering on land
   streetStepM: 20,          // arrow keys and steering in street mode, metres
   streetSteer: 'pick',      // steering in street mode: 'pick' turns at corners or go 'free'
+  tiltMove: 'step',         // what one tilt does on the world map: 'step' | 'place' | 'country'
+  tiltMoveStreet: 'step',   // in street mode: 'step' | 'corner'
+  tiltPracticed: false,     // the first-use tilt practice has been finished
   steering: null,           // steering wheel on a phone or tablet (null: not chosen yet, offered on touch devices)
   position: null,           // { lat, lon } last position
   jumpHistory: [],

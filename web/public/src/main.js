@@ -8,7 +8,7 @@ import {
   nearestCity, city, nearestCityLabel, nearbyFeatures, searchLocal, parseCoordinates,
 } from './world.js';
 import {
-  formatDistance, formatLat, formatLon, offsetKm, bearingDeg, compassName,
+  formatDistance, formatLat, formatLon, offsetKm, bearingDeg, compassName, haversineM,
 } from './geo.js';
 import * as online from './online.js';
 import { initMapView, updateMapView, draw as drawMap, setStreetDrawer } from './mapview.js';
@@ -27,8 +27,10 @@ const state = {
   mode: 'world',      // 'world' | 'street'
   streetName: '',     // the street being followed in street mode
   streetLabel: '',    // what was last said for the street position
-  corner: null,       // picking turns: { options, idx, arrival, armed } while stopped at a corner
+  corner: null,       // picking turns: { options, idx, arrival, chosen } while stopped at a corner
   travel: null,       // picking turns: the bearing of travel along the current street
+  practice: null,     // tilt practice in progress: { i }
+  skipTone: false,    // a tilt already played its direction tone for this move
 };
 
 // ── Start-up ──────────────────────────────────────────────────────────────
@@ -99,7 +101,8 @@ async function moved({ tone = true, prefix = '' } = {}) {
   if (state.mode === 'street') return movedStreet({ tone, prefix });
   const seq = ++state.seq;
   settings.set('position', { lat: state.lat, lon: state.lon });
-  if (tone) audio.spatialTone(state.lat, state.lon, toneBounds());
+  if (tone && !state.skipTone) audio.spatialTone(state.lat, state.lon, toneBounds());
+  state.skipTone = false;
   updateMapView(state.lat, state.lon, null, null);
   const info = await describe(state.lat, state.lon, state.info);
   if (seq !== state.seq) return; // the cursor has moved on
@@ -172,6 +175,26 @@ function nextCountry(bearing, direction) {
   }
   audio.edgeTone();
   say(`No other country found to the ${direction} within ${formatDistance(maxKm * 1000)}.`);
+}
+
+/** The next town or suburb in a direction, from the map's own place list. */
+function nextPlace(bearing, direction) {
+  const start = nearestCity(state.lat, state.lon).idx;
+  const seen = new Set([start]);
+  for (let km = 2; km <= 1500; km += km < 300 ? 2 : 10) {
+    const p = offsetKm(state.lat, state.lon, km, bearing);
+    const { idx, dist } = nearestCity(p.lat, p.lon);
+    if (seen.has(idx) || dist * 111 > 40) continue;
+    seen.add(idx);
+    const c = city(idx);
+    const b = bearingDeg(state.lat, state.lon, c.lat, c.lon);
+    if (street.bearingGap(b, bearing) > 35) continue;
+    const away = haversineM(state.lat, state.lon, c.lat, c.lon);
+    jumpTo(c.lat, c.lon, `Next place to the ${direction}, ${formatDistance(away)}:`);
+    return;
+  }
+  audio.edgeTone();
+  say(`No town found to the ${direction} within ${formatDistance(1500000)}.`);
 }
 
 // ── Where am I (device location) ──────────────────────────────────────────
@@ -258,6 +281,7 @@ function showMode() {
     ? 'Street map. Use the arrow keys to move. Press P for places nearby, F11 for the world map.'
     : 'World map. Use the arrow keys to move. Press F11 for street mode, F1 for help.');
   for (const el of document.querySelectorAll('[data-street-only]')) el.hidden = !inStreet;
+  showTiltMove();
   showStreetSteer();
   setStreetDrawer(inStreet ? street.drawStreets : null);
   showStep();
@@ -268,7 +292,8 @@ async function movedStreet({ tone = true, prefix = '', note = '', suffix = '', k
   if (!keepCorner) state.corner = null;
   const { lat, lon } = state;
   settings.set('position', { lat, lon });
-  if (tone) audio.spatialTone(lat, lon, toneBounds());
+  if (tone && !state.skipTone) audio.spatialTone(lat, lon, toneBounds());
+  state.skipTone = false;
   updateMapView(lat, lon, null, null);
   if (!street.areaReady(lat, lon)) {
     say('Loading streets…');
@@ -355,7 +380,7 @@ function arriveAlong(r, pick, heading) {
   // Only stop where there is a real choice, not counting the way back.
   const ahead = options.filter((o) => street.bearingGap(o.bearing, (arrival + 180) % 360) > 35);
   if (ahead.length < 2) return movedStreet({ note });
-  state.corner = { options, idx: nearestOption(options, heading), arrival, armed: false };
+  state.corner = { options, idx: nearestOption(options, heading), arrival, chosen: null };
   movedStreet({
     note,
     keepCorner: true,
@@ -444,6 +469,14 @@ function choosePlace() {
 
 let steerIntroduced = false;
 
+const DIRECTION_NAME = { 0: 'north', 90: 'east', 180: 'south', 270: 'west' };
+const TILT_HOW = {
+  0: 'Tilt the top edge away from you',
+  90: 'Lower the right end',
+  180: 'Tilt the top edge towards you',
+  270: 'Lower the left end',
+};
+
 function headingWord(h) {
   const name = compassName(h).replace('-', ' ');
   return name[0].toUpperCase() + name.slice(1);
@@ -453,7 +486,53 @@ function steerBlocked() {
   return !state.started || !!document.querySelector('dialog[open]');
 }
 
-const atCorner = () => state.mode === 'street' && !!state.corner;
+// What one tilt does, chosen with the "Each tilt moves" picker.
+const TILT_MOVES = {
+  world: [['step', () => `One step, ${stepText(stepKm())}`], ['place', () => 'To the next town or suburb'], ['country', () => 'To the next country']],
+  street: [['step', () => `One step, ${streetStepText(streetStepM())}`], ['corner', () => 'To the next corner']],
+};
+
+function tiltMove() {
+  const key = state.mode === 'street' ? 'tiltMoveStreet' : 'tiltMove';
+  const value = settings.get(key);
+  return TILT_MOVES[state.mode].some(([v]) => v === value) ? value : 'step';
+}
+
+function showTiltMove() {
+  const select = $('tilt-move');
+  select.replaceChildren(...TILT_MOVES[state.mode].map(([v, label]) => new Option(label(), v)));
+  select.value = tiltMove();
+}
+
+/** Holding a tilt repeats, slowly enough to hear each place; big jumps more slowly still. */
+function tiltRepeatMs() {
+  return tiltMove() === 'step' ? 1200 : 3000;
+}
+
+// First-use practice: tilt each way once, so the movements are learnt and
+// we know the device really feels all four.
+const PRACTICE = [90, 270, 0, 180];
+
+function startPractice() {
+  state.practice = { i: 0 };
+  say(`Practice. ${TILT_HOW[PRACTICE[0]]}, then come back to still.`);
+}
+
+function practiceMove(dir, t) {
+  const want = PRACTICE[state.practice.i];
+  if (dir !== want) {
+    say(`That was ${DIRECTION_NAME[dir]}: tilted ${Math.abs(t.north)} degrees ${t.north >= 0 ? 'away' : 'towards you'} and ${Math.abs(t.east)} degrees ${t.east >= 0 ? 'right' : 'left'}. Come back to still, then ${TILT_HOW[want].toLowerCase()}.`);
+    return;
+  }
+  state.practice.i += 1;
+  if (state.practice.i >= PRACTICE.length) {
+    state.practice = null;
+    settings.set('tiltPracticed', true);
+    say(`That's ${DIRECTION_NAME[dir]}. Practice done. Come back to still, then tilt to explore.`);
+    return;
+  }
+  say(`That's ${DIRECTION_NAME[dir]}. Come back to still, then ${TILT_HOW[PRACTICE[state.practice.i]].toLowerCase()}.`);
+}
 
 const steerHandlers = {
   ready() {
@@ -461,79 +540,82 @@ const steerHandlers = {
     audio.steerClick(true);
     showSteerStatus();
     if (steerBlocked()) return;
+    if (!settings.get('tiltPracticed') && !state.practice) {
+      say('Ready. Hold it like this to stay still.');
+      setTimeout(startPractice, 2500);
+      return;
+    }
     say(steerIntroduced
       ? 'Ready. Hold it like this to stay still.'
-      : 'Ready. Hold it like this to stay still. Tilt it gently towards the way you want to go, and come back to stop.');
+      : 'Ready. Hold it like this to stay still. Tilt it firmly one way to move, and come back to still before the next move.');
     steerIntroduced = true;
   },
-  heading(heading) {
-    steering.buzz(12);
-    audio.steerClick();
+  move(dir, repeat, t) {
     showSteerStatus();
     if (steerBlocked()) return;
-    if (atCorner() && state.corner.armed) {
-      // At a corner, the tilt picks one of the ways out.
-      state.corner.idx = nearestOption(state.corner.options, heading);
-      say(optionText(cornerChoice()));
+    const tilt = steering.steeringStatus().tilt;
+    if (state.practice) {
+      if (!repeat) {
+        audio.directionTone(dir);
+        practiceMove(dir, tilt);
+      }
       return;
     }
-    say(`${headingWord(heading)}.`);
-  },
-  go() {
-    steering.buzz(25);
-    showSteerStatus();
-    if (!atCorner()) state.travel = null; // a fresh start goes the way you tilt
-  },
-  step(heading, fast) {
-    showSteerStatus();
-    onSteerStep(heading, fast);
-  },
-  stop(wasMoving) {
     steering.buzz(15);
-    audio.steerClick(true);
-    showSteerStatus();
-    if (atCorner()) {
-      // Arriving at a corner while tilted must not set off at once: come back to still first.
-      state.corner.armed = true;
-      if (!steerBlocked()) say('Still. Tilt towards the way you want.');
-      return;
-    }
-    if (!steerBlocked() && wasMoving) say('Stopped.');
+    audio.directionTone(dir);
+    state.skipTone = true;
+    onTiltMove(dir, repeat);
   },
-  paused(wasMoving) {
+  still() {
+    audio.steerClick();
     showSteerStatus();
-    if (!steerBlocked()) say(`${wasMoving ? 'Stopped. ' : ''}Steering paused. Hold it sideways to steer.`);
+  },
+  paused() {
+    showSteerStatus();
+    if (!steerBlocked()) say('Steering paused. Hold it sideways to steer.');
   },
 };
 
-function onSteerStep(bearing, fast) {
-  if (steerBlocked()) return;
+function onTiltMove(dir, repeat = false) {
+  const name = DIRECTION_NAME[dir];
+  const how = tiltMove();
   if (state.mode === 'street') {
-    const m = streetStepM() * (fast ? 2 : 1);
-    if (streetSteerMode() === 'free') return streetMove(bearing, m);
+    const m = how === 'corner' ? 3000 : streetStepM();
+    if (streetSteerMode() === 'free') return how === 'corner' ? streetFollow(dir, m) : streetMove(dir, m);
     if (state.corner) {
-      if (state.corner.armed) takeCorner(m);
-      return;
+      // Still tilted from arriving: wait for still, so a corner is never passed by accident.
+      if (repeat && state.corner.chosen == null) return;
+      // At a corner, the first tilt says which way that is; holding it (or tilting the same way again) takes it.
+      const idx = nearestOption(state.corner.options, dir);
+      if (state.corner.chosen !== idx) {
+        state.corner.idx = idx;
+        state.corner.chosen = idx;
+        state.skipTone = false;
+        return say(`${optionText(cornerChoice())} Hold the tilt to go.`);
+      }
+      return takeCorner(m);
     }
     // Between corners, keep along the street the way you are travelling,
-    // unless you have tilted right round.
-    const dir = state.travel != null && street.bearingGap(bearing, state.travel) <= 120 ? state.travel : bearing;
-    streetFollow(dir, m, true);
-    return;
+    // unless you have tilted the other way.
+    const along = state.travel != null && street.bearingGap(dir, state.travel) <= 120 ? state.travel : dir;
+    return streetFollow(along, m, true);
   }
+  if (how === 'country') return nextCountry(dir, name);
+  if (how === 'place') return nextPlace(dir, name);
   // Seas are huge, so steps over water are bigger.
-  if (!state.info.onLand) return step(bearing, fast ? 100 : 50);
-  step(bearing, fast ? Math.max(25, stepKm() * 4) : stepKm());
+  step(dir, state.info.onLand ? stepKm() : Math.max(50, stepKm()));
 }
 
 function showSteerStatus() {
   const el = $('steer-status');
   const st = steering.steeringStatus();
-  el.hidden = st.mode === 'off';
-  if (st.mode === 'off') return;
+  const off = st.mode === 'off';
+  el.hidden = off;
+  for (const e of document.querySelectorAll('[data-steer-only]')) e.hidden = off;
+  if (off) return;
   if (st.mode !== 'ready') el.textContent = 'Steering paused: hold the device sideways.';
-  else if (st.moving) el.textContent = `Steering: going ${headingWord(st.heading).toLowerCase()}${st.fast ? ', fast' : ''}.`;
-  else el.textContent = 'Steering: still. Tilt gently to go.';
+  else if (st.direction != null) el.textContent = `Steering: tilted ${DIRECTION_NAME[st.direction]}.`;
+  else el.textContent = 'Steering: still. Tilt firmly one way to move.';
 }
 
 // ── Step size ─────────────────────────────────────────────────────────────
@@ -567,6 +649,7 @@ function showStep() {
   slider.value = String(inStreet ? STREET_STEPS.indexOf(streetStepM()) : STEP_SIZES.indexOf(stepKm()));
   slider.setAttribute('aria-valuetext', text);
   $('step-value').textContent = text;
+  if ($('tilt-move').options.length) showTiltMove(); // its "One step" label shows the size
   $('step-hint').textContent = inStreet
     ? 'How far each arrow key or steering step moves in street mode.'
     : 'How far each arrow key or steering step moves on land. Smaller steps find more suburbs.';
@@ -606,7 +689,7 @@ function toggleStreetSteer() {
 
 function setSteering(on) {
   settings.set('steering', on);
-  if (on) steering.startSteering(steerHandlers);
+  if (on) steering.startSteering(steerHandlers, tiltRepeatMs);
   else steering.stopSteering();
   $('btn-steer').textContent = on ? 'Steering: on' : 'Steering: off';
   $('btn-steer').setAttribute('aria-pressed', String(on));
@@ -990,9 +1073,16 @@ $('btn-jump').addEventListener('click', () => openJump());
 $('btn-help').addEventListener('click', openHelp);
 $('btn-settings').addEventListener('click', openSettings);
 $('btn-steer').addEventListener('click', toggleSteering);
+$('tilt-move').addEventListener('change', (e) => {
+  settings.set(state.mode === 'street' ? 'tiltMoveStreet' : 'tiltMove', e.target.value);
+});
+$('btn-practice').addEventListener('click', () => {
+  if (steering.steeringActive()) startPractice();
+});
 $('btn-street-steer').addEventListener('click', toggleStreetSteer);
 $('btn-street').addEventListener('click', () => { if (state.started) toggleStreetMode(); });
 showStep();
+showTiltMove();
 // The slider reports its own new value (aria-valuetext), so it doesn't speak as well.
 $('step-size').addEventListener('input', (e) => setStepIndex(Number(e.target.value), false));
 for (const btn of document.querySelectorAll('#panel [data-key]')) {

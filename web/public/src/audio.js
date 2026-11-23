@@ -187,3 +187,10 @@ export function steerClick(ready = false) {
   beep(1400, 0, 0.03, 0.25, 'square');
   if (ready && ctx) setTimeout(() => beep(1800, 0, 0.03, 0.25, 'square'), 90);
 }
+
+/** A short tone for a tilt: on the right for east, the left for west, higher for north, lower for south. */
+export function directionTone(bearing) {
+  const tones = { 0: [880, 0], 90: [660, 1], 180: [440, 0], 270: [660, -1] };
+  const [freq, pan] = tones[bearing] || [660, 0];
+  beep(freq, pan, 0.12, 0.3, 'triangle');
+}
