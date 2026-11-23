@@ -284,7 +284,7 @@ const NOT_STREETS = new Set(['rail', 'transit', 'ferry', 'aerialway', 'busway', 
  * pois: [{ id, n, k, la, lo }] }, the same shape street.js has always used.
  */
 export function streetData(bytes, ty, tx) {
-  const layers = decode(bytes, ['transportation_name', 'poi']);
+  const layers = decode(bytes, ['transportation_name', 'poi', 'housenumber']);
   const toLatLon = (px, py, extent) => [
     Math.round(latOf(ty + py / extent) * 1e6) / 1e6,
     Math.round(lonOf(tx + px / extent) * 1e6) / 1e6,
@@ -318,5 +318,15 @@ export function streetData(bytes, ty, tx) {
     const [la, lo] = toLatLon(px, py, f.extent);
     pois.push({ id: `${ty}/${tx}/p${i}`, n: name, k: placeKind(f.tags), c: f.tags.class || '', la, lo });
   }
-  return { ways, pois };
+  // House numbers: the number only, no street; street.js matches each to its nearest street.
+  const numbers = [];
+  for (const f of layers.housenumber || []) {
+    const num = String(f.tags.housenumber || '').trim();
+    if (!num || f.type !== 1 || !f.geometry[0]) continue;
+    const [px, py] = f.geometry[0][0];
+    if (px < 0 || py < 0 || px >= f.extent || py >= f.extent) continue;
+    const [la, lo] = toLatLon(px, py, f.extent);
+    numbers.push({ n: num, la, lo });
+  }
+  return { ways, pois, numbers };
 }

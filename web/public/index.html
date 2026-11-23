@@ -73,6 +73,14 @@
           <input id="places-list" type="range" class="picker">
           <p id="places-value" class="picker-value" aria-hidden="true"></p>
           <button type="button" id="places-go">Go there</button>
+          <button type="button" id="places-details">Phone, hours and website</button>
+          <div id="place-details" hidden>
+            <p id="place-details-text"></p>
+            <p class="place-links">
+              <a id="place-call" hidden>Call</a>
+              <a id="place-web" target="_blank" rel="noopener" hidden>Website</a>
+            </p>
+          </div>
           <p id="places-links" class="place-links">
             <a id="place-maps" target="_blank" rel="noopener">Open in Apple Maps</a>
             <a id="place-ubereats" target="_blank" rel="noopener" hidden>Search Uber Eats</a>
@@ -94,6 +102,7 @@
 
       <h2>Information</h2>
       <div class="grid">
+        <button type="button" data-key="a" data-street-only hidden>Address</button>
         <button type="button" data-key="q">Air quality</button>
         <button type="button" data-key="Shift+F1">Capital</button>
         <button type="button" data-key="F5">Continent</button>
@@ -218,6 +227,7 @@
         <tr><td>Shift+Arrows</td><td>Move 5 metres</td></tr>
         <tr><td>Ctrl+Arrows</td><td>Move 100 metres</td></tr>
         <tr><td>Alt+Arrows</td><td>Follow the street that way to the next corner</td></tr>
+        <tr><td>A</td><td>Nearest street address, from the house numbers in OpenStreetMap</td></tr>
         <tr><td>P</td><td>Places nearby, with distance and direction. Choose one to go there. Switch categories on or off under the list</td></tr>
         <tr><td>J, Y, F2 and the information keys</td><td>Work as on the world map</td></tr>
       </tbody>

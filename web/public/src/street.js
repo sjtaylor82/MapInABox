@@ -18,6 +18,7 @@ const pois = [];           // { name, kind, lat, lon }
 const poiIds = new Set();
 const segGrid = new Map(); // cell -> [[wayIndex, segmentIndex], ...]
 const poiGrid = new Map(); // cell -> [poi, ...]
+const numberGrid = new Map(); // cell -> [{ num, lat, lon }]: house numbers
 const nodes = new Map();   // "lat,lon" -> { lat, lon, names: Set, refs: [[wayIndex, vertexIndex], ...] }
 const ixGrid = new Map();  // cell -> [node, ...] where two or more streets meet
 const tiles = new Map();   // "ty,tx" -> { promise, ok, error, at }
@@ -108,6 +109,9 @@ function loadTile(ty, tx) {
     (data) => {
       for (const w of data.ways || []) addWay(w);
       for (const p of data.pois || []) addPlace(p);
+      for (const h of data.numbers || []) {
+        pushCell(numberGrid, ckey(cellOf(h.la), cellOf(h.lo)), { num: h.n, lat: h.la, lon: h.lo });
+      }
       entry.ok = true;
       return { ok: true };
     },
@@ -218,6 +222,58 @@ export function nearestStreet(lat, lon, maxM = 1500, prefer = '') {
   return best;
 }
 
+/**
+ * The street a house number belongs to: the nearest road, never a footpath
+ * or cycleway, and a lane or service road only when it is clearly nearer
+ * than a proper street.
+ */
+function streetForAddress(lat, lon) {
+  let best = null;
+  for (const [wi, si] of segmentsNear(lat, lon, 60)) {
+    const way = ways[wi];
+    if (PATHS.has(way.kind)) continue;
+    const p = project(wi, si, lat, lon);
+    if (p.dist > 60) continue;
+    const lane = way.kind === 'service' || /\b(Lane|Laneway|Place)$/.test(way.name);
+    const score = p.dist + (lane ? 15 : 0);
+    if (!best || score < best.score) best = { score, name: way.name };
+  }
+  return best ? best.name : '';
+}
+
+/**
+ * The nearest house number on a street, within 40 metres. Numbers in the map
+ * have no street of their own, so one counts only if `street` is the street
+ * nearest to it.
+ */
+export function houseNumberOn(lat, lon, street) {
+  const near = [];
+  for (const key of cellsNear(lat, lon, 40)) {
+    for (const h of numberGrid.get(key) || []) {
+      const d = metres(lat, lon, h.lat, h.lon);
+      if (d <= 40) near.push([d, h]);
+    }
+  }
+  near.sort((a, b) => a[0] - b[0]);
+  for (const [, h] of near.slice(0, 8)) {
+    if (streetForAddress(h.lat, h.lon) === street) return h.num;
+  }
+  return '';
+}
+
+/** The nearest address: { num, street, dist, bearing } within maxM metres, or null. */
+export function nearestAddress(lat, lon, maxM = 150) {
+  let best = null;
+  for (const key of cellsNear(lat, lon, maxM)) {
+    for (const h of numberGrid.get(key) || []) {
+      const d = metres(lat, lon, h.lat, h.lon);
+      if (d <= maxM && (!best || d < best.dist)) best = { ...h, dist: d };
+    }
+  }
+  if (!best) return null;
+  return { num: best.num, street: streetForAddress(best.lat, best.lon), dist: best.dist, bearing: bearingDeg(lat, lon, best.lat, best.lon) };
+}
+
 /** The nearest corner where two or more named streets meet, within maxM metres. */
 export function nearestIntersection(lat, lon, maxM = 25) {
   let best = null;
@@ -252,7 +308,10 @@ export function streetLabel(lat, lon, prefer = '') {
     return `${primary} at ${listJoin(names.filter((n) => n !== primary))}`;
   }
   if (!near) return `No streets within ${formatDistance(1500)}.`;
-  if (near.dist <= 20) return near.name;
+  if (near.dist <= 20) {
+    const num = houseNumberOn(lat, lon, near.name);
+    return num ? `${num} ${near.name}` : near.name;
+  }
   const dir = compassName(bearingDeg(lat, lon, near.lat, near.lon));
   if (near.dist <= 250) return `${near.name}, ${roughly(near.dist)} ${dir}`;
   return `No street here. The nearest is ${near.name}, ${roughly(near.dist)} ${dir}`;

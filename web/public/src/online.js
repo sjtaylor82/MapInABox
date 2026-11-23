@@ -3,6 +3,7 @@
 // is served without the Worker (local testing) they go to the public service.
 
 import { ZOOM, TILEJSON, streetData } from './vectortile.js';
+import { OVERPASS, detailsQuery, pickDetails } from './placedetails.js';
 
 let apiAvailable = null;
 
@@ -52,6 +53,31 @@ export async function streetTile(ty, tx) {
     bytes = new Uint8Array(await r.arrayBuffer());
   }
   return streetData(bytes, ty, tx);
+}
+
+/**
+ * Phone, hours, website and address for one place, or null if OpenStreetMap
+ * has none. Through the Worker, or straight from Overpass if that fails.
+ */
+export async function placeDetails(name, lat, lon) {
+  if (await hasApi()) {
+    try {
+      const p = new URLSearchParams({ name, lat: String(lat), lon: String(lon) });
+      const r = await fetch(`api/place?${p}`, { signal: AbortSignal.timeout(28000) });
+      if (r.ok) return (await r.json()).details;
+    } catch { /* fall through */ }
+  }
+  for (const mirror of OVERPASS) {
+    try {
+      const r = await fetch(mirror, {
+        method: 'POST',
+        body: new URLSearchParams({ data: detailsQuery(name, lat, lon) }),
+        signal: AbortSignal.timeout(12000),
+      });
+      if (r.ok) return pickDetails(await r.json());
+    } catch { /* next */ }
+  }
+  throw new Error('The place details service is busy.');
 }
 
 /** Place search (Photon). Returns [{ label, lat, lon }]. */

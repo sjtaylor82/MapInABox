@@ -9,6 +9,7 @@
 //                                streets and places), cached for a week
 
 import { ZOOM, TILEJSON, validTile } from '../public/src/vectortile.js';
+import { OVERPASS, detailsQuery, pickDetails } from '../public/src/placedetails.js';
 
 const PHOTON = 'https://photon.komoot.io/api/';
 const SEARCH_TTL = 7 * 24 * 3600;
@@ -23,6 +24,7 @@ export default {
     if (url.pathname === '/api/search') return search(url, ctx);
     const tile = url.pathname.match(/^\/api\/tile\/(\d+)\/(\d+)\/(\d+)$/);
     if (tile) return mapTile(Number(tile[1]), Number(tile[2]), Number(tile[3]), ctx);
+    if (url.pathname === '/api/place') return placeDetails(url, ctx);
     return json({ error: 'Not found' }, 404);
   },
 };
@@ -92,6 +94,38 @@ async function mapTile(z, x, y, ctx) {
   } catch {
     return json({ error: 'The street map service could not be reached.' }, 502);
   }
+}
+
+const DETAILS_TTL = 24 * 3600;
+
+/** GET /api/place?name=&lat=&lon=: phone, hours, website and address for one place. */
+async function placeDetails(url, ctx) {
+  const name = (url.searchParams.get('name') || '').trim().slice(0, 200);
+  const lat = Number(url.searchParams.get('lat'));
+  const lon = Number(url.searchParams.get('lon'));
+  if (!name || !Number.isFinite(lat) || !Number.isFinite(lon)) return json({ error: 'Bad request' }, 400);
+  const cache = caches.default;
+  const key = new Request(`https://cache.mapinabox/place/v1/${encodeURIComponent(name)}/${lat.toFixed(4)}/${lon.toFixed(4)}`);
+  const hit = await cache.match(key);
+  if (hit) return hit;
+  const body = new URLSearchParams({ data: detailsQuery(name, lat, lon) });
+  for (const mirror of OVERPASS) {
+    try {
+      const res = await fetch(mirror, {
+        method: 'POST',
+        body,
+        headers: { 'User-Agent': USER_AGENT, 'Content-Type': 'application/x-www-form-urlencoded' },
+        signal: AbortSignal.timeout(12000),
+      });
+      if (!res.ok) continue;
+      const out = new Response(JSON.stringify({ details: pickDetails(await res.json()) }), {
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': `public, max-age=${DETAILS_TTL}` },
+      });
+      ctx.waitUntil(cache.put(key, out.clone()));
+      return out;
+    } catch { /* next */ }
+  }
+  return json({ error: 'The place details service is busy.' }, 502);
 }
 
 function clampInt(v, min, max, dflt) {

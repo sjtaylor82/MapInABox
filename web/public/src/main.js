@@ -16,6 +16,7 @@ import * as steering from './steering.js';
 import * as street from './street.js';
 import { makePicker } from './picker.js';
 import { postcodeAt } from './postcode.js';
+import { speakableHours } from './placedetails.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -563,6 +564,7 @@ function listPlaces(focusList) {
  * links search for it by name; on a phone they open the app if it is installed.
  */
 function showPlaceLinks() {
+  $('place-details').hidden = true;
   const p = placeResults[state.placeIdx || 0];
   $('places-links').hidden = !p;
   if (!p) return;
@@ -578,6 +580,43 @@ function showPlaceLinks() {
     $('place-doordash').href = `https://www.doordash.com/search/store/${q}/`;
     $('place-doordash').textContent = `Search DoorDash for ${p.name}`;
   }
+}
+
+/** Phone, hours and website for the chosen place, looked up in OpenStreetMap. */
+async function placeDetails() {
+  const p = placeResults[state.placeIdx || 0];
+  if (!p) return;
+  say(`Looking up ${p.name}…`);
+  let d;
+  try {
+    d = await online.placeDetails(p.name, p.lat, p.lon);
+  } catch {
+    return say('The place details service is busy. Try again in a minute, or use Open in Apple Maps.');
+  }
+  if (placeResults[state.placeIdx || 0] !== p) return; // chose another meanwhile
+  const parts = [];
+  if (d && d.phone) parts.push(`Phone ${d.phone}`);
+  if (d && d.hours) parts.push(`Hours: ${speakableHours(d.hours)}`);
+  if (d && d.address) parts.push(`Address: ${d.address}`);
+  if (d && d.cuisine) parts.push(`Cuisine: ${d.cuisine}`);
+  if (d && d.website) parts.push('Has a website');
+  if (d && d.wheelchair) parts.push(`Wheelchair access: ${d.wheelchair}`);
+  const text = parts.length
+    ? `${p.name}. ${parts.join('. ')}.`
+    : `OpenStreetMap has no phone, hours or website for ${p.name}. Open in Apple Maps may have them.`;
+  $('place-details-text').textContent = text;
+  $('place-call').hidden = !(d && d.phone);
+  if (d && d.phone) {
+    $('place-call').href = `tel:${d.phone.split(';')[0].replace(/[^+\d]/g, '')}`;
+    $('place-call').textContent = `Call ${p.name}`;
+  }
+  $('place-web').hidden = !(d && d.website);
+  if (d && d.website) {
+    $('place-web').href = d.website.split(';')[0];
+    $('place-web').textContent = `${p.name} website`;
+  }
+  $('place-details').hidden = false;
+  say(text);
 }
 
 function choosePlace() {
@@ -1021,6 +1060,13 @@ const KEYS = {
   l: () => say(`${formatLat(state.lat)}, ${formatLon(state.lon)}.`),
   c: () => say(noCountry() ? 'Open water.' : `${state.info.country}.`),
   'Shift+p': () => announcePostcode(),
+  a: () => {
+    if (state.mode !== 'street') return say('Addresses are in street mode. Press F11 first.');
+    const ad = street.nearestAddress(state.lat, state.lon);
+    if (!ad) return say('No house numbers in the map near here.');
+    const where = ad.dist < 10 ? 'here' : `${formatDistance(Math.round(ad.dist / 5) * 5)} ${compassName(ad.bearing).replace('-', ' ')}`;
+    say(`${ad.num} ${ad.street || ''}, ${where}.`.replace(' ,', ','));
+  },
   r: () => say(state.info.admin ? `${state.info.admin}.` : noCountry() ? 'Open water.' : `No region found in ${state.info.country}.`),
   n: () => say(nearestCityLabel(state.lat, state.lon)),
   g: async () => {
@@ -1246,6 +1292,7 @@ $('places-list').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); choosePlace(); }
 });
 $('places-go').addEventListener('click', choosePlace);
+$('places-details').addEventListener('click', placeDetails);
 $('places-find').addEventListener('click', () => { if (state.started) openPlaces(); });
 for (const id of ['jump-dialog', 'help-dialog']) {
   $(id).addEventListener('close', () => { if (state.started) $('map').focus(); });
