@@ -17,6 +17,7 @@ import * as street from './street.js';
 import { makePicker } from './picker.js';
 import { postcodeAt } from './postcode.js';
 import { speakableHours } from './placedetails.js';
+import { initJourney, openJourney } from './journey.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -586,12 +587,14 @@ function showPlaceLinks() {
 async function placeDetails() {
   const p = placeResults[state.placeIdx || 0];
   if (!p) return;
-  say(`Looking up ${p.name}…`);
-  let d;
-  try {
-    d = await online.placeDetails(p.name, p.lat, p.lon);
-  } catch {
-    return say('The place details service is busy. Try again in a minute, or use Open in Apple Maps.');
+  let d = p.details; // already here when the street data came from Overpass
+  if (!d) {
+    say(`Looking up ${p.name}…`);
+    try {
+      d = await online.placeDetails(p.name, p.lat, p.lon);
+    } catch {
+      return say('The place details service is busy. Try again in a minute, or use Open in Apple Maps.');
+    }
   }
   if (placeResults[state.placeIdx || 0] !== p) return; // chose another meanwhile
   const parts = [];
@@ -1325,6 +1328,23 @@ for (const btn of document.querySelectorAll('#panel [data-move]')) {
   });
 }
 $('btn-where').addEventListener('click', whereAmI);
+$('btn-journey').addEventListener('click', openJourney);
+initJourney({
+  getHere: () => ({ lat: state.lat, lon: state.lon, label: state.streetLabel || state.info.label || state.info.city }),
+  // A food place on the journey: go there, in street mode if it is on.
+  goTo: (p) => {
+    $('map').focus();
+    const prefix = `${p.name}, ${p.kind}.`;
+    if (state.mode === 'street') {
+      state.lat = p.lat;
+      state.lon = p.lon;
+      state.streetName = '';
+      movedStreet({ prefix });
+    } else {
+      jumpTo(p.lat, p.lon, prefix);
+    }
+  },
+});
 $('jump-here').addEventListener('click', whereAmI);
 // Keys pressed while focus is on the toolbar still drive the map.
 document.addEventListener('keydown', (e) => {

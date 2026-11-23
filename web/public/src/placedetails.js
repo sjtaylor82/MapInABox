@@ -22,8 +22,11 @@ export function detailsQuery(name, lat, lon) {
 /** The useful tags of the first match, or null. */
 export function pickDetails(json) {
   const el = (json.elements || [])[0];
-  if (!el) return null;
-  const t = el.tags || {};
+  return el ? detailsFromTags(el.tags || {}) : null;
+}
+
+/** Phone, hours, website, address and so on from an OpenStreetMap element's tags. */
+export function detailsFromTags(t) {
   const addr = [
     [t['addr:unit'] && `Unit ${t['addr:unit']}`, t['addr:housenumber'], t['addr:street']].filter(Boolean).join(' '),
     t['addr:suburb'] || t['addr:city'],

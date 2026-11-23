@@ -7,9 +7,13 @@
 //   GET /api/search?q=&lat=&lon= Photon place search, cached for a week
 //   GET /api/tile/14/x/y         One OpenFreeMap vector tile (OpenStreetMap
 //                                streets and places), cached for a week
+//   /api/journey, /api/flights, /api/road, /api/food  The journey planner
+//                                (Rome2Rio, OSRM, Overpass): see journey.js
 
 import { ZOOM, TILEJSON, validTile } from '../public/src/vectortile.js';
 import { OVERPASS, detailsQuery, pickDetails } from '../public/src/placedetails.js';
+import { AREA_SERVERS, areaQuery, areaData } from '../public/src/overpassarea.js';
+import { journeyRoute } from './journey.js';
 
 const PHOTON = 'https://photon.komoot.io/api/';
 const SEARCH_TTL = 7 * 24 * 3600;
@@ -18,6 +22,8 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
+    const planned = journeyRoute(request, url, env, ctx);
+    if (planned) return planned;
     if (request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
 
     if (url.pathname === '/api/health') return json({ ok: true });
@@ -25,6 +31,8 @@ export default {
     const tile = url.pathname.match(/^\/api\/tile\/(\d+)\/(\d+)\/(\d+)$/);
     if (tile) return mapTile(Number(tile[1]), Number(tile[2]), Number(tile[3]), ctx);
     if (url.pathname === '/api/place') return placeDetails(url, ctx);
+    const area = url.pathname.match(/^\/api\/area\/(\d+)\/(\d+)\/(\d+)$/);
+    if (area) return streetArea(Number(area[1]), Number(area[2]), Number(area[3]), ctx);
     return json({ error: 'Not found' }, 404);
   },
 };
@@ -94,6 +102,45 @@ async function mapTile(z, x, y, ctx) {
   } catch {
     return json({ error: 'The street map service could not be reached.' }, 502);
   }
+}
+
+const AREA_TTL = 7 * 24 * 3600;
+
+/**
+ * GET /api/area/14/x/y: streets, places (with phone, hours and website) and
+ * house numbers for one tile, from Overpass. The French server answers only
+ * clients that identify themselves, which the Worker does and a browser
+ * cannot. On failure the page falls back to OpenFreeMap tiles.
+ */
+async function streetArea(z, x, y, ctx) {
+  if (z !== ZOOM || !validTile(y, x)) return json({ error: 'Bad tile' }, 400);
+  const cache = caches.default;
+  const key = new Request(`https://cache.mapinabox/area/v1/${z}/${x}/${y}`);
+  const hit = await cache.match(key);
+  if (hit) return hit;
+  const body = new URLSearchParams({ data: areaQuery(y, x) });
+  const deadline = Date.now() + 25000;
+  for (const server of AREA_SERVERS) {
+    const left = deadline - Date.now();
+    if (left < 3000) break;
+    try {
+      const res = await fetch(server, {
+        method: 'POST',
+        body,
+        headers: { 'User-Agent': USER_AGENT, 'Content-Type': 'application/x-www-form-urlencoded' },
+        signal: AbortSignal.timeout(left),
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data.remark && /runtime error|timed out/i.test(data.remark)) continue;
+      const out = new Response(JSON.stringify(areaData(data)), {
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': `public, max-age=${AREA_TTL}` },
+      });
+      ctx.waitUntil(cache.put(key, out.clone()));
+      return out;
+    } catch { /* next server */ }
+  }
+  return json({ error: 'The street data service is busy.' }, 502);
 }
 
 const DETAILS_TTL = 24 * 3600;

@@ -18,7 +18,8 @@ const pois = [];           // { name, kind, lat, lon }
 const poiIds = new Set();
 const segGrid = new Map(); // cell -> [[wayIndex, segmentIndex], ...]
 const poiGrid = new Map(); // cell -> [poi, ...]
-const numberGrid = new Map(); // cell -> [{ num, lat, lon }]: house numbers
+const numberGrid = new Map(); // cell -> [{ num, street, lat, lon }]: house numbers
+const numberIds = new Set();
 const nodes = new Map();   // "lat,lon" -> { lat, lon, names: Set, refs: [[wayIndex, vertexIndex], ...] }
 const ixGrid = new Map();  // cell -> [node, ...] where two or more streets meet
 const tiles = new Map();   // "ty,tx" -> { promise, ok, error, at }
@@ -95,7 +96,7 @@ function addPlace(p) {
   if (poiIds.has(p.id) || poiIds.has(key)) return;
   poiIds.add(p.id);
   poiIds.add(key);
-  const poi = { name: p.n, kind: p.k, category: placeCategory(p.c, p.k), lat: p.la, lon: p.lo };
+  const poi = { name: p.n, kind: p.k, category: placeCategory(p.c, p.k), lat: p.la, lon: p.lo, details: p.d || null };
   pois.push(poi);
   pushCell(poiGrid, ckey(cellOf(poi.lat), cellOf(poi.lon)), poi);
 }
@@ -110,7 +111,10 @@ function loadTile(ty, tx) {
       for (const w of data.ways || []) addWay(w);
       for (const p of data.pois || []) addPlace(p);
       for (const h of data.numbers || []) {
-        pushCell(numberGrid, ckey(cellOf(h.la), cellOf(h.lo)), { num: h.n, lat: h.la, lon: h.lo });
+        const key = h.id || `${h.n}|${h.la}|${h.lo}`;
+        if (numberIds.has(key)) continue;
+        numberIds.add(key);
+        pushCell(numberGrid, ckey(cellOf(h.la), cellOf(h.lo)), { num: h.n, street: h.s || '', lat: h.la, lon: h.lo });
       }
       entry.ok = true;
       return { ok: true };
@@ -256,7 +260,7 @@ export function houseNumberOn(lat, lon, street) {
   }
   near.sort((a, b) => a[0] - b[0]);
   for (const [, h] of near.slice(0, 8)) {
-    if (streetForAddress(h.lat, h.lon) === street) return h.num;
+    if ((h.street || streetForAddress(h.lat, h.lon)) === street) return h.num;
   }
   return '';
 }
@@ -271,7 +275,7 @@ export function nearestAddress(lat, lon, maxM = 150) {
     }
   }
   if (!best) return null;
-  return { num: best.num, street: streetForAddress(best.lat, best.lon), dist: best.dist, bearing: bearingDeg(lat, lon, best.lat, best.lon) };
+  return { num: best.num, street: best.street || streetForAddress(best.lat, best.lon), dist: best.dist, bearing: bearingDeg(lat, lon, best.lat, best.lon) };
 }
 
 /** The nearest corner where two or more named streets meet, within maxM metres. */

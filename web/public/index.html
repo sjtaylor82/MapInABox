@@ -43,6 +43,7 @@
       <button id="btn-street-steer" type="button" hidden>Steering: pick turns</button>
       <button id="btn-street" type="button" aria-pressed="false">Street mode (F11)</button>
       <button id="btn-where" type="button">Where am I (Y)</button>
+      <button id="btn-journey" type="button">Journey planner</button>
     </header>
     <div id="map" tabindex="0" role="application" aria-roledescription="world map"
          aria-label="World map. Use the arrow keys to move. Press F1 for help.">
@@ -89,6 +90,50 @@
           <fieldset id="places-categories">
             <legend>Categories</legend>
           </fieldset>
+        </div>
+      </section>
+
+      <section id="journey-section" aria-labelledby="journey-title">
+        <h2 id="journey-title" tabindex="-1">Journey planner</h2>
+        <p class="small">Journey options from <a href="https://www.rome2rio.com/">Rome2Rio</a>. Food from <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>.</p>
+        <label for="journey-from">From (leave empty to start where you are on the map)</label>
+        <input id="journey-from" type="text" autocomplete="off" spellcheck="false">
+        <label for="journey-to">To</label>
+        <input id="journey-to" type="text" autocomplete="off" spellcheck="false">
+        <label for="journey-date" class="picker-label">Travel date, for flight times</label>
+        <input id="journey-date" type="range" class="picker">
+        <p id="journey-date-value" class="picker-value" aria-hidden="true"></p>
+        <button type="button" id="journey-plan">Plan journey</button>
+        <p id="journey-prompt">Type a town, city, address or place, then choose Plan journey.</p>
+        <div id="journey-options" hidden>
+          <label for="journey-option-list" class="picker-label">Option</label>
+          <input id="journey-option-list" type="range" class="picker">
+          <p id="journey-option-value" class="picker-value" aria-hidden="true"></p>
+          <button type="button" id="journey-choose">Show steps</button>
+        </div>
+        <div id="journey-legs" hidden>
+          <label for="journey-leg-list" class="picker-label">Leg</label>
+          <input id="journey-leg-list" type="range" class="picker">
+          <p id="journey-leg-value" class="picker-value" aria-hidden="true"></p>
+          <button type="button" id="journey-read">Read all</button>
+          <div id="journey-flights" hidden>
+            <p id="journey-flights-note"></p>
+            <label for="journey-flight-list" class="picker-label">Flight</label>
+            <input id="journey-flight-list" type="range" class="picker">
+            <p id="journey-flight-value" class="picker-value" aria-hidden="true"></p>
+          </div>
+          <button type="button" id="journey-food-find">Find food along the way</button>
+        </div>
+        <div id="journey-food" hidden>
+          <label for="journey-food-list" class="picker-label">Food</label>
+          <input id="journey-food-list" type="range" class="picker">
+          <p id="journey-food-value" class="picker-value" aria-hidden="true"></p>
+          <button type="button" id="journey-food-go">Go there</button>
+          <p id="journey-food-links" class="place-links">
+            <a id="journey-food-maps" target="_blank" rel="noopener">Open in Apple Maps</a>
+            <a id="journey-food-ubereats" target="_blank" rel="noopener">Search Uber Eats</a>
+            <a id="journey-food-doordash" target="_blank" rel="noopener">Search DoorDash</a>
+          </p>
         </div>
       </section>
 
@@ -232,6 +277,9 @@
         <tr><td>J, Y, F2 and the information keys</td><td>Work as on the world map</td></tr>
       </tbody>
     </table>
+    <h3>Journey planner</h3>
+    <p>The Journey planner button, or the Journey planner section under the map, plans a trip with Rome2Rio: flights, trains, buses, ferries and driving. Type where you are going, and where from (leave From empty to start where you are on the map), then choose Plan journey. Swipe up or down on Option (or use the arrow keys) to hear each way, with its time and price; choose Show steps to go through its legs one by one, or Read all to hear the whole plan. For a flight, the flights on the travel date are listed, non-stop first. Rome2Rio's times and prices are estimates, not timetables.</p>
+    <p>Find food along the way lists cafés, restaurants, take-aways, pubs and bakeries from OpenStreetMap in journey order: within 100 metres of the road for drive, bus and walk legs, and near each station, airport and stop. Choose one to hear it on the map, open it in Apple Maps, or search for it on Uber Eats or DoorDash.</p>
     <h3>Steering (phones and tablets)</h3>
     <p>Turn on Steering and lay the phone flat, screen up. When it says Ready, flat is still. Tip it well over, more than 60 degrees, to move, like rolling a marble on a tray: the top edge down, away from you, for north; the top edge up, towards you, for south; the right edge down for east; the left edge down for west. Each tilt moves once, with a tone from that side; hold the tilt to keep moving. Bring it back towards flat (below about 30 degrees) to stop, with a soft click. A tilt halfway between two directions does nothing. Steering only pauses if you tip it past upright. Shake the phone firmly to turn steering off, and shake it again to turn it back on.</p>
     <p>Each tilt moves lets you choose how far a tilt goes: one step, the next town or suburb, or the next country on the world map; one step or the next corner in street mode. Practise steering runs the short practice again.</p>

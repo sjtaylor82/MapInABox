@@ -281,3 +281,8 @@ input.picker { width: 100%; height: 2rem; accent-color: var(--accent); }
 
 .place-links { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0; }
 .place-links a { padding: 0.4rem 0.8rem; border: 2px solid var(--accent); border-radius: 6px; font-size: 1rem; }
+
+/* Journey planner: each box on its own line, full width. */
+#journey-section label[for^="journey-"]:not(.picker-label) { display: block; font-weight: 600; margin: 0.75rem 0 0.25rem; }
+#journey-section input[type="text"] { display: block; width: 100%; box-sizing: border-box; padding: 0.4rem; font-size: 1rem; }
+#journey-section button { margin-top: 0.5rem; }

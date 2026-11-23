@@ -40,6 +40,12 @@ let tileTemplate = null;
 export async function streetTile(ty, tx) {
   let bytes = null;
   if (await hasApi()) {
+    // First choice: full OpenStreetMap data through the Worker (Overpass),
+    // with addresses, phone numbers and opening hours.
+    try {
+      const r = await fetch(`api/area/${ZOOM}/${tx}/${ty}`, { signal: AbortSignal.timeout(30000) });
+      if (r.ok) return await r.json();
+    } catch { /* fall back to the map tiles */ }
     try {
       const r = await fetch(`api/tile/${ZOOM}/${tx}/${ty}`);
       if (r.ok) bytes = new Uint8Array(await r.arrayBuffer());
