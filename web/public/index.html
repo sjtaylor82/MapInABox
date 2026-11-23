@@ -53,7 +53,7 @@
         <div id="journey-walk" hidden>
           <button type="button" id="journey-guide">Start walking guidance</button>
           <button type="button" id="journey-walk-food">Find food along this walk</button>
-          <ol id="journey-steps"></ol>
+          <ol id="journey-steps" class="steps"></ol>
         </div>
         <div id="journey-options" hidden>
           <label for="journey-option-list" class="picker-label">Option</label>
@@ -81,9 +81,8 @@
         </div>
         <div id="journey-food" hidden>
           <h3 id="journey-food-title" tabindex="-1">Places along the way</h3>
-          <label for="journey-food-list" class="picker-label">Food</label>
-          <input id="journey-food-list" type="range" class="picker">
-          <p id="journey-food-value" class="picker-value" aria-hidden="true"></p>
+          <ul id="journey-food-list" class="result-list"></ul>
+          <p id="journey-food-chosen" aria-live="polite"></p>
           <button type="button" id="journey-food-go">Go there</button>
           <p id="journey-food-links" class="place-links">
             <a id="journey-food-maps" target="_blank" rel="noopener">Open in Apple Maps</a>

@@ -298,6 +298,27 @@ export function nearestAddress(lat, lon, maxM = 150) {
   return { num: best.num, street: best.street || streetForAddress(best.lat, best.lon), dist: best.dist, bearing: bearingDeg(lat, lon, best.lat, best.lon) };
 }
 
+/**
+ * Which side a street leaves a corner on, for someone walking `heading`:
+ * 'left', 'right', 'both' (you cross it) or '' (not known). As the desktop's
+ * intersection shape: each branch of that street at the corner.
+ */
+export function streetSide(corner, name, heading) {
+  const sides = new Set();
+  for (const [wi, vi] of corner.refs || []) {
+    if (ways[wi].name !== name) continue;
+    const pts = ways[wi].pts;
+    for (const j of [vi - 1, vi + 1]) {
+      if (j < 0 || j >= pts.length) continue;
+      const rel = ((bearingDeg(corner.lat, corner.lon, pts[j][0], pts[j][1]) - heading + 540) % 360) - 180;
+      if (rel <= -30 && rel >= -150) sides.add('left');
+      else if (rel >= 30 && rel <= 150) sides.add('right');
+    }
+  }
+  if (sides.size === 2) return 'both';
+  return sides.size ? [...sides][0] : '';
+}
+
 /** The nearest corner where two or more named streets meet, within maxM metres. */
 export function nearestIntersection(lat, lon, maxM = 25) {
   let best = null;

@@ -286,3 +286,11 @@ input.picker { width: 100%; height: 2rem; accent-color: var(--accent); }
 
 #panel summary { cursor: pointer; margin: 1rem 0 0.5rem; font-weight: 700; }
 #panel summary h2 { display: inline; margin: 0; }
+
+/* The step text says what to do; the list's own numbers are enough on screen. */
+ol.steps { padding-left: 1.5rem; }
+ol.steps li { margin: 0.4rem 0; }
+
+.result-list { list-style: none; padding: 0; margin: 0.5rem 0; max-height: 50vh; overflow-y: auto; }
+.result-list li { margin: 0.25rem 0; }
+.result-list button { width: 100%; text-align: left; font-size: 1rem; padding: 0.45rem 0.6rem; }

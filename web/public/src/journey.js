@@ -217,11 +217,18 @@ const TURN = {
 };
 
 /** What to do at a step, without the distance: "Turn left onto Middle Street". */
+/** The street a step walks along: its own name, or the street its footpath runs beside. */
+function streetOf(s) {
+  return s.name || (s.nearDist <= 15 ? s.near : '');
+}
+
 function stepAction(s) {
-  // Footpaths often have no name: say which street the turn is by instead.
-  const by = !s.name && s.near ? `, by ${s.near}` : '';
-  const onto = s.name ? ` onto ${s.name}` : by;
-  const along = s.name ? ` along ${s.name}` : by;
+  // Footpaths often have no name: a footpath beside a street is that street;
+  // otherwise say which street the turn is by.
+  const name = streetOf(s);
+  const by = !name && s.near ? `, by ${s.near}` : '';
+  const onto = name ? ` onto ${name}` : by;
+  const along = name ? ` along ${name}` : by;
   const turn = TURN[s.modifier] || 'continue';
   switch (s.type) {
     case 'depart': return `Start${along}, heading ${compassName(s.bearing || 0).replace('-', ' ')}`;
@@ -234,9 +241,81 @@ function stepAction(s) {
   }
 }
 
+function listJoin(items) {
+  return items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
+
+/** "at the corner of Railway Parade": the other streets meeting where a step happens. */
+function cornerText(s) {
+  return s.corner && s.corner.length ? `, at ${s.corner.length > 1 ? 'the corner of ' : ''}${listJoin(s.corner)}` : '';
+}
+
+/** One cross street: "cross Wilga Street", or "Burwood Road on your right" when it only leaves one side. */
+function crossingWords(c) {
+  if (c.side === 'both' || !c.side) return `cross ${c.name}`;
+  return `${c.name} on your ${c.side}`;
+}
+
+/** The cross streets on the way to the next step, in order. */
+function crossingText(s) {
+  return s.crossings && s.crossings.length ? `: ${s.crossings.map(crossingWords).join(', then ')}` : '';
+}
+
 function stepText(s) {
   const walkOn = s.type !== 'arrive' && s.distance ? `, then walk ${formatDistance(s.distance)}` : '';
-  return `${stepAction(s)}${walkOn}.`;
+  return `${stepAction(s)}${cornerText(s)}${walkOn}${crossingText(s)}.`;
+}
+
+/** The point a given distance along a line. */
+function pointAlong(line, cum, along) {
+  let i = 0;
+  while (i < cum.length - 2 && cum[i + 1] < along) i += 1;
+  const seg = cum[i + 1] - cum[i] || 1;
+  const t = Math.max(0, Math.min(1, (along - cum[i]) / seg));
+  return [line[i][0] + t * (line[i + 1][0] - line[i][0]), line[i][1] + t * (line[i + 1][1] - line[i][1])];
+}
+
+/**
+ * Corners and cross streets from the street map: the streets meeting where
+ * each step happens, and the cross streets passed on the way to the next.
+ */
+async function addCrossStreets(res) {
+  const line = decodePolyline(res.line);
+  const cum = cumulative(line);
+  // The street map along the whole walk first.
+  const loads = [];
+  for (let a = 0; a <= cum[cum.length - 1]; a += 400) {
+    const [la, lo] = pointAlong(line, cum, a);
+    loads.push(street.ensureArea(la, lo));
+  }
+  await Promise.race([Promise.all(loads), new Promise((r) => setTimeout(r, 12000))]);
+  const at = res.steps.map((s) => alongLine(line, cum, s.lat, s.lon).along);
+  res.steps.forEach((s, i) => {
+    if (s.lat == null) return;
+    const mine = streetOf(s);
+    const prevStreet = i > 0 ? streetOf(res.steps[i - 1]) : '';
+    const ix = street.nearestIntersection(s.lat, s.lon, 25);
+    s.corner = ix ? [...ix.names].filter((n) => n !== mine && n !== s.near) : [];
+    if (s.corner.length > 2) s.corner = s.corner.slice(0, 2);
+    // Cross streets between this step and the next, in order, not the corners at either end.
+    s.crossings = [];
+    if (s.type === 'arrive' || i + 1 >= res.steps.length) return;
+    const seen = new Set([mine, s.near, prevStreet, ...s.corner]);
+    const nextIx = street.nearestIntersection(res.steps[i + 1].lat, res.steps[i + 1].lon, 25);
+    for (const n of nextIx ? nextIx.names : []) seen.add(n);
+    for (let a = at[i] + 20; a < at[i + 1] - 20; a += 8) {
+      const [la, lo] = pointAlong(line, cum, a);
+      const c = street.nearestIntersection(la, lo, 12);
+      if (!c) continue;
+      const [b1, b2] = [pointAlong(line, cum, a - 6), pointAlong(line, cum, a + 6)];
+      const heading = bearingDeg(b1[0], b1[1], b2[0], b2[1]);
+      for (const name of c.names) {
+        if (seen.has(name)) continue;
+        seen.add(name);
+        s.crossings.push({ name, lat: c.lat, lon: c.lon, side: street.streetSide(c, name, heading) });
+      }
+    }
+  });
 }
 
 /** The steps as a plain numbered list, read by swiping like any other text. */
@@ -244,7 +323,7 @@ function showSteps() {
   const ol = $('journey-steps');
   ol.replaceChildren(...st.walk.steps.map((s, i) => {
     const li = document.createElement('li');
-    li.textContent = `${i + 1}. ${stepText(s)}`;
+    li.textContent = stepText(s);
     return li;
   }));
 }
@@ -304,9 +383,15 @@ async function planWalk(from, to) {
   for (const step of res.steps) {
     if (!step.name && step.lat != null) {
       const n = street.nearestStreet(step.lat, step.lon, 30);
-      if (n) step.near = n.name;
+      if (n) {
+        step.near = n.name;
+        step.nearDist = n.dist;
+      }
     }
   }
+  setPrompt('Finding the cross streets…');
+  await addCrossStreets(res);
+  if (seq !== st.seq) return;
   st.walk = res;
   st.walk.toLabel = b.label;
   st.stepIdx = 0;
@@ -468,7 +553,18 @@ function onGuidePosition(pos) {
     say(`In ${formatDistance(Math.round(d / 5) * 5)}, ${stepAction(s).replace(/^./, (c) => c.toLowerCase())}.`);
     spoke = true;
   }
-  // Places along the way, when no turn is being spoken.
+  // Cross streets on this stretch, as you reach them.
+  if (!spoke) {
+    const cur = steps[guide.next - 1];
+    for (const c of (cur && cur.crossings) || []) {
+      if (guide.crossed.has(c.name) || haversineM(lat, lon, c.lat, c.lon) > 15) continue;
+      guide.crossed.add(c.name);
+      say(c.side === 'both' || !c.side ? `Crossing ${c.name}.` : `${c.name} on your ${c.side}.`);
+      spoke = true;
+      break;
+    }
+  }
+  // Places along the way, when nothing else is being spoken.
   if (!spoke && !guide.off) calloutPlace(lat, lon);
 }
 
@@ -483,6 +579,7 @@ async function startGuiding() {
   guide.last = null;
   guide.heading = null;
   guide.called = new Set();
+  guide.crossed = new Set();
   try {
     if ('wakeLock' in navigator) guide.wakeLock = await navigator.wakeLock.request('screen');
   } catch { /* the screen may dim */ }
@@ -830,7 +927,7 @@ async function findFood() {
   }
   const more = all.length > MAX_FOOD ? ` The first ${MAX_FOOD} of ${all.length} are listed.` : '';
   setPrompt(`${all.length} food places along the way, in journey order.${more}${missed} Swipe up or down on Food to hear them.`);
-  $('journey-food-list').focus();
+  $('journey-food-list').querySelector('button')?.focus();
   say(`${all.length} food places along the way.${more}${missed} ${foodLabel(0)}`);
 }
 
@@ -859,8 +956,28 @@ async function walkFood() {
   showFoodLinks();
   $('journey-food').hidden = !st.food.length;
   if (!st.food.length) return say('No food places found along this walk.');
-  $('journey-food-list').focus();
+  $('journey-food-list').querySelector('button')?.focus();
   say(`${st.food.length} food places along this walk. ${foodLabel(0)}`);
+}
+
+/** The food places as buttons; choosing one picks it for Go there and the links below. */
+function showFoodList() {
+  const ul = $('journey-food-list');
+  ul.replaceChildren(...st.food.map((p, i) => {
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = p.text;
+    b.addEventListener('click', () => {
+      st.foodIdx = i;
+      showFoodLinks();
+      $('journey-food-chosen').textContent = `${p.name} chosen.`;
+      $('journey-food-go').focus();
+    });
+    li.append(b);
+    return li;
+  }));
+  $('journey-food-chosen').textContent = '';
 }
 
 function foodLabel(i) {
@@ -928,12 +1045,9 @@ export function initJourney(h) {
     get: () => st.flightIdx,
     set: (v) => { st.flightIdx = v; },
   });
-  foodPicker = makePicker($('journey-food-list'), {
-    shown: $('journey-food-value'),
-    items: () => st.food.map((_, i) => ({ value: i, label: foodLabel(i) })),
-    get: () => st.foodIdx,
-    set: (v) => { st.foodIdx = v; showFoodLinks(); },
-  });
+  // Food is a plain list of buttons: VoiceOver reads each as you swipe, which
+  // the adjustable picker did not do reliably here.
+  foodPicker = { refresh: showFoodList };
 
   const enter = (id, fn) => $(id).addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); fn(); }
@@ -941,7 +1055,6 @@ export function initJourney(h) {
   enter('journey-from', walkClick);
   enter('journey-to', walkClick);
   enter('journey-option-list', chooseOption);
-  enter('journey-food-list', goToFood);
   $('journey-plan').addEventListener('click', plan);
   $('journey-walk-plan').addEventListener('click', walkClick);
   $('journey-walk-food').addEventListener('click', walkFood);
