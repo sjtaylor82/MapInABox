@@ -43,93 +43,62 @@ async function boot() {
   initSpeech();
   initMapView($('map-canvas'), $('map-caption'));
   applyVisualAssist();
-  // Phones and tablets: offer steering, and the browser's voice for people without a screen reader.
   const touch = steering.isTouchDevice() && steering.steeringSupported();
-  $('intro-steer-row').hidden = !touch;
-  $('intro-steer').checked = touch && settings.get('steering') !== false;
-  const hasSaved = !!(settings.get('position') && Number.isFinite(settings.get('position').lat));
-  state.startWhere = hasSaved ? 'last' : touch ? 'here' : 'choose';
-  makePicker($('intro-speech'), {
-    shown: $('intro-speech-value'),
-    items: () => [
-      { value: 'screenreader', label: 'My screen reader is talking' },
-      { value: 'voice', label: "Use the browser's voice (no screen reader)" },
-      { value: 'both', label: 'Both' },
-    ],
-    get: () => settings.get('speech'),
-    set: (v) => settings.set('speech', v),
-  });
-  makePicker($('intro-where'), {
-    shown: $('intro-where-value'),
-    items: () => [
-      ...(hasSaved ? [{ value: 'last', label: 'Where I left off' }] : []),
-      { value: 'here', label: 'My current location' },
-      { value: 'choose', label: 'A place I choose' },
-    ],
-    get: () => state.startWhere,
-    set: (v) => { state.startWhere = v; },
-  });
   $('btn-steer').hidden = !touch;
-  $('start').addEventListener('click', () => start());
+  const saved = settings.get('position');
+  const hasSaved = !!(saved && Number.isFinite(saved.lat));
   $('start-last').hidden = !hasSaved;
-  $('start-last').addEventListener('click', () => start('last'));
-  $('start-here').addEventListener('click', () => start('here'));
-  $('start-choose').addEventListener('click', () => start('choose'));
-  $('start-options').addEventListener('click', () => {
-    $('start-dialog').close();
-    $('intro-speech').focus();
+  $('start-last').addEventListener('click', () => goStart('last'));
+  $('start-here').addEventListener('click', () => goStart('here'));
+  $('start-choose').addEventListener('click', () => goStart('choose'));
+  $('btn-world').addEventListener('click', () => {
+    $('start-dialog').showModal();
+    $('start-dialog').querySelector('button:not([hidden])').focus();
   });
-  // Closed with Escape: the start page has the same choices and a Start button.
-  $('start-dialog').addEventListener('cancel', () => setTimeout(() => $('start').focus(), 0));
+  // iPhone lets a page play sound and speak only after a tap or key press.
+  const unlockOnce = () => {
+    audio.unlock();
+    unlockVoice();
+    for (const t of ['pointerdown', 'keydown', 'touchend']) document.removeEventListener(t, unlockOnce, true);
+  };
+  for (const t of ['pointerdown', 'keydown', 'touchend']) document.addEventListener(t, unlockOnce, true);
   try {
     await loadWorld((msg) => { $('load-status').textContent = `${msg}…`; });
     audio.configureAudio(data.sounds, data.tables);
-    $('load-status').textContent = 'Ready.';
-    $('start').disabled = false;
-    // Ask straight away where to start; the answer is also the tap that
-    // lets iPhone play sound, speak and use motion.
-    $('start-dialog').showModal();
-    $('start-dialog').querySelector('button:not([hidden])').focus();
   } catch (err) {
     $('load-status').textContent = `Map in a Box could not load its map data. ${err.message}`;
+    return;
   }
-}
-
-async function start(choice) {
-  if (state.started) return;
-  if (choice) state.startWhere = choice;
-  if ($('start-dialog').open) $('start-dialog').close();
-  // Both must run straight from the tap: iPhone refuses them otherwise.
-  const wantSteer = !$('intro-steer-row').hidden && $('intro-steer').checked;
-  const steerAllowed = wantSteer ? steering.requestSteeringPermission() : Promise.resolve(false);
-  audio.unlock();
-  unlockVoice();
+  // Straight onto the map: where you left off for now, then where you
+  // really are once the device says.
   state.started = true;
   $('intro').hidden = true;
   $('app').hidden = false;
   $('map').focus();
   drawMap();
-  if (wantSteer) {
-    // Don't hold up the start waiting for the permission answer.
-    steerAllowed.then((ok) => {
-      if (ok) setSteering(true);
-      else say('Steering is not available. Motion access was not allowed.');
-    });
-  } else {
-    settings.set('steering', false);
-  }
-  const where = state.startWhere;
-  const saved = settings.get('position');
-  if (where === 'here') {
-    // If the location can't be found, ask where to start instead of leaving the map nowhere.
-    whereAmI(() => setTimeout(() => openJump('Where would you like to start? Type a city, country or coordinates, then press Enter.'), 2500));
-  } else if (where === 'last' && saved && Number.isFinite(saved.lat)) {
+  if (hasSaved) {
     state.lat = saved.lat;
     state.lon = saved.lon;
-    await moved({ tone: false });
-  } else {
-    openJump('Where would you like to start? Type a city, country or coordinates, then press Enter.');
   }
+  goToMyLocation({
+    quiet: true,
+    onFail: () => (hasSaved ? moved({ tone: false })
+      : openJump('Where would you like to start? Type a city, country or coordinates, then press Enter.')),
+  });
+}
+
+/** The World map button's choices: where you left off, where you are, or a place you choose. */
+function goStart(where) {
+  if ($('start-dialog').open) $('start-dialog').close();
+  $('map').focus();
+  const saved = settings.get('position');
+  if (where === 'here') return goToMyLocation();
+  if (where === 'last' && saved && Number.isFinite(saved.lat)) {
+    state.lat = saved.lat;
+    state.lon = saved.lon;
+    return moved({ tone: false });
+  }
+  return openJump('Where would you like to go? Type a city, country or coordinates, then press Enter.');
 }
 
 // ── Moving and announcing ─────────────────────────────────────────────────
@@ -266,39 +235,76 @@ function schedulePostcode(seq) {
 
 let locating = false;
 
-function whereAmI(onFail = () => {}) {
-  if (typeof onFail !== 'function') onFail = () => {}; // called from a click: the event
+/** The device's position: resolves { lat, lon, accuracy }, or rejects with a sentence to say. */
+function devicePosition() {
+  return new Promise((resolve, reject) => {
+    if (!('geolocation' in navigator) || !window.isSecureContext) {
+      reject(new Error('Location is not available in this browser.'));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude, accuracy: pos.coords.accuracy }),
+      (err) => reject(new Error(err.code === err.PERMISSION_DENIED
+        ? 'Location access was not allowed. Allow location for this site in your browser settings.'
+        : err.code === err.TIMEOUT
+          ? 'Finding your location took too long. Try again, ideally outdoors or near a window.'
+          : 'Your location could not be found. Check that location services are on for this device.')),
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 30000 },
+    );
+  });
+}
+
+/** Move the map to where the device is. quiet: no "Finding your location" first. */
+async function goToMyLocation({ quiet = false, onFail = () => {} } = {}) {
   if (locating) return;
-  if (!('geolocation' in navigator) || !window.isSecureContext) {
-    say('Location is not available in this browser.');
-    onFail();
-    return;
-  }
   locating = true;
-  say('Finding your location…');
-  navigator.geolocation.getCurrentPosition(
-    (pos) => {
-      locating = false;
-      const { latitude, longitude, accuracy } = pos.coords;
-      const near = accuracy <= 1000
-        ? `accurate to about ${formatDistance(accuracy)}`
-        : 'only roughly, perhaps from your internet connection';
-      if (document.querySelector('dialog[open]')) document.querySelector('dialog[open]').close();
-      jumpTo(latitude, longitude, `You are here, ${near}.`);
-    },
-    (err) => {
-      locating = false;
-      if (err.code === err.PERMISSION_DENIED) {
-        say('Location access was not allowed. To use Where am I, allow location for this site in your browser settings.');
-      } else if (err.code === err.TIMEOUT) {
-        say('Finding your location took too long. Try again, ideally outdoors or near a window.');
-      } else {
-        say('Your location could not be found. Check that location services are on for this device.');
-      }
-      onFail();
-    },
-    { enableHighAccuracy: true, timeout: 20000, maximumAge: 30000 },
-  );
+  if (!quiet) say('Finding your location…');
+  try {
+    const { lat, lon, accuracy } = await devicePosition();
+    if (document.querySelector('dialog[open]')) document.querySelector('dialog[open]').close();
+    const near = accuracy <= 1000 ? '' : ' Only roughly, perhaps from your internet connection.';
+    jumpTo(lat, lon, `You are here.${near}`);
+  } catch (err) {
+    if (!quiet) say(err.message);
+    onFail();
+  } finally {
+    locating = false;
+  }
+}
+
+/** Where am I: say the street address where the device is, without moving the map. */
+async function whereAmI() {
+  if (locating) return;
+  locating = true;
+  say('Finding your address…');
+  try {
+    const { lat, lon, accuracy } = await devicePosition();
+    // House numbers from the street map where it has one within 40 metres;
+    // the suburb, state and postcode from the address search.
+    const [ph] = await Promise.all([
+      online.addressAt(lat, lon).catch(() => null),
+      Promise.race([street.ensureArea(lat, lon), new Promise((r) => setTimeout(r, 6000))]),
+    ]);
+    const ad = street.areaReady(lat, lon) ? street.nearestAddress(lat, lon, 40) : null;
+    let streetPart = '';
+    if (ad && ad.street) streetPart = `${ad.num} ${ad.street}`;
+    else if (ph && ph.street) streetPart = ph.number ? `${ph.number} ${ph.street}` : ph.street;
+    else if (street.areaReady(lat, lon)) streetPart = street.streetLabel(lat, lon);
+    let postcode = ph && ph.postcode;
+    let place = ph && ph.place;
+    if (!postcode || !place) {
+      const pc = await postcodeAt(lat, lon).catch(() => null);
+      postcode = postcode || (pc && pc.postcode);
+      place = place || (pc && pc.place);
+    }
+    const text = [streetPart, place, [ph && ph.state, postcode].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+    const rough = accuracy > 100 ? ` Accurate to about ${formatDistance(accuracy)}.` : '';
+    say(text ? `You are at ${text}.${rough}` : `Your address could not be found.${rough}`);
+  } catch (err) {
+    say(err.message);
+  } finally {
+    locating = false;
+  }
 }
 
 // ── Street mode ───────────────────────────────────────────────────────────
@@ -1366,7 +1372,7 @@ initJourney({
     }
   },
 });
-$('jump-here').addEventListener('click', whereAmI);
+$('jump-here').addEventListener('click', () => goToMyLocation());
 // Keys pressed while focus is on the toolbar still drive the map.
 document.addEventListener('keydown', (e) => {
   if (e.target === $('map') || document.querySelector('dialog[open]')) return;

@@ -86,6 +86,26 @@ export async function placeDetails(name, lat, lon) {
   throw new Error('The place details service is busy.');
 }
 
+/** The address parts at a point (Photon reverse): { street, number, place, state, postcode } or null. */
+export async function addressAt(lat, lon) {
+  const params = new URLSearchParams({ lat: lat.toFixed(6), lon: lon.toFixed(6), lang: 'en' });
+  let json = null;
+  if (await hasApi()) {
+    try { json = await getJson(`api/reverse?${params}`); } catch { /* fall through */ }
+  }
+  if (!json) json = await getJson(`https://photon.komoot.io/reverse?${params}`);
+  const p = ((json.features || [])[0] || {}).properties;
+  if (!p) return null;
+  return {
+    street: p.street || '',
+    number: p.housenumber || '',
+    name: p.name || '',
+    place: p.city || p.locality || p.district || '',
+    state: p.state || '',
+    postcode: p.postcode || '',
+  };
+}
+
 /** Place search (Photon). Returns [{ label, lat, lon }]. */
 export async function searchOnline(query, near) {
   const params = new URLSearchParams({ q: query.slice(0, 200), limit: '10', lang: 'en' });

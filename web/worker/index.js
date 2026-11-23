@@ -28,6 +28,7 @@ export default {
 
     if (url.pathname === '/api/health') return json({ ok: true });
     if (url.pathname === '/api/search') return search(url, ctx);
+    if (url.pathname === '/api/reverse') return reverse(url, ctx);
     const tile = url.pathname.match(/^\/api\/tile\/(\d+)\/(\d+)\/(\d+)$/);
     if (tile) return mapTile(Number(tile[1]), Number(tile[2]), Number(tile[3]), ctx);
     if (url.pathname === '/api/place') return placeDetails(url, env, ctx);
@@ -36,6 +37,25 @@ export default {
     return json({ error: 'Not found' }, 404);
   },
 };
+
+/** GET /api/reverse?lat=&lon=: the address at a point (Photon reverse), cached a week. */
+async function reverse(url, ctx) {
+  const lat = Number(url.searchParams.get('lat'));
+  const lon = Number(url.searchParams.get('lon'));
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return json({ error: 'Bad request' }, 400);
+  const upstream = `https://photon.komoot.io/reverse?lat=${lat.toFixed(5)}&lon=${lon.toFixed(5)}&lang=en`;
+  const cache = caches.default;
+  const key = new Request(upstream);
+  const hit = await cache.match(key);
+  if (hit) return hit;
+  const res = await fetch(upstream, { headers: { 'User-Agent': USER_AGENT } });
+  if (!res.ok) return json({ error: `Address service answered ${res.status}` }, 502);
+  const out = new Response(res.body, {
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': `public, max-age=${SEARCH_TTL}` },
+  });
+  ctx.waitUntil(cache.put(key, out.clone()));
+  return out;
+}
 
 async function search(url, ctx) {
   const q = (url.searchParams.get('q') || '').trim().slice(0, 200);

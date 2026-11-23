@@ -17,17 +17,7 @@
     <h1>Map in a Box Web</h1>
     <p>Explore the world by ear. Move across the map with the arrow keys, or on a phone or tablet by tilting it. Map in a Box tells you the country, city or ocean you are over, and plays a sound for each country. Street mode takes you down to the streets of a town, with the places along them.</p>
     <p>It works with NVDA, JAWS, Narrator, VoiceOver and TalkBack, or with the browser's own voice. Headphones help you hear the tones move from left to right.</p>
-    <label for="intro-speech" class="picker-label">Speech</label>
-    <input id="intro-speech" type="range" class="picker">
-    <p id="intro-speech-value" class="picker-value" aria-hidden="true"></p>
-    <label for="intro-where" class="picker-label">Start at</label>
-    <input id="intro-where" type="range" class="picker">
-    <p id="intro-where-value" class="picker-value" aria-hidden="true"></p>
-    <p id="intro-steer-row" hidden>
-      <label class="check"><input type="checkbox" id="intro-steer"> Steer by tilting this device</label>
-    </p>
     <p id="load-status" role="status">Loading…</p>
-    <button id="start" type="button" disabled>Start exploring</button>
     <p>The full Map in a Box, with street mode, walking routes, transport and much more, is a free download for Windows and macOS: <a href="https://github.com/sjtaylor82/MapInABox/releases/latest">download Map in a Box for desktop</a>.</p>
   </main>
 
@@ -36,12 +26,13 @@
       <span class="brand" aria-hidden="true">Map in a Box</span>
       <button id="btn-help" type="button">Help (F1)</button>
       <button id="btn-jump" type="button">Jump (J)</button>
+      <button id="btn-journey" type="button">Route</button>
       <button id="btn-settings" type="button">Settings (Ctrl+,)</button>
       <button id="btn-steer" type="button" aria-pressed="false" hidden>Steering: off</button>
       <button id="btn-street-steer" type="button" hidden>Steering: pick turns</button>
       <button id="btn-street" type="button" aria-pressed="false">Street mode (F11)</button>
       <button id="btn-where" type="button">Where am I (Y)</button>
-      <button id="btn-journey" type="button">Route</button>
+      <button id="btn-world" type="button">World map</button>
     </header>
     <div id="map" tabindex="0" role="application" aria-roledescription="world map"
          aria-label="World map. Use the arrow keys to move. Press F1 for help.">
@@ -196,13 +187,12 @@
   </div>
 
   <dialog id="start-dialog" role="alertdialog" aria-labelledby="start-title" aria-describedby="start-desc">
-    <h2 id="start-title">Where would you like to start?</h2>
-    <p id="start-desc">Map in a Box is ready.</p>
+    <h2 id="start-title">World map: where to?</h2>
+    <p id="start-desc" class="sr-only">Choose where the map goes.</p>
     <div class="buttons stack">
       <button type="button" id="start-last">Where I left off</button>
       <button type="button" id="start-here">My current location</button>
       <button type="button" id="start-choose">A place I choose</button>
-      <button type="button" id="start-options">Speech and steering options first</button>
     </div>
   </dialog>
 
@@ -240,7 +230,7 @@
         <tr><td>Alt+Arrows</td><td>Jump to the next country in that direction</td></tr>
         <tr><td>J</td><td>Jump to a place</td></tr>
         <tr><td>Ctrl+H</td><td>Recent jumps</td></tr>
-        <tr><td>Y</td><td>Where am I: go to your real location (the browser asks first)</td></tr>
+        <tr><td>Y</td><td>Where am I: your street address, from your real location (the browser asks first). The map stays put; World map, then My current location, moves it there</td></tr>
         <tr><td>F2</td><td>Repeat location. Twice to spell it, three times to copy it</td></tr>
         <tr><td>F3, F4</td><td>Latitude, longitude</td></tr>
         <tr><td>L</td><td>Latitude and longitude</td></tr>
