@@ -41,6 +41,58 @@
       <p id="map-caption" aria-hidden="true"></p>
     </div>
     <aside id="panel" aria-label="Controls">
+      <section id="journey-section" aria-labelledby="journey-title">
+        <h2 id="journey-title" tabindex="-1">Route</h2>
+        <label for="journey-from">From (leave empty to start where you are on the map)</label>
+        <input id="journey-from" type="text" autocomplete="off" spellcheck="false">
+        <label for="journey-to">To</label>
+        <input id="journey-to" type="text" autocomplete="off" spellcheck="false">
+        <button type="button" id="journey-walk-plan">Walking route</button>
+        <button type="button" id="journey-plan">Travel options</button>
+        <p id="journey-prompt"></p>
+        <div id="journey-walk" hidden>
+          <button type="button" id="journey-guide">Start walking guidance</button>
+          <button type="button" id="journey-walk-food">Find food along this walk</button>
+          <ol id="journey-steps"></ol>
+        </div>
+        <div id="journey-options" hidden>
+          <label for="journey-option-list" class="picker-label">Option</label>
+          <input id="journey-option-list" type="range" class="picker">
+          <p id="journey-option-value" class="picker-value" aria-hidden="true"></p>
+          <button type="button" id="journey-choose">Show steps</button>
+        </div>
+        <div id="journey-legs" hidden>
+          <label for="journey-leg-list" class="picker-label">Leg</label>
+          <input id="journey-leg-list" type="range" class="picker">
+          <p id="journey-leg-value" class="picker-value" aria-hidden="true"></p>
+          <button type="button" id="journey-read">Read all</button>
+          <div id="journey-date-row">
+            <label for="journey-date" class="picker-label">Travel date, for flight times</label>
+            <input id="journey-date" type="range" class="picker">
+            <p id="journey-date-value" class="picker-value" aria-hidden="true"></p>
+          </div>
+          <div id="journey-flights" hidden>
+            <p id="journey-flights-note"></p>
+            <label for="journey-flight-list" class="picker-label">Flight</label>
+            <input id="journey-flight-list" type="range" class="picker">
+            <p id="journey-flight-value" class="picker-value" aria-hidden="true"></p>
+          </div>
+          <button type="button" id="journey-food-find">Find food along the way</button>
+        </div>
+        <div id="journey-food" hidden>
+          <h3 id="journey-food-title" tabindex="-1">Food along the way</h3>
+          <label for="journey-food-list" class="picker-label">Food</label>
+          <input id="journey-food-list" type="range" class="picker">
+          <p id="journey-food-value" class="picker-value" aria-hidden="true"></p>
+          <button type="button" id="journey-food-go">Go there</button>
+          <p id="journey-food-links" class="place-links">
+            <a id="journey-food-maps" target="_blank" rel="noopener">Open in Apple Maps</a>
+            <a id="journey-food-ubereats" target="_blank" rel="noopener">Search Uber Eats</a>
+            <a id="journey-food-doordash" target="_blank" rel="noopener">Search DoorDash</a>
+          </p>
+        </div>
+      </section>
+
       <h2 id="step-heading">Step size</h2>
       <label for="step-size" class="sr-only">Step size</label>
       <input id="step-size" type="range" min="0" max="4" step="1" value="2">
@@ -74,55 +126,6 @@
         </div>
       </section>
 
-      <details id="journey-section">
-        <summary><h2 id="journey-title" tabindex="-1">Route</h2></summary>
-        <label for="journey-from">From (leave empty to start where you are on the map)</label>
-        <input id="journey-from" type="text" autocomplete="off" spellcheck="false">
-        <label for="journey-to">To</label>
-        <input id="journey-to" type="text" autocomplete="off" spellcheck="false">
-        <button type="button" id="journey-walk-plan">Walking route</button>
-        <button type="button" id="journey-plan">Travel options</button>
-        <p id="journey-prompt"></p>
-        <div id="journey-walk" hidden>
-          <button type="button" id="journey-guide">Start walking guidance</button>
-          <ol id="journey-steps"></ol>
-        </div>
-        <div id="journey-options" hidden>
-          <label for="journey-option-list" class="picker-label">Option</label>
-          <input id="journey-option-list" type="range" class="picker">
-          <p id="journey-option-value" class="picker-value" aria-hidden="true"></p>
-          <button type="button" id="journey-choose">Show steps</button>
-        </div>
-        <div id="journey-legs" hidden>
-          <label for="journey-leg-list" class="picker-label">Leg</label>
-          <input id="journey-leg-list" type="range" class="picker">
-          <p id="journey-leg-value" class="picker-value" aria-hidden="true"></p>
-          <button type="button" id="journey-read">Read all</button>
-          <div id="journey-date-row">
-            <label for="journey-date" class="picker-label">Travel date, for flight times</label>
-            <input id="journey-date" type="range" class="picker">
-            <p id="journey-date-value" class="picker-value" aria-hidden="true"></p>
-          </div>
-          <div id="journey-flights" hidden>
-            <p id="journey-flights-note"></p>
-            <label for="journey-flight-list" class="picker-label">Flight</label>
-            <input id="journey-flight-list" type="range" class="picker">
-            <p id="journey-flight-value" class="picker-value" aria-hidden="true"></p>
-          </div>
-          <button type="button" id="journey-food-find">Find food along the way</button>
-        </div>
-        <div id="journey-food" hidden>
-          <label for="journey-food-list" class="picker-label">Food</label>
-          <input id="journey-food-list" type="range" class="picker">
-          <p id="journey-food-value" class="picker-value" aria-hidden="true"></p>
-          <button type="button" id="journey-food-go">Go there</button>
-          <p id="journey-food-links" class="place-links">
-            <a id="journey-food-maps" target="_blank" rel="noopener">Open in Apple Maps</a>
-            <a id="journey-food-ubereats" target="_blank" rel="noopener">Search Uber Eats</a>
-            <a id="journey-food-doordash" target="_blank" rel="noopener">Search DoorDash</a>
-          </p>
-        </div>
-      </details>
 
       <h2>Move</h2>
       <div class="grid move">

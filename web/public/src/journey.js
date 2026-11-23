@@ -789,6 +789,35 @@ async function findFood() {
   say(`${all.length} food places along the way.${more}${missed} ${foodLabel(0)}`);
 }
 
+const WALK_FOOD_M = 50; // food this close to a walking route counts as on the way
+
+/** Food within 50 metres of the walking route, in walking order. */
+async function walkFood() {
+  const w = st.walk;
+  if (!w) return;
+  const seq = st.seq;
+  say('Looking for food along this walk.');
+  const line = decodePolyline(w.line);
+  const cum = cumulative(line);
+  const found = await tileFoodAlong(line, cum);
+  if (seq !== st.seq || st.walk !== w) return;
+  const along = [];
+  for (const p of found) {
+    const at = alongLine(line, cum, p.lat, p.lon);
+    if (at.cross > WALK_FOOD_M) continue;
+    along.push({ ...p, along: at.along, text: `${p.name}, ${p.kind}, ${formatDistance(Math.round(at.along / 10) * 10)} along the walk` });
+  }
+  along.sort((a, b) => a.along - b.along);
+  st.food = along.slice(0, MAX_FOOD);
+  st.foodIdx = 0;
+  foodPicker.refresh();
+  showFoodLinks();
+  $('journey-food').hidden = !st.food.length;
+  if (!st.food.length) return say('No food places found along this walk.');
+  $('journey-food-list').focus();
+  say(`${st.food.length} food places along this walk. ${foodLabel(0)}`);
+}
+
 function foodLabel(i) {
   return `${st.food[i].text}. ${i + 1} of ${st.food.length}.`;
 }
@@ -870,6 +899,7 @@ export function initJourney(h) {
   enter('journey-food-list', goToFood);
   $('journey-plan').addEventListener('click', plan);
   $('journey-walk-plan').addEventListener('click', walkClick);
+  $('journey-walk-food').addEventListener('click', walkFood);
   $('journey-guide').addEventListener('click', toggleGuiding);
   $('journey-choose').addEventListener('click', chooseOption);
   $('journey-read').addEventListener('click', readAll);
