@@ -15,7 +15,7 @@
 
   <main id="intro">
     <h1>Map in a Box Web</h1>
-    <p>Explore the world by ear. Move across the map with the arrow keys, or on a phone or tablet by turning it like a compass dial. Map in a Box tells you the country, city or ocean you are over, and plays a sound for each country. Street mode takes you down to the streets of a town, with the places along them.</p>
+    <p>Explore the world by ear. Move across the map with the arrow keys, or on a phone or tablet by tilting it. Map in a Box tells you the country, city or ocean you are over, and plays a sound for each country. Street mode takes you down to the streets of a town, with the places along them.</p>
     <p>It works with NVDA, JAWS, Narrator, VoiceOver and TalkBack, or with the browser's own voice. Headphones help you hear the tones move from left to right.</p>
     <label for="intro-speech" class="picker-label">Speech</label>
     <input id="intro-speech" type="range" class="picker">
@@ -24,8 +24,8 @@
     <input id="intro-where" type="range" class="picker">
     <p id="intro-where-value" class="picker-value" aria-hidden="true"></p>
     <p id="intro-steer-row" hidden>
-      <label class="check"><input type="checkbox" id="intro-steer"> Steer by turning this device like a compass dial</label>
-      <span class="small">Lay it flat, screen up. Turn it round: the way its top edge points is the way you go, using the real compass, and each new direction is spoken. Tip it a little off flat, any edge, to move one step; keep it tipped to keep going. Lay it flat again to stop. The first time, a short practice teaches it.</span>
+      <label class="check"><input type="checkbox" id="intro-steer"> Steer by tilting this device</label>
+      <span class="small">Lay it flat, screen up: flat is still. Tip it well over, more than 60 degrees, to move: the top edge down (away from you) for north, up (towards you) for south, the right edge down for east, the left edge down for west. Hold the tilt to keep going, and lay it flat to stop. The first time, a short practice teaches the four tilts.</span>
     </p>
     <p id="load-status" role="status">Loading…</p>
     <button id="start" type="button" disabled>Start exploring</button>
@@ -52,7 +52,7 @@
     <aside id="panel" aria-label="Controls">
       <p id="steer-status" hidden></p>
       <div data-steer-only hidden>
-        <label for="tilt-move" class="picker-label">Each tip moves</label>
+        <label for="tilt-move" class="picker-label">Each tilt moves</label>
         <input id="tilt-move" type="range" class="picker">
         <p id="tilt-move-value" class="picker-value" aria-hidden="true"></p>
         <button type="button" id="btn-practice">Practise steering</button>
@@ -212,9 +212,9 @@
       </tbody>
     </table>
     <h3>Steering (phones and tablets)</h3>
-    <p>Steering turns the phone into a compass dial. Turn on Steering and lay the phone flat, screen up. Turn it round: the way its top edge points is the way you will go, using the real compass, and each new direction is spoken (north, north east, east and so on). Tip it a little off flat, by any edge, to move one step that way; keep it tipped to keep moving, about once a second. Lay it flat again to stop, with a soft click. A tone plays as you move: from the right for east, the left for west, higher for north and lower for south. Hold the phone upright and steering pauses until it is flat again. The compass works best away from metal and computers; moving the phone in a figure of eight helps it settle.</p>
-    <p>Each tip moves lets you choose how far a tip goes: one step, the next town or suburb, or the next country on the world map; one step or the next corner in street mode. Practise steering runs the short practice again.</p>
-    <p>In street mode, the Steering: pick turns or free button (also in Settings) chooses how steering moves. Pick turns follows the street. At a corner it stops; lay the phone flat and turn it to hear each way, for example "Turn left onto Ann Street, heading west", then tip it to take that one. Free goes straight the way the phone points, across blocks too.</p>
+    <p>Turn on Steering and lay the phone flat, screen up. When it says Ready, flat is still. Tip it well over, more than 60 degrees, to move, like rolling a marble on a tray: the top edge down, away from you, for north; the top edge up, towards you, for south; the right edge down for east; the left edge down for west. Each tilt moves once, with a tone from that side; hold the tilt to keep moving. Bring it back towards flat (below about 30 degrees) to stop, with a soft click. A tilt halfway between two directions does nothing. Hold the phone upright and steering pauses until it is lying down again.</p>
+    <p>Each tilt moves lets you choose how far a tilt goes: one step, the next town or suburb, or the next country on the world map; one step or the next corner in street mode. Practise steering runs the short practice again.</p>
+    <p>In street mode, the Steering: pick turns or free button (also in Settings) chooses how steering moves. Pick turns follows the street. At a corner it stops; lay the phone flat, then tilt towards a way to hear it, for example "Turn left onto Ann Street, heading west", and hold the tilt to take it. Free goes straight the way you tilt, across blocks too.</p>
     <p>Some browsers keep F6 for themselves. If F6 does nothing, use I.</p>
     <p><a href="https://github.com/sjtaylor82/MapInABox/releases/latest">Download Map in a Box for Windows and macOS</a>, with street mode, walking routes, transport and much more.</p>
     <p>Your location is only used to move the map. It is not stored anywhere except this browser. Weather, time and search send the map position to those services when you ask for them.</p>

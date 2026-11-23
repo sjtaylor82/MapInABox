@@ -414,11 +414,11 @@ function arriveAlong(r, pick, heading) {
   // Only stop where there is a real choice, not counting the way back.
   const ahead = options.filter((o) => street.bearingGap(o.bearing, (arrival + 180) % 360) > 35);
   if (ahead.length < 2) return movedStreet({ note });
-  state.corner = { options, idx: nearestOption(options, heading), arrival, armed: false };
+  state.corner = { options, idx: nearestOption(options, heading), arrival, armed: false, chosen: null };
   movedStreet({
     note,
     keepCorner: true,
-    suffix: `A corner with ${options.length} ways. Lay it flat, turn to hear each way, then tip to take one.`,
+    suffix: `A corner with ${options.length} ways. Lay it flat, then tilt towards the way you want.`,
   });
 }
 
@@ -540,63 +540,53 @@ function tiltRepeatMs() {
   return tiltMove() === 'step' ? 1200 : 3000;
 }
 
-// First-use practice: turn to each of four directions and tip, so the
-// movements are learnt and we know the compass answers properly.
+// First-use practice: tilt each way once, so the movements are learnt and
+// we know the device really feels all four.
 const PRACTICE = [90, 270, 0, 180];
+const TILT_HOW = {
+  0: 'tilt the top edge down, away from you',
+  90: 'tilt the right edge down',
+  180: 'tilt the top edge up, towards you',
+  270: 'tilt the left edge down',
+};
 
 function startPractice() {
   state.practice = { i: 0 };
-  say(`Practice. Turn the phone until you hear ${directionName(PRACTICE[0])}, then tip it a little.`);
+  say(`Practice. Tip it well over, more than 60 degrees, each time. With the phone flat, ${TILT_HOW[PRACTICE[0]]}.`);
 }
 
 function practiceMove(dir) {
   const want = PRACTICE[state.practice.i];
-  const c = steering.steeringStatus().compass;
+  const t = steering.steeringStatus().tilt;
   if (dir !== want) {
-    say(`That was ${directionName(dir)}, compass ${c} degrees. Lay it flat, turn until you hear ${directionName(want)}, then tip it.`);
+    say(`That was ${directionName(dir)}: the top edge ${Math.abs(t.north)} degrees ${t.north >= 0 ? 'down' : 'up'} and the right edge ${Math.abs(t.east)} degrees ${t.east >= 0 ? 'down' : 'up'}. Lay it flat, then ${TILT_HOW[want]}.`);
     return;
   }
   state.practice.i += 1;
   if (state.practice.i >= PRACTICE.length) {
     state.practice = null;
     settings.set('tiltPracticed', true);
-    say(`That's ${directionName(dir)}. Practice done. Lay it flat, then turn and tip to explore.`);
+    say(`That's ${directionName(dir)}. Practice done. Lay it flat, then tilt to explore.`);
     return;
   }
-  say(`That's ${directionName(dir)}. Lay it flat, turn until you hear ${directionName(PRACTICE[state.practice.i])}, then tip it.`);
+  say(`That's ${directionName(dir)}. Lay it flat, then ${TILT_HOW[PRACTICE[state.practice.i]]}.`);
 }
 
 const steerHandlers = {
-  ready(heading, accuracy) {
+  ready() {
     steering.buzz(30);
     audio.steerClick(true);
     showSteerStatus();
     if (steerBlocked()) return;
-    const unsure = accuracy != null && (accuracy < 0 || accuracy > 30)
-      ? ' The compass is unsure here. Move away from metal and computers, or move the phone in a figure of eight.'
-      : '';
     if (!settings.get('tiltPracticed') && !state.practice) {
-      say(`Ready, facing ${directionName(heading)}.${unsure}`);
-      setTimeout(startPractice, 2500);
+      say('Ready.');
+      setTimeout(startPractice, 1500);
       return;
     }
     say(steerIntroduced
-      ? `Ready, facing ${directionName(heading)}.${unsure}`
-      : `Ready, facing ${directionName(heading)}. Turn the phone to choose a direction, and tip it a little to move.${unsure}`);
+      ? 'Ready.'
+      : 'Ready. Tip the phone well over, more than 60 degrees, towards the way you want to go, and lay it flat to stop.');
     steerIntroduced = true;
-  },
-  heading(heading) {
-    steering.buzz(10);
-    audio.steerClick();
-    showSteerStatus();
-    if (steerBlocked()) return;
-    if (atCorner() && state.corner.armed) {
-      // At a corner, the dial picks one of the ways out.
-      state.corner.idx = nearestOption(state.corner.options, heading);
-      say(optionText(cornerChoice()));
-      return;
-    }
-    say(`${headingWord(heading)}.`);
   },
   move(dir, repeat) {
     showSteerStatus();
@@ -617,18 +607,14 @@ const steerHandlers = {
     audio.steerClick();
     showSteerStatus();
     if (atCorner() && !state.corner.armed) {
-      // Laid flat at a corner: now the dial picks a way out.
+      // Laid flat at a corner: now a tilt picks a way out.
       state.corner.armed = true;
-      state.corner.idx = nearestOption(state.corner.options, steering.steeringStatus().heading);
-      if (!steerBlocked()) say(`${optionText(cornerChoice())} Turn to hear the others, then tip to take one.`);
+      if (!steerBlocked()) say('Tilt towards the way you want to hear it, and hold the tilt to take it.');
     }
   },
   paused() {
     showSteerStatus();
     if (!steerBlocked()) say('Steering paused. Lay the phone flat, screen up, to steer.');
-  },
-  nocompass() {
-    if (!steerBlocked()) say('This device is not giving a compass direction, so steering cannot work here.');
   },
 };
 
@@ -639,9 +625,16 @@ function onTiltMove(dir, repeat = false) {
     const m = how === 'corner' ? 3000 : streetStepM();
     if (streetSteerMode() === 'free') return how === 'corner' ? streetFollow(dir, m) : streetMove(dir, m);
     if (state.corner) {
-      // Arrived still tipped: wait until it has been laid flat, so a corner is never passed by accident.
+      // Arrived still tilted: wait until it has been laid flat, so a corner is never passed by accident.
       if (!state.corner.armed) return;
-      state.corner.idx = nearestOption(state.corner.options, dir);
+      // The first tilt says which way that is; holding it (or tilting the same way again) takes it.
+      const idx = nearestOption(state.corner.options, dir);
+      if (state.corner.chosen !== idx) {
+        state.corner.idx = idx;
+        state.corner.chosen = idx;
+        state.skipTone = false;
+        return say(`${optionText(cornerChoice())} Hold the tilt to go.`);
+      }
       return takeCorner(m);
     }
     // Between corners, keep along the street the way you are travelling,
@@ -663,8 +656,8 @@ function showSteerStatus() {
   for (const e of document.querySelectorAll('[data-steer-only]')) e.hidden = off;
   if (off) return;
   if (st.mode !== 'ready') el.textContent = 'Steering paused: lay the phone flat, screen up.';
-  else if (st.tipped) el.textContent = `Steering: going ${directionName(st.heading)}.`;
-  else el.textContent = `Steering: facing ${directionName(st.heading)}. Tip to move.`;
+  else if (st.direction != null) el.textContent = `Steering: tilted ${directionName(st.direction)}.`;
+  else el.textContent = 'Steering: flat and still. Tilt to move.';
 }
 
 // ── Step size ─────────────────────────────────────────────────────────────
@@ -733,7 +726,7 @@ function toggleStreetSteer() {
   showStreetSteer();
   refreshSettings();
   say(streetSteerMode() === 'free'
-    ? 'Steering free: it goes straight the way the phone points, across blocks too.'
+    ? 'Steering free: it goes straight the way you tilt, across blocks too.'
     : 'Steering picks turns: it follows the street and stops at each corner so you can choose the next one.');
 }
 
@@ -746,7 +739,7 @@ function setSteering(on) {
   showSteerStatus();
   if (!on) return say('Steering off.');
   steerIntroduced = false;
-  say('Steering on. Lay the phone flat, screen up, like a compass.');
+  say('Steering on. Lay the phone flat, screen up.');
 }
 
 async function toggleSteering() {
@@ -1100,7 +1093,7 @@ function setUpPickers() {
     shown: $('set-street-steer-value'),
     items: () => [
       { value: 'pick', label: 'Pick turns: follow the street and stop at each corner' },
-      { value: 'free', label: 'Free: go straight the way the phone points, across blocks too' },
+      { value: 'free', label: 'Free: go straight the way I tilt, across blocks too' },
     ],
     get: streetSteerMode,
     set: (v) => { settings.set('streetSteer', v); state.corner = null; showStreetSteer(); },
