@@ -9,9 +9,10 @@ OpenFreeMap vector tiles of OpenStreetMap (© OpenMapTiles © OpenStreetMap
 contributors), one zoom-14 tile of about 2 km at a time, decoded in
 `public/src/vectortile.js`.
 
-On phones and tablets you can steer by tilting (`public/src/steering.js`),
-upright or sideways: the angle at "Ready" is still, a firm tilt one way
-moves once (or repeats while held), and coming back to still is a click.
+On phones and tablets you can steer with the phone as a compass dial
+(`public/src/steering.js`): lay it flat, turn it so the top edge points the
+way to go (real compass, eight directions, each spoken), tip it a little to
+move, and lay it flat again to stop.
 
 It is plain JavaScript modules with no build step for the code. The map data
 is generated from the desktop data files.

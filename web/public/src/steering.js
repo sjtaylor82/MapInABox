@@ -1,44 +1,49 @@
-// Tilt steering for phones and tablets.
+// Dial steering for phones and tablets.
 //
-// It works like the arrow keys. Hold the device at a comfortable angle,
-// upright or sideways, screen towards you; the way you hold it when it says
-// "Ready" is "still". Then tilt it firmly one way to move once that way:
-//   top edge away from you: north        towards you: south
-//   lower the right side: east           lower the left side: west
-// Come back to still (a soft click) before the next move. Hold the tilt and
-// it repeats, like holding down an arrow key. Only the four directions
-// count: a tilt halfway between two does nothing.
+// Lay the device flat, screen up, like a compass. Turn it round: the way its
+// top edge points is the way you will go, using the real compass, and each
+// new direction (one of eight) is spoken as you turn. Tip it a little off
+// flat, any edge, to move one step that way; keep it tipped to keep moving.
+// Lay it flat again to stop (a soft click). Which edge you tip does not
+// matter, so a tip can never send you the wrong way.
 //
-// Turn it right over, or put it down at a very different angle, and
-// steering pauses; once it is held steady again, that becomes the new
-// still. This is also how to reset "still" after shifting your grip.
+// Hold it upright, or tip it right up, and steering pauses until it is
+// lying flat again.
+//
+// The heading comes from the compass: webkitCompassHeading on iPhone and
+// iPad, the absolute orientation event elsewhere.
 
 const TICK_MS = 50;
-const GO_TILT = 0.21;        // about 12 degrees from still: move
-const STILL_TILT = 0.10;     // back within about 6 degrees: still again
-const DOMINANCE = 1.5;       // the main tilt must be this much bigger than the other
-const SETTLE_MS = 120;       // a direction must hold this long before it counts
+const SECTOR = 45;
+const HYSTERESIS = 8;        // degrees past a sector edge before the direction changes
+const SETTLE_MS = 300;       // a new direction must hold this long before it is spoken
+const TIP_GO = 0.21;         // about 12 degrees off flat: move
+const TIP_FLAT = 0.10;       // back within about 6 degrees: flat again
+const FLAT_ENOUGH = 0.75;    // "up" through the screen at least this much counts as lying flat
 const CALIBRATE_MS = 500;
-const PAUSE_MS = 700;
+const PAUSE_MS = 900;
 
 const rad = (d) => (d * Math.PI) / 180;
-const deg = (r) => (r * 180) / Math.PI;
 const norm = (a) => ((a % 360) + 360) % 360;
+const gap = (a, b) => Math.abs(((a - b + 540) % 360) - 180);
 
 let enabled = false;
-let up = null;              // smoothed "up" in the device's frame { x, y, z }
+let up = null;               // smoothed "up" in the device's frame
+let compass = null;          // smoothed compass bearing of the top edge
+let accuracy = null;
+let absoluteSeen = false;
 let hasReported = false;
-let mode = 'paused';        // 'paused' | 'calibrating' | 'ready'
+let noCompass = false;
+let startedAt = 0;
+let mode = 'paused';         // 'paused' | 'calibrating' | 'ready'
 let lostSince = 0;
 let calibrateSince = 0;
-let still = null;
-let top = { x: 0, y: 1 };   // the screen's top edge, in the device's x-y plane
-let anchor = null;          // while calibrating: the hold being checked for steadiness
-let latched = null;         // direction moved in since last still, or null
-let pendingDir = null;
+let flat = null;             // "up" when ready: the resting position
+let heading = null;          // spoken direction, one of the eight compass points
+let pending = null;
 let pendingSince = 0;
+let tipped = false;
 let nextRepeatAt = 0;
-let lastTilt = { north: 0, east: 0 };
 let timer = null;
 let wakeLock = null;
 let handlers = {};
@@ -53,8 +58,8 @@ export function isTouchDevice() {
 }
 
 /**
- * Ask for motion access. iPhone and iPad need this to come from a tap, so
- * call it straight from a click handler. Resolves true when allowed.
+ * Ask for motion and compass access. iPhone and iPad need this to come from
+ * a tap, so call it straight from a click handler. Resolves true when allowed.
  */
 export async function requestSteeringPermission() {
   if (!steeringSupported()) return false;
@@ -76,75 +81,66 @@ export function upFrom(beta, gamma) {
   return { x: -Math.sin(g) * Math.cos(b), y: Math.sin(b), z: Math.cos(b) * Math.cos(g) };
 }
 
-/**
- * How far the device is tilted from still, as { east, north } in radians.
- * `top` is the direction of the screen's top edge as the user sees it, in
- * the device's own x-y plane, so this works held upright or sideways and
- * whichever way the screen has rotated.
- * The end that goes down is the way you go, like a marble on a tray.
- */
-export function tiltFrom(u, s, top) {
-  const right = { x: top.y, y: -top.x };
-  const along = (v, d) => v.x * d.x + v.y * d.y;
-  // Top edge away from you turns "up" from the screen's top edge towards its face.
-  const lean = (v) => Math.atan2(v.z, along(v, top));
-  // Right end down turns "up" towards the screen's left.
-  const roll = (v) => Math.asin(Math.max(-1, Math.min(1, along(v, right))));
-  let north = lean(u) - lean(s);
-  if (north > Math.PI) north -= 2 * Math.PI;
-  if (north < -Math.PI) north += 2 * Math.PI;
-  return { north, east: -(roll(u) - roll(s)) };
-}
-
-/** The one direction a tilt points (0, 90, 180 or 270), or null if it is too small or between two. */
-export function directionOf(t) {
-  const n = Math.abs(t.north);
-  const e = Math.abs(t.east);
-  const big = Math.max(n, e);
-  if (big < GO_TILT || big < DOMINANCE * Math.min(n, e)) return null;
-  if (n >= e) return t.north > 0 ? 0 : 180;
-  return t.east > 0 ? 90 : 270;
+function smoothAngle(prev, next, k) {
+  if (prev == null) return next;
+  const d = ((next - prev + 540) % 360) - 180;
+  return norm(prev + d * k);
 }
 
 function onOrientation(e) {
   if (e.beta == null || e.gamma == null) return;
+  const isAbsolute = e.type === 'deviceorientationabsolute' || e.absolute === true;
+  const hasWebkit = typeof e.webkitCompassHeading === 'number' && e.webkitCompassHeading >= 0;
+  if (isAbsolute) absoluteSeen = true;
+  else if (absoluteSeen && !hasWebkit) return; // Android sends both: use the absolute one
   hasReported = true;
   const u = upFrom(e.beta, e.gamma);
   up = up ? { x: up.x + (u.x - up.x) * 0.4, y: up.y + (u.y - up.y) * 0.4, z: up.z + (u.z - up.z) * 0.4 } : u;
+  let c = null;
+  if (hasWebkit) {
+    c = e.webkitCompassHeading; // iPhone and iPad: where the top edge points
+    accuracy = typeof e.webkitCompassAccuracy === 'number' ? e.webkitCompassAccuracy : null;
+  } else if (isAbsolute && e.alpha != null) {
+    c = norm(360 - e.alpha); // alpha turns anticlockwise from north
+  }
+  if (c != null) compass = smoothAngle(compass, c, 0.35);
+}
+
+function pointFor(bearing, current) {
+  if (current != null && gap(bearing, current) <= SECTOR / 2 + HYSTERESIS) return current;
+  return norm(Math.round(bearing / SECTOR) * SECTOR);
 }
 
 function emit(name, ...args) {
   try { handlers[name]?.(...args); } catch (err) { console.error(err); }
 }
 
-/**
- * Which way is the top of the screen, in the device's x-y plane. Held at an
- * angle, gravity shows it directly; lying nearly flat, fall back on the
- * screen's rotation.
- */
-function chooseTop() {
-  const plane = Math.hypot(still.x, still.y);
-  if (plane > 0.25) return { x: still.x / plane, y: still.y / plane };
-  const angle = norm((screen.orientation && screen.orientation.angle) ?? window.orientation ?? 0);
-  return { 0: { x: 0, y: 1 }, 90: { x: 1, y: 0 }, 180: { x: 0, y: -1 }, 270: { x: -1, y: 0 } }[angle] || { x: 0, y: 1 };
-}
-
 const dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
 
+/** Sine of the angle the device is tipped from its resting position. */
+function tipAmount() {
+  const d = Math.max(-1, Math.min(1, dot(up, flat)));
+  return Math.sqrt(1 - d * d);
+}
+
 function tick() {
-  if (!enabled) return;
+  if (!enabled || !up) return;
   const now = performance.now();
+  if (compass == null) {
+    if (hasReported && !noCompass && now - startedAt > 3000) {
+      noCompass = true;
+      emit('nocompass');
+    }
+    return;
+  }
 
-  if (!up) return;
-
-  // Turned right over or put down at a very different angle: pause. Steering
-  // starts again, from a new still, once the device is held steady.
-  const far = mode === 'ready' && dot(up, still) < Math.cos(rad(55));
-  if (far) {
+  // Not lying flat (held upright, or tipped right up): pause.
+  if (up.z < FLAT_ENOUGH) {
+    if (mode === 'paused') return;
     if (!lostSince) lostSince = now;
     if (now - lostSince >= PAUSE_MS) {
       mode = 'paused';
-      latched = null;
+      tipped = false;
       emit('paused');
     }
     return;
@@ -154,62 +150,47 @@ function tick() {
   if (mode === 'paused') {
     mode = 'calibrating';
     calibrateSince = now;
-    anchor = { ...up };
     return;
   }
   if (mode === 'calibrating') {
-    // Wait until it is held steady, not still being picked up.
-    if (dot(up, anchor) < Math.cos(rad(4))) {
-      anchor = { ...up };
-      calibrateSince = now;
-      return;
-    }
     if (now - calibrateSince < CALIBRATE_MS) return;
-    still = { ...up };
-    top = chooseTop();
+    flat = { ...up };
+    heading = pointFor(compass, null);
+    pending = heading;
+    tipped = false;
     mode = 'ready';
-    latched = null;
-    pendingDir = null;
-    emit('ready');
+    emit('ready', heading, accuracy);
     return;
   }
 
-  const t = tiltFrom(up, still, top);
-  lastTilt = t;
-  const amount = Math.hypot(t.north, t.east);
-
-  if (amount <= STILL_TILT) {
-    pendingDir = null;
-    if (latched != null) {
-      latched = null;
-      emit('still');
-    }
-    return;
-  }
-
-  const dir = directionOf(t);
-  if (latched != null) {
-    // Holding the same tilt repeats; any other tilt waits for still first.
-    if (dir === latched && now >= nextRepeatAt) {
-      nextRepeatAt = now + repeatMs(latched);
-      emit('move', latched, true, t);
-    }
-    return;
-  }
-  if (dir == null) {
-    pendingDir = null;
-    return;
-  }
-  if (dir !== pendingDir) {
-    pendingDir = dir;
+  // Turning the dial: a new direction once it has settled.
+  const point = pointFor(compass, heading);
+  if (point !== pending) {
+    pending = point;
     pendingSince = now;
+  } else if (point !== heading && now - pendingSince >= SETTLE_MS) {
+    heading = point;
+    emit('heading', heading);
+    if (tipped) nextRepeatAt = Math.max(nextRepeatAt, now + 700); // time to hear it
+  }
+
+  // Tipping: move; flat again: stop.
+  const tip = tipAmount();
+  if (tipped && tip <= TIP_FLAT) {
+    tipped = false;
+    emit('still');
     return;
   }
-  if (now - pendingSince < SETTLE_MS) return;
-  latched = dir;
-  pendingDir = null;
-  nextRepeatAt = now + repeatMs(dir);
-  emit('move', dir, false, t);
+  if (!tipped && tip >= TIP_GO) {
+    tipped = true;
+    nextRepeatAt = now + repeatMs(heading);
+    emit('move', heading, false);
+    return;
+  }
+  if (tipped && now >= nextRepeatAt) {
+    nextRepeatAt = now + repeatMs(heading);
+    emit('move', heading, true);
+  }
 }
 
 async function keepAwake() {
@@ -224,16 +205,16 @@ function onVisibility() {
   if (!enabled) return;
   if (document.visibilityState === 'visible') keepAwake();
   else {
-    // Coming back to the page starts again from still.
     up = null;
     mode = 'paused';
-    latched = null;
+    tipped = false;
   }
 }
 
 /**
- * Start steering. handlers: { ready(), move(bearing, repeat, tilt), still(), paused() }.
- * repeat(bearing) gives the milliseconds between repeats while a tilt is held.
+ * Start steering. handlers: { ready(heading, accuracy), heading(h), move(h, repeat),
+ * still(), paused(), nocompass() }. repeat(h) gives the milliseconds between
+ * moves while the device stays tipped.
  */
 export function startSteering(h, repeat) {
   if (enabled) return;
@@ -241,9 +222,13 @@ export function startSteering(h, repeat) {
   if (repeat) repeatMs = repeat;
   enabled = true;
   up = null;
+  compass = null;
+  noCompass = false;
   mode = 'paused';
-  latched = null;
+  tipped = false;
   lostSince = 0;
+  startedAt = performance.now();
+  window.addEventListener('deviceorientationabsolute', onOrientation);
   window.addEventListener('deviceorientation', onOrientation);
   document.addEventListener('visibilitychange', onVisibility);
   timer = setInterval(tick, TICK_MS);
@@ -252,13 +237,15 @@ export function startSteering(h, repeat) {
 
 export function stopSteering() {
   enabled = false;
+  window.removeEventListener('deviceorientationabsolute', onOrientation);
   window.removeEventListener('deviceorientation', onOrientation);
   document.removeEventListener('visibilitychange', onVisibility);
   clearInterval(timer);
   timer = null;
   up = null;
+  compass = null;
   mode = 'paused';
-  latched = null;
+  tipped = false;
   if (wakeLock) wakeLock.release().catch(() => {});
   wakeLock = null;
 }
@@ -272,12 +259,14 @@ export function steeringReporting() {
   return hasReported;
 }
 
-/** { mode: 'off' | 'paused' | 'calibrating' | 'ready', direction, tilt: { north, east } in degrees } */
+/** { mode: 'off' | 'paused' | 'calibrating' | 'ready', heading, tipped, compass, accuracy } */
 export function steeringStatus() {
   return {
     mode: enabled ? mode : 'off',
-    direction: latched,
-    tilt: { north: Math.round(deg(lastTilt.north)), east: Math.round(deg(lastTilt.east)) },
+    heading,
+    tipped,
+    compass: compass == null ? null : Math.round(compass),
+    accuracy,
   };
 }
 
