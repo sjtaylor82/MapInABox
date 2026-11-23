@@ -51,23 +51,14 @@
       <p id="map-caption" aria-hidden="true"></p>
     </div>
     <aside id="panel" aria-label="Controls">
-      <p id="steer-status" hidden></p>
-      <div data-steer-only hidden>
-        <label for="tilt-move" class="picker-label">Each tilt moves</label>
-        <input id="tilt-move" type="range" class="picker">
-        <p id="tilt-move-value" class="picker-value" aria-hidden="true"></p>
-        <button type="button" id="btn-practice">Practise steering</button>
-      </div>
       <h2 id="step-heading">Step size</h2>
       <label for="step-size" class="sr-only">Step size</label>
-      <input id="step-size" type="range" min="0" max="4" step="1" value="2" aria-describedby="step-hint">
+      <input id="step-size" type="range" min="0" max="4" step="1" value="2">
       <p id="step-value" aria-hidden="true">5 kilometres</p>
-      <p id="step-hint" class="small">How far each arrow key or steering step moves on land. Smaller steps find more suburbs.</p>
 
       <section id="places-section" data-street-only hidden aria-labelledby="places-title">
         <h2 id="places-title" tabindex="-1">Places nearby</h2>
-        <p class="small">Street data © <a href="https://openmaptiles.org/">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>, from <a href="https://openfreemap.org/">OpenFreeMap</a>.</p>
-        <p id="places-prompt">Find places lists the places around you, nearest first.</p>
+        <p id="places-prompt" hidden></p>
         <button type="button" id="places-find">Find places (P)</button>
         <div id="places-pick" hidden>
           <label for="places-list" class="picker-label">Place</label>
@@ -87,15 +78,17 @@
             <a id="place-ubereats" target="_blank" rel="noopener" hidden>Search Uber Eats</a>
             <a id="place-doordash" target="_blank" rel="noopener" hidden>Search DoorDash</a>
           </p>
-          <fieldset id="places-categories">
-            <legend>Categories</legend>
-          </fieldset>
+          <details>
+            <summary>Categories</summary>
+            <fieldset id="places-categories">
+              <legend class="sr-only">Categories</legend>
+            </fieldset>
+          </details>
         </div>
       </section>
 
-      <section id="journey-section" aria-labelledby="journey-title">
-        <h2 id="journey-title" tabindex="-1">Journey planner</h2>
-        <p class="small">Journey options from <a href="https://www.rome2rio.com/">Rome2Rio</a>. Food from <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>.</p>
+      <details id="journey-section">
+        <summary><h2 id="journey-title" tabindex="-1">Journey planner</h2></summary>
         <label for="journey-from">From (leave empty to start where you are on the map)</label>
         <input id="journey-from" type="text" autocomplete="off" spellcheck="false">
         <label for="journey-to">To</label>
@@ -104,7 +97,7 @@
         <input id="journey-date" type="range" class="picker">
         <p id="journey-date-value" class="picker-value" aria-hidden="true"></p>
         <button type="button" id="journey-plan">Plan journey</button>
-        <p id="journey-prompt">Type a town, city, address or place, then choose Plan journey.</p>
+        <p id="journey-prompt"></p>
         <div id="journey-options" hidden>
           <label for="journey-option-list" class="picker-label">Option</label>
           <input id="journey-option-list" type="range" class="picker">
@@ -135,7 +128,7 @@
             <a id="journey-food-doordash" target="_blank" rel="noopener">Search DoorDash</a>
           </p>
         </div>
-      </section>
+      </details>
 
       <h2>Move</h2>
       <div class="grid move">
@@ -145,7 +138,8 @@
         <button type="button" data-move="180">South</button>
       </div>
 
-      <h2>Information</h2>
+      <details>
+      <summary><h2>Information</h2></summary>
       <div class="grid">
         <button type="button" data-key="a" data-street-only hidden>Address</button>
         <button type="button" data-key="q">Air quality</button>
@@ -166,9 +160,16 @@
         <button type="button" data-key="w">Weather</button>
         <button type="button" data-key="Shift+i">Wikipedia</button>
       </div>
+      </details>
 
-      <section aria-labelledby="settings-title">
-        <h2 id="settings-title" tabindex="-1">Settings</h2>
+      <details id="settings-section">
+        <summary><h2 id="settings-title" tabindex="-1">Settings</h2></summary>
+        <div data-steer-only hidden>
+          <label for="tilt-move" class="picker-label">Each tilt moves</label>
+          <input id="tilt-move" type="range" class="picker">
+          <p id="tilt-move-value" class="picker-value" aria-hidden="true"></p>
+          <button type="button" id="btn-practice">Practise steering</button>
+        </div>
         <label for="set-units" class="picker-label">Distances</label>
         <input id="set-units" type="range" class="picker">
         <p id="set-units-value" class="picker-value" aria-hidden="true"></p>
@@ -182,8 +183,7 @@
         <label class="check"><input type="checkbox" id="set-sounds"> Country sounds and tones</label>
         <label class="check"><input type="checkbox" id="set-geo"> Name geographic features (GeoFeatures)</label>
         <label class="check"><input type="checkbox" id="set-visual"> Visual Assist map</label>
-        <p class="small">Changes take effect straight away.</p>
-      </section>
+      </details>
     </aside>
   </div>
 
@@ -286,6 +286,7 @@
     <p>In street mode, the Steering: pick turns or free button (also in Settings) chooses how steering moves. Pick turns follows the street. At a corner it stops; lay the phone flat, then tilt towards a way to hear it, for example "Turn left onto Ann Street, heading west", and hold the tilt to take it. Free goes straight the way you tilt, across blocks too.</p>
     <p>Some browsers keep F6 for themselves. If F6 does nothing, use I.</p>
     <p><a href="https://github.com/sjtaylor82/MapInABox/releases/latest">Download Map in a Box for Windows and macOS</a>, with street mode, walking routes, transport and much more.</p>
+    <p class="small">Street data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>, through Overpass (overpass.openstreetmap.fr). When that is busy, from <a href="https://openfreemap.org/">OpenFreeMap</a> (© <a href="https://openmaptiles.org/">OpenMapTiles</a>), which has no phone numbers and fewer addresses. Journey options from <a href="https://www.rome2rio.com/">Rome2Rio</a>.</p>
     <p class="small">Postcodes from <a href="https://www.geonames.org/">GeoNames</a> (CC BY 4.0): the nearest postcode point, so close to a boundary it can give the neighbouring one.</p>
     <p>Your location is only used to move the map. It is not stored anywhere except this browser. Weather, time and search send the map position to those services when you ask for them.</p>
     <div class="buttons"><button type="button" data-close>Close</button></div>

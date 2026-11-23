@@ -117,6 +117,7 @@ function loadTile(ty, tx) {
         pushCell(numberGrid, ckey(cellOf(h.la), cellOf(h.lo)), { num: h.n, street: h.s || '', lat: h.la, lon: h.lo });
       }
       entry.ok = true;
+      entry.source = data.source || 'openfreemap';
       return { ok: true };
     },
     (err) => {
@@ -147,6 +148,12 @@ export function ensureArea(lat, lon) {
   if (dx) loadTile(ty, tx + dx);
   if (dy && dx) loadTile(ty + dy, tx + dx);
   return main;
+}
+
+/** 'overpass' or 'openfreemap': where the tile under a point came from. */
+export function areaSource(lat, lon) {
+  const { ty, tx } = tileOf(lat, lon);
+  return tiles.get(`${ty},${tx}`)?.source || '';
 }
 
 /** True when the tile under a point has loaded. */

@@ -327,7 +327,9 @@ async function toggleStreetMode() {
   state.lat = snap.lat;
   state.lon = snap.lon;
   state.streetName = snap.name;
-  movedStreet({ prefix: 'Street mode.' });
+  // Say once when the backup map is in use, which has fewer details.
+  const note = street.areaSource(lat, lon) === 'openfreemap' ? 'Using the backup map: fewer house numbers, no phone numbers.' : '';
+  movedStreet({ prefix: 'Street mode.', note });
 }
 
 function exitStreetMode() {
@@ -549,11 +551,12 @@ function listPlaces(focusList) {
   if (!found.length) {
     const why = cats.size ? `No places found within ${formatDistance(radius)} in the categories switched on.` : 'Every category is switched off.';
     $('places-prompt').textContent = why;
+    $('places-prompt').hidden = false;
     if (focusList) $('places-categories').querySelector('input').focus();
     return say(why);
   }
-  const how = found.length >= 60 ? `The ${found.length} nearest places` : `${found.length} places within ${formatDistance(radius)}`;
-  $('places-prompt').textContent = `${how}, nearest first. Swipe up or down on Place to hear them, then choose Go there. Switch categories on or off below.`;
+  const how = `${found.length} places`;
+  $('places-prompt').hidden = true;
   if (focusList) $('places-list').focus();
   say(`${how}. ${street.placeText(found[0])}.`);
 }
@@ -626,7 +629,7 @@ function choosePlace() {
   const p = placeResults[state.placeIdx];
   if (!p) return;
   $('places-pick').hidden = true;
-  $('places-prompt').textContent = 'Find places lists the places around you, nearest first.';
+  $('places-prompt').hidden = true;
   $('map').focus();
   state.lat = p.lat;
   state.lon = p.lon;
@@ -719,7 +722,7 @@ const steerHandlers = {
     }
     say(steerIntroduced
       ? 'Ready.'
-      : 'Ready. Tip the phone well over, more than 60 degrees, towards the way you want to go, and lay it flat to stop.');
+      : 'Ready. Tip it well over to move, lay it flat to stop.');
     steerIntroduced = true;
   },
   move(dir, repeat) {
@@ -782,16 +785,10 @@ function onTiltMove(dir, repeat = false) {
   step(dir, state.info.onLand ? stepKm() : Math.max(50, stepKm()));
 }
 
+/** Steering's own settings show only while steering is on. Speech says the rest. */
 function showSteerStatus() {
-  const el = $('steer-status');
-  const st = steering.steeringStatus();
-  const off = st.mode === 'off';
-  el.hidden = off;
+  const off = steering.steeringStatus().mode === 'off';
   for (const e of document.querySelectorAll('[data-steer-only]')) e.hidden = off;
-  if (off) return;
-  if (st.mode !== 'ready') el.textContent = 'Steering paused: lay the phone flat, screen up.';
-  else if (st.direction != null) el.textContent = `Steering: tilted ${directionName(st.direction)}.`;
-  else el.textContent = 'Steering: flat and still. Tilt to move.';
 }
 
 // ── Step size ─────────────────────────────────────────────────────────────
@@ -826,9 +823,6 @@ function showStep() {
   slider.setAttribute('aria-valuetext', text);
   $('step-value').textContent = text;
   showTiltMove(); // its "One step" label shows the size
-  $('step-hint').textContent = inStreet
-    ? 'How far each arrow key or steering step moves in street mode.'
-    : 'How far each arrow key or steering step moves on land. Smaller steps find more suburbs.';
 }
 
 function stepIndex() {
@@ -878,7 +872,7 @@ function setSteering(on, { byShake = false } = {}) {
   showSteerStatus();
   if (!on) return say(byShake ? 'Steering off. Shake again to turn it back on.' : 'Steering off.');
   steerIntroduced = false;
-  say(byShake ? 'Steering on. Lay the phone flat, screen up.' : 'Steering on. Lay the phone flat, screen up. Shake the phone to turn steering off.');
+  say(settings.get('tiltPracticed') ? 'Steering on.' : 'Steering on. Lay the phone flat. Shake it to turn steering off.');
 }
 
 /** A firm shake turns steering off, or back on. */
@@ -1201,6 +1195,7 @@ function openHelp() {
 
 /** Ctrl+Comma or the Settings button: go to the Settings section. */
 function openSettings() {
+  $('settings-section').open = true;
   const h = $('settings-title');
   h.scrollIntoView({ block: 'start' });
   h.focus();

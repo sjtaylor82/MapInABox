@@ -568,6 +568,7 @@ export function initJourney(h) {
 
 /** The Journey toolbar button: go to the journey planner. */
 export function openJourney() {
+  $('journey-section').open = true;
   const h = $('journey-title');
   h.scrollIntoView({ block: 'start' });
   h.focus();

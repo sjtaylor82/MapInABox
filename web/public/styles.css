@@ -286,3 +286,6 @@ input.picker { width: 100%; height: 2rem; accent-color: var(--accent); }
 #journey-section label[for^="journey-"]:not(.picker-label) { display: block; font-weight: 600; margin: 0.75rem 0 0.25rem; }
 #journey-section input[type="text"] { display: block; width: 100%; box-sizing: border-box; padding: 0.4rem; font-size: 1rem; }
 #journey-section button { margin-top: 0.5rem; }
+
+#panel summary { cursor: pointer; margin: 1rem 0 0.5rem; font-weight: 700; }
+#panel summary h2 { display: inline; margin: 0; }
