@@ -1363,6 +1363,14 @@ $('btn-position').addEventListener('click', () => { if (state.started) repeatLoc
 $('btn-journey').addEventListener('click', openJourney);
 initJourney({
   getHere: () => ({ lat: state.lat, lon: state.lon, label: state.streetLabel || state.info.label || state.info.city }),
+  // Where the device really is, with a short street address for the From box.
+  myLocation: async () => {
+    const { lat, lon } = await devicePosition();
+    const ph = await online.addressAt(lat, lon).catch(() => null);
+    const streetPart = ph && ph.street ? (ph.number ? `${ph.number} ${ph.street}` : ph.street) : '';
+    const label = [streetPart, ph && ph.place].filter(Boolean).join(', ') || `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+    return { lat, lon, label };
+  },
   // Live walking guidance: keep the map on where you really are, quietly.
   follow: (p) => {
     state.lat = p.lat;

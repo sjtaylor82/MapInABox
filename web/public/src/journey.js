@@ -413,7 +413,8 @@ async function planWalk(from, to) {
   let b = null;
   try {
     // From can be anywhere, so a walk can be looked up for a place you are not.
-    a = from ? await locate(from, here, false) : { lat: here.lat, lon: here.lon, label: here.label || 'where you are' };
+    if (st.fromHere && from === st.fromHere.label) a = st.fromHere; // Use my location: the exact spot
+    else a = from ? await locate(from, here, false) : { lat: here.lat, lon: here.lon, label: here.label || 'where you are' };
     if (a) b = await locate(to, a);
   } catch { /* reported below */ }
   if (seq !== st.seq) return;
@@ -700,7 +701,10 @@ async function plan() {
   const here = hooks.getHere();
   const params = new URLSearchParams({ to, currency: currency() });
   let fromName = from;
-  if (from) params.set('from', from);
+  if (st.fromHere && from === st.fromHere.label) {
+    params.set('from', from);
+    params.set('fromPos', `${st.fromHere.lat.toFixed(5)},${st.fromHere.lon.toFixed(5)}`);
+  } else if (from) params.set('from', from);
   else {
     fromName = here.label || 'where you are';
     params.set('from', here.label || 'where you are');
@@ -1082,8 +1086,23 @@ function goToFood() {
  * hooks.getHere(): { lat, lon, label } — the map position, used when From is empty.
  * hooks.goTo({ lat, lon, name, kind }) — move the map to a food place.
  */
+/** Use my location: From becomes where the device really is, by its street address. */
+async function fromMyLocation() {
+  say('Finding your location…');
+  try {
+    const p = await hooks.myLocation();
+    st.fromHere = p;
+    $('journey-from').value = p.label;
+    say(`From ${p.label}.`);
+    $('journey-to').focus();
+  } catch (err) {
+    say(err.message || 'Your location could not be found.');
+  }
+}
+
 export function initJourney(h) {
   hooks = h;
+  $('journey-from-here').addEventListener('click', fromMyLocation);
   st.date = travelDays()[1].value;
   datePicker = makePicker($('journey-date'), {
     shown: $('journey-date-value'),
