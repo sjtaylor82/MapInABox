@@ -45,6 +45,7 @@ async function boot() {
   applyVisualAssist();
   const touch = steering.isTouchDevice() && steering.steeringSupported();
   $('btn-steer').hidden = !touch;
+  if (steering.isTouchDevice()) $('map-hint').textContent = '';
   const saved = settings.get('position');
   const hasSaved = !!(saved && Number.isFinite(saved.lat));
   $('start-last').hidden = !hasSaved;
@@ -349,10 +350,11 @@ function exitStreetMode() {
 function showMode() {
   const inStreet = state.mode === 'street';
   $('btn-street').setAttribute('aria-pressed', String(inStreet));
-  $('map').setAttribute('aria-roledescription', inStreet ? 'street map' : 'world map');
-  $('map').setAttribute('aria-label', inStreet
-    ? 'Street map. Use the arrow keys to move. Press P for places nearby, F11 for the world map.'
-    : 'World map. Use the arrow keys to move. Press F11 for street mode, F1 for help.');
+  // Short label; the keys go in a hint, which VoiceOver says after a pause
+  // (and can be switched off). Phones and tablets have no keys, so no hint.
+  $('map').setAttribute('aria-label', inStreet ? 'Street map' : 'World map');
+  $('map-hint').textContent = steering.isTouchDevice() ? ''
+    : inStreet ? 'Arrow keys move. P places nearby. F11 world map.' : 'Arrow keys move. F11 street mode. F1 help.';
   for (const el of document.querySelectorAll('[data-street-only]')) el.hidden = !inStreet;
   showTiltMove();
   showStreetSteer();

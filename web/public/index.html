@@ -34,8 +34,8 @@
       <button id="btn-where" type="button">Where am I (Y)</button>
       <button id="btn-world" type="button">World map</button>
     </header>
-    <div id="map" tabindex="0" role="application" aria-roledescription="world map"
-         aria-label="World map. Use the arrow keys to move. Press F1 for help.">
+    <div id="map" tabindex="0" role="application" aria-label="World map" aria-describedby="map-hint">
+      <span id="map-hint" class="sr-only">Arrow keys move. F11 street mode. F1 help.</span>
       <canvas id="map-canvas" aria-hidden="true"></canvas>
       <p id="map-caption" aria-hidden="true"></p>
     </div>
