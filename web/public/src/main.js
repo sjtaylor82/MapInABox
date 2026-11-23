@@ -603,20 +603,27 @@ async function placeDetails() {
     try {
       d = await online.placeDetails(p.name, p.lat, p.lon);
     } catch {
-      return say('The place details service is busy. Try again in a minute, or use Open in Apple Maps.');
+      d = null; // still give the address below
     }
   }
   if (placeResults[state.placeIdx || 0] !== p) return; // chose another meanwhile
   const parts = [];
   if (d && d.phone) parts.push(`Phone ${d.phone}`);
   if (d && d.hours) parts.push(`Hours: ${speakableHours(d.hours)}`);
-  if (d && d.address) parts.push(`Address: ${d.address}`);
+  if (d && d.address) {
+    parts.push(`Address: ${d.address}`);
+  } else {
+    // No address in OpenStreetMap: give the nearest house number and street, and the postcode.
+    const ad = street.nearestAddress(p.lat, p.lon, 60);
+    const near = ad && ad.street ? `${ad.num} ${ad.street}` : street.streetLabel(p.lat, p.lon);
+    const pc = await postcodeAt(p.lat, p.lon).catch(() => null);
+    parts.push(`Near ${near}${pc ? `, ${pc.place ? `${pc.place} ` : ''}${pc.postcode}` : ''}`);
+  }
   if (d && d.cuisine) parts.push(`Cuisine: ${d.cuisine}`);
   if (d && d.website) parts.push('Has a website');
   if (d && d.wheelchair) parts.push(`Wheelchair access: ${d.wheelchair}`);
-  const text = parts.length
-    ? `${p.name}. ${parts.join('. ')}.`
-    : `OpenStreetMap has no phone, hours or website for ${p.name}. Open in Apple Maps may have them.`;
+  const missing = !(d && (d.phone || d.hours || d.website));
+  const text = `${p.name}. ${parts.join('. ')}.${missing ? ' OpenStreetMap has no phone or hours for it: Open in Apple Maps may have them.' : ''}`;
   $('place-details-text').textContent = text;
   $('place-call').hidden = !(d && d.phone);
   if (d && d.phone) {
@@ -635,7 +642,7 @@ async function placeDetails() {
 function choosePlace() {
   const p = placeResults[state.placeIdx];
   if (!p) return;
-  $('places-pick').hidden = true;
+  // The list stays open, so details for the place are still a button away.
   $('places-prompt').hidden = true;
   $('map').focus();
   state.lat = p.lat;
