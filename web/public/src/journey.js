@@ -219,7 +219,7 @@ const TURN = {
 /** What to do at a step, without the distance: "Turn left onto Middle Street". */
 /** The street a step walks along: its own name, or the street its footpath runs beside. */
 function streetOf(s) {
-  return s.name || (s.nearDist <= 15 ? s.near : '');
+  return s.name || (s.nearDist <= 15 && !s.crossing ? s.near : '');
 }
 
 function stepAction(s) {
@@ -230,6 +230,14 @@ function stepAction(s) {
   const onto = name ? ` onto ${name}` : by;
   const along = name ? ` along ${name}` : by;
   const turn = TURN[s.modifier] || 'continue';
+  // Already on this street: keep going along it, whatever the footpath does at the corner.
+  if (name && s.prevStreet === name && s.type !== 'arrive' && s.type !== 'depart') {
+    return `Continue along ${name}`;
+  }
+  if (s.crossing) {
+    const way = s.modifier && TURN[s.modifier] && s.modifier !== 'straight' ? `${TURN[s.modifier][0].toUpperCase()}${TURN[s.modifier].slice(1)} and cross` : 'Cross';
+    return `${way} ${s.near}`;
+  }
   switch (s.type) {
     case 'depart': return `Start${along}, heading ${compassName(s.bearing || 0).replace('-', ' ')}`;
     case 'arrive': return 'Arrive at your destination';
@@ -247,7 +255,13 @@ function listJoin(items) {
 
 /** "at the corner of Railway Parade": the other streets meeting where a step happens. */
 function cornerText(s) {
-  return s.corner && s.corner.length ? `, at ${s.corner.length > 1 ? 'the corner of ' : ''}${listJoin(s.corner)}` : '';
+  if (!s.corner || !s.corner.length) return '';
+  // Going straight on through a corner: which streets you cross, and which are to one side.
+  const name = streetOf(s);
+  if (name && s.prevStreet === name && s.cornerSides) {
+    return `, ${s.cornerSides.slice(0, 3).map(crossingWords).join(', ')}`;
+  }
+  return `, at ${s.corner.length > 1 ? 'the corner of ' : ''}${listJoin(s.corner)}`;
 }
 
 /** One cross street: "cross Wilga Street", or "Burwood Road on your right" when it only leaves one side. */
@@ -290,13 +304,42 @@ async function addCrossStreets(res) {
   }
   await Promise.race([Promise.all(loads), new Promise((r) => setTimeout(r, 12000))]);
   const at = res.steps.map((s) => alongLine(line, cum, s.lat, s.lon).along);
+  // Unnamed footpaths: name them by the street they run beside a little way
+  // past the turn (at the corner itself the nearest street is often the one
+  // being crossed). A short step straight across a street is a crossing.
+  res.steps.forEach((s, i) => {
+    if (s.name || s.type === 'arrive' || i + 1 >= res.steps.length) return;
+    s.crossing = false;
+    const len = Math.max(0, at[i + 1] - at[i]);
+    const probeAt = at[i] + Math.min(25, len / 2);
+    const [pl, po] = pointAlong(line, cum, probeAt);
+    const [q1, q2] = [pointAlong(line, cum, probeAt - 5), pointAlong(line, cum, probeAt + 5)];
+    const walkBearing = bearingDeg(q1[0], q1[1], q2[0], q2[1]);
+    const n = street.nearestStreet(pl, po, 20);
+    if (!n) return;
+    const diff = Math.abs(((walkBearing - n.bearing + 540) % 360) - 180);
+    const across = Math.min(diff, 180 - diff); // 0: along the street, 90: straight across
+    s.near = n.name;
+    s.nearDist = n.dist;
+    if (across >= 55 && len <= 40 && s.type !== 'depart') s.crossing = true;
+    else if (across > 35) s.nearDist = 99; // neither along nor across: just "by" it
+  });
   res.steps.forEach((s, i) => {
     if (s.lat == null) return;
     const mine = streetOf(s);
     const prevStreet = i > 0 ? streetOf(res.steps[i - 1]) : '';
-    const ix = street.nearestIntersection(s.lat, s.lon, 25);
-    s.corner = ix ? [...ix.names].filter((n) => n !== mine && n !== s.near) : [];
-    if (s.corner.length > 2) s.corner = s.corner.slice(0, 2);
+    s.prevStreet = prevStreet;
+    // Every street meeting within 25 metres of the turn: two corners can be that close.
+    s.corner = [];
+    s.cornerSides = [];
+    for (const ix of street.intersectionsNear(s.lat, s.lon, 25)) {
+      for (const n of ix.names) {
+        if (n === mine || n === s.near || n === prevStreet || s.corner.includes(n)) continue;
+        s.corner.push(n);
+        s.cornerSides.push({ name: n, side: s.bearing != null ? street.streetSide(ix, n, s.bearing) : '' });
+      }
+    }
+    if (s.corner.length > 3) s.corner = s.corner.slice(0, 3);
     // Cross streets between this step and the next, in order, not the corners at either end.
     s.crossings = [];
     if (s.type === 'arrive' || i + 1 >= res.steps.length) return;
@@ -386,6 +429,13 @@ async function planWalk(from, to) {
       if (n) {
         step.near = n.name;
         step.nearDist = n.dist;
+        // An unnamed path across the nearest street is a crossing of it, not a
+        // turn onto it: compare the way you walk with the way the street runs.
+        if (step.bearing != null && n.dist <= 15) {
+          const diff = Math.abs(((step.bearing - n.bearing + 540) % 360) - 180);
+          const across = Math.min(diff, 180 - diff); // 0: along the street, 90: straight across
+          if (across >= 50 && step.type !== 'depart' && step.type !== 'arrive') step.crossing = true;
+        }
       }
     }
   }

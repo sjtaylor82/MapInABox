@@ -240,7 +240,11 @@ export function nearestStreet(lat, lon, maxM = 1500, prefer = '') {
     const score = p.dist - (prefer && ways[wi].name === prefer ? 8 : 0);
     if (score < bestScore) {
       bestScore = score;
-      best = { name: ways[wi].name, kind: ways[wi].kind, dist: p.dist, lat: p.lat, lon: p.lon, wi, si, t: p.t };
+      const [a, b] = [ways[wi].pts[si], ways[wi].pts[si + 1]];
+      best = {
+        name: ways[wi].name, kind: ways[wi].kind, dist: p.dist, lat: p.lat, lon: p.lon, wi, si, t: p.t,
+        bearing: bearingDeg(a[0], a[1], b[0], b[1]), // the street's direction here
+      };
     }
   }
   return best;
@@ -317,6 +321,18 @@ export function streetSide(corner, name, heading) {
   }
   if (sides.size === 2) return 'both';
   return sides.size ? [...sides][0] : '';
+}
+
+/** Every corner within maxM metres, nearest first. */
+export function intersectionsNear(lat, lon, maxM = 25) {
+  const out = [];
+  for (const key of cellsNear(lat, lon, maxM)) {
+    for (const node of ixGrid.get(key) || []) {
+      const d = metres(lat, lon, node.lat, node.lon);
+      if (d <= maxM) out.push({ ...node, dist: d });
+    }
+  }
+  return out.sort((x, y) => x.dist - y.dist);
 }
 
 /** The nearest corner where two or more named streets meet, within maxM metres. */
