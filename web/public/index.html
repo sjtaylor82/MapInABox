@@ -59,6 +59,12 @@
       <section id="places-section" data-street-only hidden aria-labelledby="places-title">
         <h2 id="places-title" tabindex="-1">Places nearby</h2>
         <p id="places-prompt" hidden></p>
+        <details>
+          <summary>Categories</summary>
+          <fieldset id="places-categories">
+            <legend class="sr-only">Categories</legend>
+          </fieldset>
+        </details>
         <button type="button" id="places-find">Find places (P)</button>
         <div id="places-pick" hidden>
           <label for="places-list" class="picker-label">Place</label>
@@ -78,12 +84,6 @@
             <a id="place-ubereats" target="_blank" rel="noopener" hidden>Search Uber Eats</a>
             <a id="place-doordash" target="_blank" rel="noopener" hidden>Search DoorDash</a>
           </p>
-          <details>
-            <summary>Categories</summary>
-            <fieldset id="places-categories">
-              <legend class="sr-only">Categories</legend>
-            </fieldset>
-          </details>
         </div>
       </section>
 

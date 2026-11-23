@@ -517,7 +517,7 @@ function buildCategorySwitches() {
       const now = enabledCategories();
       if (input.checked) now.add(key); else now.delete(key);
       settings.set('placeCategories', [...now]);
-      listPlaces(false);
+      if (!$('places-pick').hidden) listPlaces(false);
     });
     l.append(input, ` ${label}`);
     box.append(l);
@@ -528,7 +528,6 @@ function buildCategorySwitches() {
 async function openPlaces() {
   if (state.mode !== 'street') return say('Places nearby are in street mode. Press F11 first.');
   if (!street.areaReady(state.lat, state.lon)) return say('The streets are still loading.');
-  buildCategorySwitches();
   // Places a kilometre away can be in the next map area: load those first.
   const { lat, lon } = state;
   let slow = setTimeout(() => say('Finding places…'), 800);
@@ -1283,6 +1282,7 @@ $('jump-input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); runJumpSearch(); }
 });
 setUpPickers();
+buildCategorySwitches();
 $('jump-results').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
     e.preventDefault();
