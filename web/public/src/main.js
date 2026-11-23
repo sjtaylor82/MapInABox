@@ -15,6 +15,7 @@ import { initMapView, updateMapView, draw as drawMap, setStreetDrawer } from './
 import * as steering from './steering.js';
 import * as street from './street.js';
 import { makePicker } from './picker.js';
+import { postcodeAt } from './postcode.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -148,6 +149,7 @@ async function moved({ tone = true, prefix = '' } = {}) {
   // sounds like not moving, so say where the nearest land is as well.
   if (sameSea || (prefix && !info.onLand)) text = `${info.label}. ${landHint(state.lat, state.lon)}`;
   say(prefix ? `${prefix} ${text}` : text);
+  schedulePostcode(seq);
   updateMapView(state.lat, state.lon, info.label, info.country);
   if (countryChanged) {
     const place = info.onLand && info.country !== 'Open Water' ? info.country : 'ocean';
@@ -229,6 +231,33 @@ function nextPlace(bearing, direction) {
   }
   audio.edgeTone();
   say(`No town found to the ${direction} within ${formatDistance(1500000)}.`);
+}
+
+// ── Postcode ──────────────────────────────────────────────────────────────
+
+let postcodeTimer = null;
+
+async function announcePostcode() {
+  const { lat, lon } = state;
+  const pc = await postcodeAt(lat, lon);
+  if (!pc) return say('No postcode found for this location.');
+  state.lastPostcode = pc.postcode;
+  const where = [pc.place, pc.admin].filter(Boolean).join(', ');
+  say(`Postcode ${pc.postcode}${where ? `, ${where}` : ''}.`);
+}
+
+/** Two seconds after a move, once you have stopped, say the postcode if it has changed. */
+function schedulePostcode(seq) {
+  clearTimeout(postcodeTimer);
+  if (settings.get('autoPostcode') === false) return;
+  postcodeTimer = setTimeout(async () => {
+    if (seq !== state.seq) return; // moved on since
+    if (state.mode === 'world' && !state.info.onLand) return;
+    const pc = await postcodeAt(state.lat, state.lon);
+    if (seq !== state.seq || !pc || pc.postcode === state.lastPostcode) return;
+    state.lastPostcode = pc.postcode;
+    say(`Postcode ${pc.postcode}.`);
+  }, 2000);
 }
 
 // ── Where am I (device location) ──────────────────────────────────────────
@@ -345,6 +374,7 @@ async function movedStreet({ tone = true, prefix = '', note = '', suffix = '', k
   const near = street.nearestStreet(lat, lon, 25, state.streetName);
   state.streetName = near ? near.name : '';
   say([prefix, note, label.endsWith('.') ? label : `${label}.`, suffix].filter(Boolean).join(' '));
+  schedulePostcode(seq);
   updateMapView(lat, lon, label, null);
   // Keep the country and region up to date for C, R and the other keys.
   describe(lat, lon, state.info).then((info) => {
@@ -463,28 +493,65 @@ function takeCorner(m) {
 let placeResults = [];
 let placesPicker = null;
 
+function enabledCategories() {
+  const saved = settings.get('placeCategories');
+  return new Set(Array.isArray(saved) ? saved : street.PLACE_CATEGORIES.map(([k]) => k));
+}
+
+/** The on/off switch for each category, under the Place picker. */
+function buildCategorySwitches() {
+  const box = $('places-categories');
+  if (box.querySelector('input')) return;
+  const on = enabledCategories();
+  for (const [key, label] of street.PLACE_CATEGORIES) {
+    const l = document.createElement('label');
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.setAttribute('role', 'switch');
+    input.checked = on.has(key);
+    input.addEventListener('change', () => {
+      const now = enabledCategories();
+      if (input.checked) now.add(key); else now.delete(key);
+      settings.set('placeCategories', [...now]);
+      listPlaces(false);
+    });
+    l.append(input, ` ${label}`);
+    box.append(l);
+  }
+}
+
 /** P, or Find places: list the places around you in the Places nearby picker. */
 function openPlaces() {
   if (state.mode !== 'street') return say('Places nearby are in street mode. Press F11 first.');
   if (!street.areaReady(state.lat, state.lon)) return say('The streets are still loading.');
+  buildCategorySwitches();
+  $('places-pick').hidden = false;
+  listPlaces(true);
+}
+
+/** Fill the Place picker with the nearest places in the categories switched on. */
+function listPlaces(focusList) {
+  const cats = enabledCategories();
   let radius = 300;
-  let found = street.placesNear(state.lat, state.lon, radius);
+  let found = street.placesNear(state.lat, state.lon, radius, 60, cats);
   if (found.length < 5) {
     radius = 1000;
-    found = street.placesNear(state.lat, state.lon, radius);
-  }
-  if (!found.length) {
-    $('places-pick').hidden = true;
-    $('places-prompt').textContent = `No places found within ${formatDistance(radius)}.`;
-    return say(`No places found within ${formatDistance(radius)}.`);
+    found = street.placesNear(state.lat, state.lon, radius, 60, cats);
   }
   placeResults = found;
   state.placeIdx = 0;
-  const how = found.length >= 60 ? `The ${found.length} nearest places` : `${found.length} places within ${formatDistance(radius)}`;
-  $('places-prompt').textContent = `${how}, nearest first. Swipe up or down on Place to hear them, then choose Go there.`;
-  $('places-pick').hidden = false;
   placesPicker.refresh();
-  $('places-list').focus();
+  $('places-list').hidden = !found.length;
+  $('places-go').hidden = !found.length;
+  if (!found.length) {
+    const why = cats.size ? `No places found within ${formatDistance(radius)} in the categories switched on.` : 'Every category is switched off.';
+    $('places-prompt').textContent = why;
+    if (focusList) $('places-categories').querySelector('input').focus();
+    return say(why);
+  }
+  const how = found.length >= 60 ? `The ${found.length} nearest places` : `${found.length} places within ${formatDistance(radius)}`;
+  $('places-prompt').textContent = `${how}, nearest first. Swipe up or down on Place to hear them, then choose Go there. Switch categories on or off below.`;
+  if (focusList) $('places-list').focus();
   say(`${how}. ${street.placeText(found[0])}.`);
 }
 
@@ -928,6 +995,7 @@ const KEYS = {
   'Ctrl+h': () => openJumpHistory(),
   l: () => say(`${formatLat(state.lat)}, ${formatLon(state.lon)}.`),
   c: () => say(noCountry() ? 'Open water.' : `${state.info.country}.`),
+  'Shift+p': () => announcePostcode(),
   r: () => say(state.info.admin ? `${state.info.admin}.` : noCountry() ? 'Open water.' : `No region found in ${state.info.country}.`),
   n: () => say(nearestCityLabel(state.lat, state.lon)),
   g: async () => {
@@ -1113,6 +1181,8 @@ function setUpPickers() {
   $('set-sounds').checked = settings.get('sounds');
   $('set-geo').checked = settings.get('geoFeatures');
   $('set-visual').checked = settings.get('visualAssist');
+  $('set-postcode').checked = settings.get('autoPostcode') !== false;
+  $('set-postcode').addEventListener('change', (e) => settings.set('autoPostcode', e.target.checked));
   $('set-sounds').addEventListener('change', (e) => audio.setSoundsEnabled(e.target.checked));
   $('set-geo').addEventListener('change', (e) => settings.set('geoFeatures', e.target.checked));
   $('set-visual').addEventListener('change', (e) => {

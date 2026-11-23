@@ -94,7 +94,7 @@ function addPlace(p) {
   if (poiIds.has(p.id) || poiIds.has(key)) return;
   poiIds.add(p.id);
   poiIds.add(key);
-  const poi = { name: p.n, kind: p.k, lat: p.la, lon: p.lo };
+  const poi = { name: p.n, kind: p.k, category: placeCategory(p.c, p.k), lat: p.la, lon: p.lo };
   pois.push(poi);
   pushCell(poiGrid, ckey(cellOf(poi.lat), cellOf(poi.lon)), poi);
 }
@@ -373,11 +373,71 @@ function walkAlong(start, distM, heading) {
 
 // ── Places ────────────────────────────────────────────────────────────────
 
-/** Places within radiusM metres, nearest first: [{ name, kind, lat, lon, dist, bearing }]. */
-export function placesNear(lat, lon, radiusM = 500, limit = 60) {
+// ── Categories, as in the desktop app (poi_fetch.POI_CATEGORY_CHOICES) ────
+
+export const PLACE_CATEGORIES = [
+  ['food', 'Food and drink'],
+  ['shopping', 'Shopping'],
+  ['transport', 'Public transport'],
+  ['trains', 'Trains and stations'],
+  ['health', 'Health and medical'],
+  ['community', 'Community and services'],
+  ['arts', 'Arts, venues and landmarks'],
+  ['parks', 'Parks and outdoors'],
+  ['accommodation', 'Accommodation'],
+  ['other', 'Other places'],
+];
+
+// OpenMapTiles poi classes.
+const CATEGORY_BY_CLASS = {
+  fast_food: 'food', cafe: 'food', restaurant: 'food', bar: 'food', beer: 'food',
+  ice_cream: 'food', bakery: 'food', grocery: 'food',
+  shop: 'shopping', clothing_store: 'shopping', alcohol_shop: 'shopping', music: 'shopping',
+  car: 'shopping', furniture: 'shopping', jewelry: 'shopping', florist: 'shopping',
+  bus: 'transport', ferry: 'transport', aerialway: 'transport', harbor: 'transport',
+  railway: 'trains',
+  hospital: 'health', pharmacy: 'health', doctors: 'health', dentist: 'health', veterinary: 'health',
+  school: 'community', college: 'community', library: 'community', place_of_worship: 'community',
+  post: 'community', bank: 'community', atm: 'community', police: 'community',
+  fire_station: 'community', town_hall: 'community', toilets: 'community', laundry: 'community',
+  fuel: 'community', parking: 'community', shelter: 'community',
+  attraction: 'arts', museum: 'arts', art_gallery: 'arts', theatre: 'arts', cinema: 'arts',
+  stadium: 'arts', castle: 'arts', monument: 'arts',
+  park: 'parks', playground: 'parks', golf: 'parks', swimming: 'parks', sports: 'parks',
+  dog_park: 'parks', zoo: 'parks', garden: 'parks',
+  lodging: 'accommodation', campsite: 'accommodation',
+};
+
+// Spoken kinds, from the desktop's _KIND_TO_CATEGORY.
+const CATEGORY_BY_KIND = {
+  supermarket: 'food', convenience: 'food', greengrocer: 'food', butcher: 'food', pub: 'food',
+  'fast food': 'food', 'food court': 'food',
+  mall: 'shopping', 'department store': 'shopping', clothes: 'shopping', shoes: 'shopping',
+  books: 'shopping', electronics: 'shopping', 'mobile phone': 'shopping', chemist: 'shopping',
+  hardware: 'shopping', optician: 'shopping', gift: 'shopping', toys: 'shopping',
+  'bus stop': 'transport', 'tram stop': 'transport', 'ferry terminal': 'transport',
+  'railway station': 'trains', station: 'trains', taxi: 'transport',
+  government: 'community', office: 'community',
+  clinic: 'health', hospital: 'health', pharmacy: 'health',
+  'community centre': 'community', hairdresser: 'community', 'post office': 'community',
+  university: 'community',
+  'fitness centre': 'parks', 'sports centre': 'parks',
+  hotel: 'accommodation', motel: 'accommodation', hostel: 'accommodation', 'guest house': 'accommodation',
+};
+
+export function placeCategory(cls, kind) {
+  return CATEGORY_BY_KIND[kind] || CATEGORY_BY_CLASS[cls] || 'other';
+}
+
+/**
+ * Places within radiusM metres, nearest first: [{ name, kind, category, lat, lon, dist, bearing }].
+ * `categories`, when given, is a Set of the categories to include.
+ */
+export function placesNear(lat, lon, radiusM = 500, limit = 60, categories = null) {
   const out = [];
   for (const key of cellsNear(lat, lon, radiusM)) {
     for (const p of poiGrid.get(key) || []) {
+      if (categories && !categories.has(p.category)) continue;
       const dist = metres(lat, lon, p.lat, p.lon);
       if (dist <= radiusM) out.push({ ...p, dist, bearing: bearingDeg(lat, lon, p.lat, p.lon) });
     }

@@ -316,7 +316,7 @@ export function streetData(bytes, ty, tx) {
     // place only in the tile it is really in, or it is listed several times.
     if (px < 0 || py < 0 || px >= f.extent || py >= f.extent) continue;
     const [la, lo] = toLatLon(px, py, f.extent);
-    pois.push({ id: `${ty}/${tx}/p${i}`, n: name, k: placeKind(f.tags), la, lo });
+    pois.push({ id: `${ty}/${tx}/p${i}`, n: name, k: placeKind(f.tags), c: f.tags.class || '', la, lo });
   }
   return { ways, pois };
 }

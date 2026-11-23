@@ -73,6 +73,9 @@
           <input id="places-list" type="range" class="picker">
           <p id="places-value" class="picker-value" aria-hidden="true"></p>
           <button type="button" id="places-go">Go there</button>
+          <fieldset id="places-categories">
+            <legend>Categories</legend>
+          </fieldset>
         </div>
       </section>
 
@@ -97,6 +100,7 @@
         <button type="button" data-key="t">Local time</button>
         <button type="button" data-key="g">Nearby features</button>
         <button type="button" data-key="n">Nearest city</button>
+        <button type="button" data-key="Shift+p">Postcode</button>
         <button type="button" data-key="r">Region or state</button>
         <button type="button" data-key="F2">Repeat</button>
         <button type="button" data-key="s">Sunrise and sunset</button>
@@ -115,6 +119,7 @@
         <label for="set-street-steer" class="picker-label">Steering in street mode</label>
         <input id="set-street-steer" type="range" class="picker">
         <p id="set-street-steer-value" class="picker-value" aria-hidden="true"></p>
+        <label class="check"><input type="checkbox" id="set-postcode"> Say the postcode when I stop</label>
         <label class="check"><input type="checkbox" id="set-sounds"> Country sounds and tones</label>
         <label class="check"><input type="checkbox" id="set-geo"> Name geographic features (GeoFeatures)</label>
         <label class="check"><input type="checkbox" id="set-visual"> Visual Assist map</label>
@@ -174,6 +179,7 @@
         <tr><td>L</td><td>Latitude and longitude</td></tr>
         <tr><td>C</td><td>Current country</td></tr>
         <tr><td>R</td><td>Current region or state</td></tr>
+        <tr><td>Shift+P</td><td>Postcode. It is also said by itself two seconds after you stop, when it has changed</td></tr>
         <tr><td>N</td><td>Nearest city</td></tr>
         <tr><td>G</td><td>Nearby geographic features</td></tr>
         <tr><td>F5</td><td>Continent</td></tr>
@@ -207,7 +213,7 @@
         <tr><td>Shift+Arrows</td><td>Move 5 metres</td></tr>
         <tr><td>Ctrl+Arrows</td><td>Move 100 metres</td></tr>
         <tr><td>Alt+Arrows</td><td>Follow the street that way to the next corner</td></tr>
-        <tr><td>P</td><td>Places nearby, with distance and direction. Choose one to go there</td></tr>
+        <tr><td>P</td><td>Places nearby, with distance and direction. Choose one to go there. Switch categories on or off under the list</td></tr>
         <tr><td>J, Y, F2 and the information keys</td><td>Work as on the world map</td></tr>
       </tbody>
     </table>

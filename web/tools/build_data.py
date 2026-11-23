@@ -220,12 +220,52 @@ def copy_sounds() -> None:
     write_json("sounds.json", listing)
 
 
+def build_postcodes() -> None:
+    """Postcodes from the desktop's GeoNames export (PostalCodes/, CC-BY 4.0):
+    one small JSON file per country, loaded only for the country you are in."""
+    import re
+    src = ROOT / "PostalCodes"
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    dest = OUT / "postcodes"
+    dest.mkdir(parents=True, exist_ok=True)
+    military = re.compile(r"^\s*[AFD]PO\s+A[AEP]", re.IGNORECASE)
+    out_manifest = {}
+    for cc, info in manifest.items():
+        path = src / (info["file"] + ".gz")
+        if not path.exists():
+            continue
+        admins: list[str] = []
+        admin_index: dict[str, int] = {}
+        rows = []
+        with gzip.open(path, "rt", encoding="utf-8", newline="") as f:
+            for r in csv.DictReader(f):
+                code = (r.get("postcode") or "").strip()
+                if not code or military.match(code):
+                    continue
+                try:
+                    lat, lon = round(float(r["lat"]), 4), round(float(r["lon"]), 4)
+                except (KeyError, TypeError, ValueError):
+                    continue
+                admin = (r.get("admin_name1") or "").strip()
+                if admin not in admin_index:
+                    admin_index[admin] = len(admins)
+                    admins.append(admin)
+                rows.append([code, (r.get("place_name") or "").strip(), admin_index[admin], lat, lon])
+        (dest / f"{cc}.json").write_text(json.dumps({"admins": admins, "rows": rows},
+                                                    separators=(",", ":"), ensure_ascii=False),
+                                         encoding="utf-8")
+        out_manifest[cc] = [info["lat_min"], info["lat_max"], info["lon_min"], info["lon_max"]]
+    (dest / "manifest.json").write_text(json.dumps(out_manifest, separators=(",", ":")), encoding="utf-8")
+    print(f"  {len(out_manifest)} countries")
+
+
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     print("Tables"); build_tables()
     print("Countries"); build_countries()
     print("Cities"); build_cities()
     print("GeoFeatures"); build_features()
+    print("Postcodes"); build_postcodes()
     print("Sounds"); copy_sounds()
     return 0
 
