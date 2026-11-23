@@ -7,9 +7,9 @@ metres with the nearest street or corner spoken, following streets to the
 next corner, and a list of places nearby. Street data comes from
 OpenStreetMap, one tile of about 2 km at a time.
 
-On phones and tablets you can steer by tilting (`public/src/steering.js`):
-held sideways, the angle at "Ready" is still, a gentle tilt towards a
-direction goes that way, and coming back to still stops. Nothing is tapped.
+On phones and tablets you can steer by tilting (`public/src/steering.js`),
+upright or sideways: the angle at "Ready" is still, a firm tilt one way
+moves once (or repeats while held), and coming back to still is a click.
 
 It is plain JavaScript modules with no build step for the code. The map data
 is generated from the desktop data files.

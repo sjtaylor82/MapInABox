@@ -1,17 +1,17 @@
-// Tilt steering for phones and tablets, held sideways (landscape).
+// Tilt steering for phones and tablets.
 //
-// It works like the arrow keys. Hold the device sideways in both hands; the
-// angle you hold it at when it says "Ready" is "still". Then tilt it firmly
-// one way to move once that way:
+// It works like the arrow keys. Hold the device at a comfortable angle,
+// upright or sideways, screen towards you; the way you hold it when it says
+// "Ready" is "still". Then tilt it firmly one way to move once that way:
 //   top edge away from you: north        towards you: south
-//   lower the right end: east            lower the left end: west
+//   lower the right side: east           lower the left side: west
 // Come back to still (a soft click) before the next move. Hold the tilt and
 // it repeats, like holding down an arrow key. Only the four directions
 // count: a tilt halfway between two does nothing.
 //
-// Hold it upright like a phone, or put it down, and steering pauses. Pick it
-// up sideways again and the new angle counts as still: that is also how to
-// reset "still" after shifting your grip.
+// Turn it right over, or put it down at a very different angle, and
+// steering pauses; once it is held steady again, that becomes the new
+// still. This is also how to reset "still" after shifting your grip.
 
 const TICK_MS = 50;
 const GO_TILT = 0.21;        // about 12 degrees from still: move
@@ -27,13 +27,13 @@ const norm = (a) => ((a % 360) + 360) % 360;
 
 let enabled = false;
 let up = null;              // smoothed "up" in the device's frame { x, y, z }
-let sideways = false;
 let hasReported = false;
 let mode = 'paused';        // 'paused' | 'calibrating' | 'ready'
 let lostSince = 0;
 let calibrateSince = 0;
 let still = null;
-let side = 1;               // 1: top edge to the left; -1: to the right
+let top = { x: 0, y: 1 };   // the screen's top edge, in the device's x-y plane
+let anchor = null;          // while calibrating: the hold being checked for steadiness
 let latched = null;         // direction moved in since last still, or null
 let pendingDir = null;
 let pendingSince = 0;
@@ -77,14 +77,19 @@ export function upFrom(beta, gamma) {
 }
 
 /**
- * How far the device is tilted from still, as { east, north } in radians,
- * for a landscape hold with the top edge on `side` (1: to the left).
+ * How far the device is tilted from still, as { east, north } in radians.
+ * `top` is the direction of the screen's top edge as the user sees it, in
+ * the device's own x-y plane, so this works held upright or sideways and
+ * whichever way the screen has rotated.
  * The end that goes down is the way you go, like a marble on a tray.
  */
-export function tiltFrom(u, s, sideNow) {
-  // Top edge to the left: screen up is device +x, screen right is device -y.
-  const lean = (v) => Math.atan2(v.z, sideNow * v.x);
-  const roll = (v) => Math.asin(Math.max(-1, Math.min(1, -sideNow * v.y)));
+export function tiltFrom(u, s, top) {
+  const right = { x: top.y, y: -top.x };
+  const along = (v, d) => v.x * d.x + v.y * d.y;
+  // Top edge away from you turns "up" from the screen's top edge towards its face.
+  const lean = (v) => Math.atan2(v.z, along(v, top));
+  // Right end down turns "up" towards the screen's left.
+  const roll = (v) => Math.asin(Math.max(-1, Math.min(1, along(v, right))));
   let north = lean(u) - lean(s);
   if (north > Math.PI) north -= 2 * Math.PI;
   if (north < -Math.PI) north += 2 * Math.PI;
@@ -106,27 +111,36 @@ function onOrientation(e) {
   hasReported = true;
   const u = upFrom(e.beta, e.gamma);
   up = up ? { x: up.x + (u.x - up.x) * 0.4, y: up.y + (u.y - up.y) * 0.4, z: up.z + (u.z - up.z) * 0.4 } : u;
-  const plane = Math.hypot(up.x, up.y);
-  // Landscape when the device's long side is level, or when it is nearly flat.
-  sideways = plane < 0.35 || Math.abs(up.x) >= Math.abs(up.y) * 0.8;
 }
 
 function emit(name, ...args) {
   try { handlers[name]?.(...args); } catch (err) { console.error(err); }
 }
 
-function chooseSide() {
-  if (Math.abs(still.x) > 0.3) return still.x > 0 ? 1 : -1;
-  const angle = (screen.orientation && screen.orientation.angle) ?? window.orientation ?? 90;
-  return norm(angle) === 270 ? -1 : 1;
+/**
+ * Which way is the top of the screen, in the device's x-y plane. Held at an
+ * angle, gravity shows it directly; lying nearly flat, fall back on the
+ * screen's rotation.
+ */
+function chooseTop() {
+  const plane = Math.hypot(still.x, still.y);
+  if (plane > 0.25) return { x: still.x / plane, y: still.y / plane };
+  const angle = norm((screen.orientation && screen.orientation.angle) ?? window.orientation ?? 0);
+  return { 0: { x: 0, y: 1 }, 90: { x: 1, y: 0 }, 180: { x: 0, y: -1 }, 270: { x: -1, y: 0 } }[angle] || { x: 0, y: 1 };
 }
+
+const dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
 
 function tick() {
   if (!enabled) return;
   const now = performance.now();
 
-  if (!up || !sideways) {
-    if (mode === 'paused') return;
+  if (!up) return;
+
+  // Turned right over or put down at a very different angle: pause. Steering
+  // starts again, from a new still, once the device is held steady.
+  const far = mode === 'ready' && dot(up, still) < Math.cos(rad(55));
+  if (far) {
     if (!lostSince) lostSince = now;
     if (now - lostSince >= PAUSE_MS) {
       mode = 'paused';
@@ -140,12 +154,19 @@ function tick() {
   if (mode === 'paused') {
     mode = 'calibrating';
     calibrateSince = now;
+    anchor = { ...up };
     return;
   }
   if (mode === 'calibrating') {
+    // Wait until it is held steady, not still being picked up.
+    if (dot(up, anchor) < Math.cos(rad(4))) {
+      anchor = { ...up };
+      calibrateSince = now;
+      return;
+    }
     if (now - calibrateSince < CALIBRATE_MS) return;
     still = { ...up };
-    side = chooseSide();
+    top = chooseTop();
     mode = 'ready';
     latched = null;
     pendingDir = null;
@@ -153,7 +174,7 @@ function tick() {
     return;
   }
 
-  const t = tiltFrom(up, still, side);
+  const t = tiltFrom(up, still, top);
   lastTilt = t;
   const amount = Math.hypot(t.north, t.east);
 

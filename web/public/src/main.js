@@ -472,9 +472,9 @@ let steerIntroduced = false;
 const DIRECTION_NAME = { 0: 'north', 90: 'east', 180: 'south', 270: 'west' };
 const TILT_HOW = {
   0: 'Tilt the top edge away from you',
-  90: 'Lower the right end',
+  90: 'Lower the right side',
   180: 'Tilt the top edge towards you',
-  270: 'Lower the left end',
+  270: 'Lower the left side',
 };
 
 function headingWord(h) {
@@ -572,7 +572,7 @@ const steerHandlers = {
   },
   paused() {
     showSteerStatus();
-    if (!steerBlocked()) say('Steering paused. Hold it sideways to steer.');
+    if (!steerBlocked()) say('Steering paused. Hold it steady at a comfortable angle to start again.');
   },
 };
 
@@ -613,7 +613,7 @@ function showSteerStatus() {
   el.hidden = off;
   for (const e of document.querySelectorAll('[data-steer-only]')) e.hidden = off;
   if (off) return;
-  if (st.mode !== 'ready') el.textContent = 'Steering paused: hold the device sideways.';
+  if (st.mode !== 'ready') el.textContent = 'Steering paused: hold the device steady to start again.';
   else if (st.direction != null) el.textContent = `Steering: tilted ${DIRECTION_NAME[st.direction]}.`;
   else el.textContent = 'Steering: still. Tilt firmly one way to move.';
 }
@@ -696,7 +696,7 @@ function setSteering(on) {
   showSteerStatus();
   if (!on) return say('Steering off.');
   steerIntroduced = false;
-  say('Steering on. Hold the device sideways in both hands, at a comfortable angle.');
+  say('Steering on. Hold the device steady at a comfortable angle, screen towards you, upright or sideways.');
 }
 
 async function toggleSteering() {
