@@ -55,24 +55,51 @@ async function geocode(url, env, ctx) {
   const lon = Number(url.searchParams.get('lon'));
   const near = Number.isFinite(lat) && Number.isFinite(lon);
   const cache = caches.default;
-  const key = new Request(`https://cache.mapinabox/geocode/v2?q=${encodeURIComponent(q.toLowerCase())}${near ? `&at=${lat.toFixed(2)},${lon.toFixed(2)}` : ''}`);
+  const key = new Request(`https://cache.mapinabox/geocode/v4?q=${encodeURIComponent(q.toLowerCase())}${near ? `&at=${lat.toFixed(2)},${lon.toFixed(2)}` : ''}`);
   const hit = await cache.match(key);
   if (hit) return hit;
 
   let results = [];
   try {
-    const p = new URLSearchParams({ q, format: 'jsonv2', limit: '5', addressdetails: '0', 'accept-language': 'en' });
+    const p = new URLSearchParams({ q, format: 'jsonv2', limit: '10', addressdetails: '1', 'accept-language': 'en' });
     if (near) p.set('viewbox', `${lon - 0.5},${lat + 0.5},${lon + 0.5},${lat - 0.5}`); // favoured, not a limit
     const res = await fetch(`https://nominatim.openstreetmap.org/search?${p}`, {
       headers: { 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(8000),
     });
     if (res.ok) {
-      results = (await res.json()).map((r) => ({ label: r.display_name, lat: Number(r.lat), lon: Number(r.lon) }));
+      // "Vision Australia, 454 Glenferrie Road, Kooyong": name, street address, suburb.
+      results = (await res.json()).map((r) => {
+        const a = r.address || {};
+        const road = [a.house_number, a.road || a.pedestrian || a.footway].filter(Boolean).join(' ');
+        const area = a.suburb || a.town || a.village || a.city_district || a.city || '';
+        const label = [r.name, road, area].filter((x, i, all) => x && all.indexOf(x) === i).join(', ')
+          || r.display_name.split(', ').slice(0, 3).join(', ');
+        return { label, lat: Number(r.lat), lon: Number(r.lon) };
+      });
     }
   } catch { /* HERE below */ }
 
+  // Few matches in OpenStreetMap (a business with several branches is
+  // often only mapped once): add HERE's business listings near you.
+  if (results.length && results.length < 5 && near && env.HERE_API_KEY) {
+    try {
+      const p = new URLSearchParams({ q, limit: '10', lang: 'en-AU', at: `${lat.toFixed(3)},${lon.toFixed(3)}`, apiKey: env.HERE_API_KEY });
+      const res = await fetch(`https://discover.search.hereapi.com/v1/discover?${p}`, {
+        headers: { 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(8000),
+      });
+      if (res.ok) {
+        for (const it of (await res.json()).items || []) {
+          if (!it.position) continue;
+          const r = { label: [it.title, it.address && (it.address.street ? [it.address.houseNumber, it.address.street].filter(Boolean).join(' ') : ''), it.address && it.address.district || it.address && it.address.city].filter(Boolean).join(', '), lat: it.position.lat, lon: it.position.lng };
+          const dup = results.some((x) => Math.abs(x.lat - r.lat) < 0.0006 && Math.abs(x.lon - r.lon) < 0.0006);
+          if (!dup) results.push(r);
+        }
+      }
+    } catch { /* OpenStreetMap's matches are enough */ }
+  }
+
   if (!results.length && env.HERE_API_KEY) {
-    const p = new URLSearchParams({ q, limit: '5', lang: 'en-AU', apiKey: env.HERE_API_KEY });
+    const p = new URLSearchParams({ q, limit: '10', lang: 'en-AU', apiKey: env.HERE_API_KEY });
     if (near) p.set('at', `${lat.toFixed(3)},${lon.toFixed(3)}`);
     for (const endpoint of near ? ['geocode', 'discover'] : ['geocode']) {
       try {

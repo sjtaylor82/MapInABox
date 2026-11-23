@@ -164,7 +164,7 @@ function setPrompt(text) {
 }
 
 function showOnly(...ids) {
-  for (const id of ['journey-options', 'journey-legs', 'journey-food', 'journey-walk', 'journey-drive']) $(id).hidden = !ids.includes(id);
+  for (const id of ['journey-options', 'journey-legs', 'journey-food', 'journey-walk', 'journey-drive', 'journey-choices']) $(id).hidden = !ids.includes(id);
 }
 
 // ── Walking route ─────────────────────────────────────────────────────────
@@ -173,21 +173,26 @@ function showOnly(...ids) {
  * A typed place as a point: a place already in the street data with that
  * name, nearest first, or else a place search near where you are.
  */
-async function locate(text, here, nearOnly = true, maxM = WALK_MAX_M) {
+/**
+ * Every place matching typed text: places nearby in the street data first,
+ * then the address search. nearOnly: favour and sort by distance from here,
+ * within maxM metres; otherwise the search's own order, anywhere.
+ */
+async function candidates(text, here, nearOnly = true, maxM = WALK_MAX_M) {
   const want = text.toLowerCase();
+  const out = [];
   if (nearOnly) {
-    // A place nearby by name first, once the map around here has loaded.
+    // Places nearby by name, once the map around here has loaded.
     await Promise.race([street.ensureRadius(here.lat, here.lon, 2000), new Promise((r) => setTimeout(r, 8000))]);
-    const local = street.placesNear(here.lat, here.lon, 5000, 2000).find((p) => p.name.toLowerCase().includes(want));
-    if (local) return { lat: local.lat, lon: local.lon, label: local.name };
+    for (const p of street.placesNear(here.lat, here.lon, 5000, 2000)) {
+      if (p.name.toLowerCase().includes(want)) out.push({ lat: p.lat, lon: p.lon, label: p.name });
+      if (out.length >= 5) break;
+    }
   }
   const near = nearOnly ? `&lat=${here.lat.toFixed(4)}&lon=${here.lon.toFixed(4)}` : '';
   let found = [];
   try {
-    // HERE, through the server: good with street addresses.
-    found = ((await api(`api/geocode?q=${encodeURIComponent(text.slice(0, 200))}${near}`, {}, 15000)).results || [])
-      // "Ethel Street, Burwood, Inner West, Sydney, New South Wales, 2134, Australia" -> "Ethel Street, Burwood"
-      .map((r) => ({ ...r, label: r.label.split(', ').slice(0, 2).join(', ') }));
+    found = (await api(`api/geocode?q=${encodeURIComponent(text.slice(0, 200))}${near}`, {}, 15000)).results || [];
   } catch { /* the place search below */ }
   if (!found.length) {
     const params = new URLSearchParams({ q: text.slice(0, 200), limit: '10', lang: 'en' });
@@ -195,18 +200,60 @@ async function locate(text, here, nearOnly = true, maxM = WALK_MAX_M) {
       params.set('lat', here.lat.toFixed(4));
       params.set('lon', here.lon.toFixed(4));
     }
-    const json = await (await fetch(`https://photon.komoot.io/api/?${params}`)).json();
-    found = (json.features || []).map((f) => {
-      const p = f.properties || {};
-      const [lon, lat] = f.geometry.coordinates;
-      const addr = p.housenumber && p.street ? `${p.housenumber} ${p.street}` : p.street;
-      return { lat, lon, label: [p.name, addr, p.city || p.locality || p.district].filter(Boolean).join(', ') };
-    });
+    try {
+      const json = await (await fetch(`https://photon.komoot.io/api/?${params}`)).json();
+      found = (json.features || []).map((f) => {
+        const p = f.properties || {};
+        const [lon, lat] = f.geometry.coordinates;
+        const addr = p.housenumber && p.street ? `${p.housenumber} ${p.street}` : p.street;
+        return { lat, lon, label: [p.name, addr, p.city || p.locality || p.district].filter(Boolean).join(', ') };
+      });
+    } catch { /* nothing found */ }
   }
-  // A start anywhere takes the best match; a destination must be walkable.
-  if (!nearOnly) return found[0] || null;
-  return found.map((r) => ({ ...r, d: haversineM(here.lat, here.lon, r.lat, r.lon) }))
-    .filter((r) => r.d <= maxM)[0] || null;
+  out.push(...found);
+  // The same place from both sources, or listed twice: keep one.
+  const list = [];
+  for (const r of out) {
+    if (!list.some((x) => haversineM(x.lat, x.lon, r.lat, r.lon) < 60)) list.push(r);
+  }
+  if (!nearOnly) return list;
+  return list.map((r) => ({ ...r, d: haversineM(here.lat, here.lon, r.lat, r.lon) }))
+    .filter((r) => r.d <= maxM)
+    .sort((x, y) => x.d - y.d);
+}
+
+async function locate(text, here, nearOnly = true, maxM = WALK_MAX_M) {
+  return (await candidates(text, here, nearOnly, maxM))[0] || null;
+}
+
+/**
+ * The destination: straight away when only one place matches; otherwise a
+ * list to choose from ("Vision Australia, Coorparoo, 6.2 kilometres"),
+ * resolving with the one chosen. Resolves null if nothing matches.
+ */
+async function chooseDestination(text, from, maxM) {
+  const list = (await candidates(text, from, true, maxM)).slice(0, 10);
+  if (list.length <= 1) return list[0] || null;
+  const box = $('journey-choices');
+  const ul = $('journey-choice-list');
+  return new Promise((resolve) => {
+    ul.replaceChildren(...list.map((r) => {
+      const li = document.createElement('li');
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = `${r.label}, ${formatDistance(r.d)}`;
+      b.addEventListener('click', () => {
+        box.hidden = true;
+        resolve(r);
+      });
+      li.append(b);
+      return li;
+    }));
+    box.hidden = false;
+    setPrompt('');
+    say(`${list.length} places match ${text}. Choose one. ${list[0].label}, ${formatDistance(list[0].d)}.`);
+    ul.querySelector('button').focus();
+  });
 }
 
 /**
@@ -231,7 +278,7 @@ async function planDrive() {
   try {
     if (st.fromHere && from === st.fromHere.label) a = st.fromHere;
     else a = from ? await locate(from, here, false) : { lat: here.lat, lon: here.lon, label: here.label || 'where you are' };
-    if (a) b = await locate(to, a, true, Infinity);
+    if (a) b = await chooseDestination(to, a, Infinity);
   } catch { /* reported below */ }
   if (seq !== st.seq) return;
   if (!a || !b) {
@@ -458,7 +505,7 @@ async function planWalk(from, to) {
     // From can be anywhere, so a walk can be looked up for a place you are not.
     if (st.fromHere && from === st.fromHere.label) a = st.fromHere; // Use my location: the exact spot
     else a = from ? await locate(from, here, false) : { lat: here.lat, lon: here.lon, label: here.label || 'where you are' };
-    if (a) b = await locate(to, a);
+    if (a) b = await chooseDestination(to, a, WALK_MAX_M);
   } catch { /* reported below */ }
   if (seq !== st.seq) return;
   if (!a || !b) {
