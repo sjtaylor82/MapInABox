@@ -333,6 +333,50 @@ const ARRIVE_M = 20;
 const guide = { watch: null, next: 1, warned: -1, off: false, wakeLock: null, line: null, last: null, heading: null, called: new Set() };
 
 const CALLOUT_M = 25;    // places this close, beside or just ahead, are called out
+const BUSY = 3;          // more places than this on a stretch: list them, don't call each out
+
+/**
+ * The places to call out along the whole walk, worked out when guidance
+ * starts: each with how far along the route it is, so a stretch between two
+ * turns can be counted.
+ */
+async function prepareStretches() {
+  const cat = calloutCategory();
+  guide.places = [];
+  guide.stepAlong = [];
+  if (cat === 'none') return;
+  const line = lineOf(st.walk);
+  const cum = cumulative(line);
+  guide.stepAlong = st.walk.steps.map((s) => alongLine(line, cum, s.lat, s.lon).along);
+  const found = await tileFoodAlong(line, cum, cat === 'all' ? null : new Set([cat]));
+  for (const p of found) {
+    const at = alongLine(line, cum, p.lat, p.lon);
+    if (at.cross <= CALLOUT_M) guide.places.push({ ...p, along: at.along });
+  }
+  guide.places.sort((a, b) => a.along - b.along);
+}
+
+/**
+ * Starting the stretch after step i: if it is busy, say how many places it
+ * has and put them in the Food along the way picker, instead of calling out
+ * each one. Returns the words to add to the turn instruction.
+ */
+function enterStretch(i) {
+  if (!guide.places || !guide.stepAlong.length) return '';
+  const from = guide.stepAlong[i] ?? 0;
+  const to = guide.stepAlong[i + 1] ?? Infinity;
+  const here = guide.places.filter((p) => p.along >= from - 5 && p.along < to);
+  if (here.length <= BUSY) return '';
+  for (const p of here) guide.called.add(`${p.name}|${p.lat.toFixed(3)}|${p.lon.toFixed(3)}`);
+  st.food = here.map((p) => ({ ...p, text: `${p.name}, ${p.kind}, in ${formatDistance(Math.max(0, Math.round((p.along - from) / 10) * 10))}` }));
+  st.foodIdx = 0;
+  foodPicker.refresh();
+  showFoodLinks();
+  $('journey-food').hidden = false;
+  const cat = calloutCategory();
+  const what = cat === 'all' ? 'places' : cat === 'food' ? 'food places' : 'places';
+  return ` ${here.length} ${what} on this stretch: they are in Places along the way.`;
+}
 
 /** The category of places called out on a walk (Settings): 'none', 'all' or a place category. */
 export function calloutCategory() {
@@ -411,7 +455,7 @@ function onGuidePosition(pos) {
   // Move on past any turns already reached.
   while (guide.next < steps.length - 1 && haversineM(lat, lon, steps[guide.next].lat, steps[guide.next].lon) <= AT_M) {
     const s = steps[guide.next];
-    say(`${stepAction(s)}${s.distance ? `, then walk ${formatDistance(s.distance)}` : ''}.`);
+    say(`${stepAction(s)}${s.distance ? `, then walk ${formatDistance(s.distance)}` : ''}.${enterStretch(guide.next)}`);
     spoke = true;
     st.stepIdx = guide.next;
     markStep(guide.next);
@@ -449,7 +493,8 @@ async function startGuiding() {
     }
   }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 30000 });
   $('journey-guide').textContent = 'Stop walking guidance';
-  say(`Following the route. ${stepText(st.walk.steps[0])} Keep the page open and the screen on.`);
+  await prepareStretches();
+  say(`Following the route. ${stepText(st.walk.steps[0])}${enterStretch(0)} Keep the page open and the screen on.`);
 }
 
 function stopGuiding(announce = true) {
@@ -702,7 +747,7 @@ async function roadFood(leg) {
     }));
 }
 
-async function tileFoodAlong(line, cum) {
+async function tileFoodAlong(line, cum, cats = new Set(['food'])) {
   const pts = [];
   let next = 0;
   for (let i = 0; i < line.length; i += 1) {
@@ -712,7 +757,7 @@ async function tileFoodAlong(line, cum) {
   await Promise.all(pts.map(([la, lo]) => street.ensureArea(la, lo)));
   const out = new Map();
   for (const [la, lo] of pts) {
-    for (const p of street.placesNear(la, lo, 250, 100, new Set(['food']))) {
+    for (const p of street.placesNear(la, lo, 250, 200, cats)) {
       out.set(`${p.name}|${p.lat.toFixed(5)}|${p.lon.toFixed(5)}`, { name: p.name, kind: p.kind, cuisine: '', lat: p.lat, lon: p.lon });
     }
   }
