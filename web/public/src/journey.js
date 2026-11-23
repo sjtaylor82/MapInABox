@@ -304,6 +304,7 @@ async function addCrossStreets(res) {
   }
   await Promise.race([Promise.all(loads), new Promise((r) => setTimeout(r, 12000))]);
   const at = res.steps.map((s) => alongLine(line, cum, s.lat, s.lon).along);
+  res.steps.forEach((s, i) => { s.along = at[i]; s.nextAlong = at[i + 1]; });
   // Unnamed footpaths: name them by the street they run beside a little way
   // past the turn (at the corner itself the nearest street is often the one
   // being crossed). A short step straight across a street is a crossing.
@@ -355,26 +356,48 @@ async function addCrossStreets(res) {
       for (const name of c.names) {
         if (seen.has(name)) continue;
         seen.add(name);
-        s.crossings.push({ name, lat: c.lat, lon: c.lon, side: street.streetSide(c, name, heading) });
+        s.crossings.push({ name, lat: c.lat, lon: c.lon, side: street.streetSide(c, name, heading), along: a });
       }
     }
   });
 }
 
 /** The steps as a plain numbered list, read by swiping like any other text. */
+/**
+ * The steps as a plain list. A step's cross streets are lines of their own,
+ * each with the walk to the next: "Church Street on your left, then walk
+ * 110 metres."
+ */
 function showSteps() {
   const ol = $('journey-steps');
-  ol.replaceChildren(...st.walk.steps.map((s, i) => {
+  const items = [];
+  const metresTo = (from, to) => formatDistance(Math.max(5, Math.round((to - from) / 5) * 5));
+  st.walk.steps.forEach((s, i) => {
     const li = document.createElement('li');
-    li.textContent = stepText(s);
-    return li;
-  }));
+    li.dataset.step = String(i);
+    const crossings = s.crossings || [];
+    if (!crossings.length || s.along == null) {
+      li.textContent = stepText(s);
+      items.push(li);
+      return;
+    }
+    li.textContent = `${stepAction(s)}${cornerText(s)}, then walk ${metresTo(s.along, crossings[0].along)}.`;
+    items.push(li);
+    crossings.forEach((c, k) => {
+      const next = k + 1 < crossings.length ? crossings[k + 1].along : s.nextAlong;
+      const words = crossingWords(c);
+      const cli = document.createElement('li');
+      cli.textContent = `${words[0].toUpperCase()}${words.slice(1)}${next != null ? `, then walk ${metresTo(c.along, next)}` : ''}.`;
+      items.push(cli);
+    });
+  });
+  ol.replaceChildren(...items);
 }
 
 /** Mark the step guidance has reached. */
 function markStep(i) {
-  for (const [k, li] of [...$('journey-steps').children].entries()) {
-    if (k === i) li.setAttribute('aria-current', 'step');
+  for (const li of $('journey-steps').children) {
+    if (li.dataset.step === String(i)) li.setAttribute('aria-current', 'step');
     else li.removeAttribute('aria-current');
   }
 }
