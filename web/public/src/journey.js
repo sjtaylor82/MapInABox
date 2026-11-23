@@ -164,7 +164,7 @@ function setPrompt(text) {
 }
 
 function showOnly(...ids) {
-  for (const id of ['journey-options', 'journey-legs', 'journey-food', 'journey-walk']) $(id).hidden = !ids.includes(id);
+  for (const id of ['journey-options', 'journey-legs', 'journey-food', 'journey-walk', 'journey-drive']) $(id).hidden = !ids.includes(id);
 }
 
 // ── Walking route ─────────────────────────────────────────────────────────
@@ -173,7 +173,7 @@ function showOnly(...ids) {
  * A typed place as a point: a place already in the street data with that
  * name, nearest first, or else a place search near where you are.
  */
-async function locate(text, here, nearOnly = true) {
+async function locate(text, here, nearOnly = true, maxM = WALK_MAX_M) {
   const want = text.toLowerCase();
   if (nearOnly) {
     // A place nearby by name first, once the map around here has loaded.
@@ -206,7 +206,49 @@ async function locate(text, here, nearOnly = true) {
   // A start anywhere takes the best match; a destination must be walkable.
   if (!nearOnly) return found[0] || null;
   return found.map((r) => ({ ...r, d: haversineM(here.lat, here.lon, r.lat, r.lon) }))
-    .filter((r) => r.d <= WALK_MAX_M)[0] || null;
+    .filter((r) => r.d <= maxM)[0] || null;
+}
+
+/**
+ * Drive: find From and To, then hand the trip to a navigation app. On a
+ * phone, these links open Apple Maps or Google Maps straight into driving
+ * directions when the app is installed, or the website when it is not.
+ */
+async function planDrive() {
+  const from = $('journey-from').value.trim();
+  const to = $('journey-to').value.trim();
+  if (!to) {
+    $('journey-to').focus();
+    return say('Type where you are going.');
+  }
+  const here = hooks.getHere();
+  const seq = ++st.seq;
+  showOnly();
+  $('journey-drive').hidden = true;
+  say(`Finding ${to}…`);
+  let a = null;
+  let b = null;
+  try {
+    if (st.fromHere && from === st.fromHere.label) a = st.fromHere;
+    else a = from ? await locate(from, here, false) : { lat: here.lat, lon: here.lon, label: here.label || 'where you are' };
+    if (a) b = await locate(to, a, true, Infinity);
+  } catch { /* reported below */ }
+  if (seq !== st.seq) return;
+  if (!a || !b) {
+    const msg = `${!a ? from : to} was not found. Try a street address or the name of a place.`;
+    setPrompt(msg);
+    return say(msg);
+  }
+  const s = `${a.lat.toFixed(6)},${a.lon.toFixed(6)}`;
+  const d = `${b.lat.toFixed(6)},${b.lon.toFixed(6)}`;
+  $('journey-drive-apple').href = `https://maps.apple.com/?saddr=${s}&daddr=${d}&dirflg=d`;
+  $('journey-drive-google').href = `https://www.google.com/maps/dir/?api=1&origin=${s}&destination=${d}&travelmode=driving`;
+  $('journey-drive').hidden = false;
+  const km = formatDistance(haversineM(a.lat, a.lon, b.lat, b.lon));
+  const msg = `Driving to ${b.label}, ${km} in a straight line. Open it in Apple Maps or Google Maps for directions.`;
+  setPrompt(msg);
+  say(msg);
+  $('journey-drive-apple').focus();
 }
 
 const WALK_MAX_M = 50000; // further than this is not a walk: use Travel options
@@ -1149,6 +1191,7 @@ export function initJourney(h) {
   enter('journey-option-list', chooseOption);
   $('journey-plan').addEventListener('click', plan);
   $('journey-walk-plan').addEventListener('click', walkClick);
+  $('journey-drive-plan').addEventListener('click', planDrive);
   $('journey-walk-food').addEventListener('click', walkFood);
   $('journey-guide').addEventListener('click', toggleGuiding);
   $('journey-choose').addEventListener('click', chooseOption);

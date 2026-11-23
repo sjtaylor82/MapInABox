@@ -49,8 +49,13 @@
         <label for="journey-to">To</label>
         <input id="journey-to" type="text" autocomplete="off" spellcheck="false">
         <button type="button" id="journey-walk-plan">Walking route</button>
+        <button type="button" id="journey-drive-plan">Drive</button>
         <button type="button" id="journey-plan">Travel options</button>
         <p id="journey-prompt"></p>
+        <p id="journey-drive" class="place-links" hidden>
+          <a id="journey-drive-apple" target="_blank" rel="noopener">Drive with Apple Maps</a>
+          <a id="journey-drive-google" target="_blank" rel="noopener">Drive with Google Maps</a>
+        </p>
         <div id="journey-walk" hidden>
           <button type="button" id="journey-guide">Start walking guidance</button>
           <button type="button" id="journey-walk-food">Find food along this walk</button>
