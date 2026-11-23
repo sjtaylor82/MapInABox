@@ -619,7 +619,7 @@ function enterStretch(i) {
   const here = guide.places.filter((p) => p.along >= from - 5 && p.along < to);
   if (here.length <= BUSY) return '';
   for (const p of here) guide.called.add(`${p.name}|${p.lat.toFixed(3)}|${p.lon.toFixed(3)}`);
-  st.food = here.map((p) => ({ ...p, text: `${p.name}, ${p.kind}, in ${formatDistance(Math.max(0, Math.round((p.along - from) / 10) * 10))}` }));
+  st.food = here.map((p) => ({ ...p, base: `${p.name}, ${p.kind}`, distance: Math.max(0, p.along - from), text: `${p.name}, ${p.kind}` }));
   st.foodIdx = 0;
   foodPicker.refresh();
   addSuburbs(st.food).then(() => foodPicker.refresh()); // suburbs follow a moment later
@@ -1015,10 +1015,12 @@ async function roadFood(leg) {
     .sort((a, b) => a.along - b.along)
     .map(({ p, along, side, cross }) => ({
       ...p,
-      // Every place listed is beside the route; say where along it, and which side.
-      text: along < 50
-        ? `${p.name}, ${kindText(p)}, near ${from.split(', ')[0]}`
-        : `${p.name}, ${kindText(p)}, ${formatDistance(along)} along${cross > 8 ? `, on your ${side}` : ''}`,
+      // Every place listed is beside the route: say how far along, and which side.
+      base: `${p.name}, ${kindText(p)}`,
+      near: along < 50 ? from.split(', ')[0] : '',
+      distance: along,
+      side: cross > 8 ? side : '',
+      text: `${p.name}, ${kindText(p)}`,
     }));
 }
 
@@ -1155,7 +1157,10 @@ async function walkFood() {
   for (const p of found) {
     const at = alongLine(line, cum, p.lat, p.lon);
     if (at.cross > WALK_FOOD_M) continue;
-    along.push({ ...p, along: at.along, text: `${p.name}, ${p.kind}, ${formatDistance(Math.round(at.along / 10) * 10)} along the walk` });
+    along.push({
+      ...p, along: at.along, base: `${p.name}, ${p.kind}`, distance: at.along,
+      side: at.cross > 8 ? at.side : '', text: `${p.name}, ${p.kind}`,
+    });
   }
   along.sort((a, b) => a.along - b.along);
   st.food = along.slice(0, MAX_FOOD);
@@ -1180,6 +1185,12 @@ async function addSuburbs(list) {
 
 /** A food place's text with its suburb, unless it already says it ("near Burwood"). */
 function withSuburb(p) {
+  // "Ruse Bar and Brasserie, restaurant, Parramatta, in 13 kilometres, right"
+  if (p.base) {
+    if (p.near) return `${p.base}, near ${p.near}`;
+    const d = p.distance < 100 ? Math.round(p.distance / 5) * 5 : p.distance < 1000 ? Math.round(p.distance / 10) * 10 : p.distance;
+    return [p.base, p.suburb, p.distance != null ? `in ${formatDistance(d)}` : '', p.side].filter(Boolean).join(', ');
+  }
   if (!p.suburb || p.text.includes(p.suburb)) return p.text;
   return `${p.text}, in ${p.suburb}`;
 }
