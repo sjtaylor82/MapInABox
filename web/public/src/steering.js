@@ -52,14 +52,64 @@ export function isTouchDevice() {
 export async function requestSteeringPermission() {
   if (!steeringSupported()) return false;
   const DOE = window.DeviceOrientationEvent;
+  const DME = window.DeviceMotionEvent;
+  // Ask for both straight away, inside the same tap: motion for the shake.
+  const motion = DME && typeof DME.requestPermission === 'function'
+    ? DME.requestPermission().catch(() => 'denied') : Promise.resolve('granted');
   if (typeof DOE.requestPermission === 'function') {
     try {
-      return (await DOE.requestPermission()) === 'granted';
+      const ok = (await DOE.requestPermission()) === 'granted';
+      await motion;
+      return ok;
     } catch {
       return false;
     }
   }
+  await motion;
   return true;
+}
+
+// ── Shake ─────────────────────────────────────────────────────────────────
+//
+// A firm shake: three sharp jolts within about a second. Ordinary handling,
+// walking or putting the phone down does not come close.
+
+const SHAKE_JOLT = 15;       // m/s² of movement, gravity left out
+const SHAKE_JOLTS = 3;
+const SHAKE_WINDOW_MS = 1200;
+const SHAKE_QUIET_MS = 2000; // after a shake, ignore more for this long
+
+let shakeHandler = null;
+let jolts = [];
+let lastJoltAt = 0;
+let lastShakeAt = 0;
+
+function onMotion(e) {
+  const a = e.acceleration;
+  if (!a || a.x == null) return;
+  const now = performance.now();
+  const size = Math.hypot(a.x, a.y, a.z || 0);
+  if (size < SHAKE_JOLT || now - lastJoltAt < 120) return; // one jolt, not every sample of it
+  lastJoltAt = now;
+  jolts = jolts.filter((t) => now - t < SHAKE_WINDOW_MS);
+  jolts.push(now);
+  if (jolts.length >= SHAKE_JOLTS && now - lastShakeAt > SHAKE_QUIET_MS) {
+    jolts = [];
+    lastShakeAt = now;
+    try { shakeHandler?.(); } catch (err) { console.error(err); }
+  }
+}
+
+/** Call onShake whenever the device is shaken firmly. Stays on until stopShakeWatch(). */
+export function startShakeWatch(onShake) {
+  shakeHandler = onShake;
+  window.removeEventListener('devicemotion', onMotion);
+  window.addEventListener('devicemotion', onMotion);
+}
+
+export function stopShakeWatch() {
+  shakeHandler = null;
+  window.removeEventListener('devicemotion', onMotion);
 }
 
 /**

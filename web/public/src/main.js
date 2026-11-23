@@ -730,16 +730,28 @@ function toggleStreetSteer() {
     : 'Steering picks turns: it follows the street and stops at each corner so you can choose the next one.');
 }
 
-function setSteering(on) {
+function setSteering(on, { byShake = false } = {}) {
   settings.set('steering', on);
-  if (on) steering.startSteering(steerHandlers, tiltRepeatMs);
-  else steering.stopSteering();
+  if (on) {
+    steering.startSteering(steerHandlers, tiltRepeatMs);
+    // Motion access is granted by now, so a shake can turn steering off (and on again).
+    steering.startShakeWatch(onShake);
+  } else {
+    steering.stopSteering();
+  }
   $('btn-steer').textContent = on ? 'Steering: on' : 'Steering: off';
   $('btn-steer').setAttribute('aria-pressed', String(on));
   showSteerStatus();
-  if (!on) return say('Steering off.');
+  if (!on) return say(byShake ? 'Steering off. Shake again to turn it back on.' : 'Steering off.');
   steerIntroduced = false;
-  say('Steering on. Lay the phone flat, screen up.');
+  say(byShake ? 'Steering on. Lay the phone flat, screen up.' : 'Steering on. Lay the phone flat, screen up. Shake the phone to turn steering off.');
+}
+
+/** A firm shake turns steering off, or back on. */
+function onShake() {
+  if (!state.started || document.querySelector('dialog[open]')) return;
+  steering.buzz(60);
+  setSteering(!steering.steeringActive(), { byShake: true });
 }
 
 async function toggleSteering() {
