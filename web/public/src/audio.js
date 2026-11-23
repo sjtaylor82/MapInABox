@@ -181,3 +181,9 @@ export function spatialTone(lat, lon, bounds) {
 export function edgeTone() {
   beep(180, 0, 0.12, 0.3, 'triangle');
 }
+
+/** A short click as the steering wheel settles on a new heading; a double one when it is ready. */
+export function steerClick(ready = false) {
+  beep(1400, 0, 0.03, 0.25, 'square');
+  if (ready && ctx) setTimeout(() => beep(1800, 0, 0.03, 0.25, 'square'), 90);
+}

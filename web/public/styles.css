@@ -12,6 +12,9 @@
   --map-trail: #ff7a3d;
   --map-cursor: #e0001b;
   --map-cursor-halo: #ffffff;
+  --street-road: #ffffff;
+  --street-path: #7a5c00;
+  --street-place: #0b4f9c;
   color-scheme: light;
 }
 
@@ -28,6 +31,9 @@
     --map-current: #ffd400;
     --map-border: #9a9a9a;
     --map-cursor-halo: #ffffff;
+    --street-road: #d8d8d8;
+    --street-path: #ffd400;
+    --street-place: #8cc4ff;
     color-scheme: dark;
   }
 }
@@ -42,6 +48,9 @@
   --map-water: #000000;
   --map-land: #4a4a4a;
   --map-border: #9a9a9a;
+  --street-road: #d8d8d8;
+  --street-path: #ffd400;
+  --street-place: #8cc4ff;
   color-scheme: dark;
 }
 
@@ -109,6 +118,14 @@ button {
 }
 
 button[disabled] { opacity: 0.5; cursor: progress; }
+
+button[aria-pressed="true"] {
+  background: var(--fg);
+  border-color: var(--fg);
+  color: var(--bg);
+}
+
+#steer-status { margin: 0.75rem 0 0; font-weight: 700; }
 
 #start { font-size: 1.3rem; padding: 0.8rem 1.6rem; margin: 0.5rem 0 1rem; }
 

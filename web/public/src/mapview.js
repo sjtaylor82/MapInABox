@@ -12,6 +12,14 @@ let pulseUntil = 0;
 let pos = { lat: 0, lon: 0 };
 let label = '';
 let countryName = '';
+let streetDrawer = null;
+
+/** In street mode, draw(g, w, h, lat, lon, zoom, colours) draws the streets instead of the world. */
+export function setStreetDrawer(fn) {
+  streetDrawer = fn;
+  trail = [];
+  requestAnimationFrame(draw);
+}
 
 export function initMapView(canvasEl, captionEl) {
   canvas = canvasEl;
@@ -54,6 +62,19 @@ export function draw() {
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   const zoom = settings.get('zoom') || 1;
+  if (streetDrawer) {
+    streetDrawer(g, w, h, pos.lat, pos.lon, zoom, {
+      ground: css('--map-land'),
+      road: css('--street-road'),
+      casing: css('--map-border'),
+      path: css('--street-path'),
+      place: css('--street-place'),
+      label: css('--fg'),
+      halo: css('--bg'),
+    });
+    drawCursor(w / 2, h / 2);
+    return;
+  }
   // Equirectangular: at zoom 1 the whole world fits; above that, centre on the cursor.
   const scale = Math.min(w / 360, h / 180) * zoom;
   const cx = zoom === 1 ? 0 : pos.lon;
@@ -96,9 +117,11 @@ export function draw() {
     g.fill();
   }
 
-  // Cursor with a halo that pulses after a move.
-  const x = X(pos.lon);
-  const y = Y(pos.lat);
+  drawCursor(X(pos.lon), Y(pos.lat));
+}
+
+/** Cursor with a halo that pulses after a move. */
+function drawCursor(x, y) {
   const t = Math.max(0, pulseUntil - performance.now()) / 900;
   g.strokeStyle = css('--map-cursor-halo');
   g.lineWidth = 6;

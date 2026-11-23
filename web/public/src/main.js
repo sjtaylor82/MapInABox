@@ -1,4 +1,4 @@
-// Map in a Box Web: world map mode.
+// Map in a Box Web: world map and street mode.
 
 import { settings } from './settings.js';
 import { initSpeech, say, spell, lastSpoken } from './speech.js';
@@ -11,8 +11,9 @@ import {
   formatDistance, formatLat, formatLon, offsetKm, bearingDeg, compassName,
 } from './geo.js';
 import * as online from './online.js';
-import { initMapView, updateMapView, draw as drawMap } from './mapview.js';
-import * as tilt from './tilt.js';
+import { initMapView, updateMapView, draw as drawMap, setStreetDrawer } from './mapview.js';
+import * as steering from './steering.js';
+import * as street from './street.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -23,6 +24,9 @@ const state = {
   seq: 0,
   started: false,
   busy: false,
+  mode: 'world',      // 'world' | 'street'
+  streetName: '',     // the street being followed in street mode
+  streetLabel: '',    // what was last said for the street position
 };
 
 // ── Start-up ──────────────────────────────────────────────────────────────
@@ -31,16 +35,16 @@ async function boot() {
   initSpeech();
   initMapView($('map-canvas'), $('map-caption'));
   applyVisualAssist();
-  // Phones and tablets: offer tilt, and the browser's voice for people without a screen reader.
-  const touch = tilt.isTouchDevice() && tilt.tiltSupported();
-  $('intro-tilt-row').hidden = !touch;
-  $('intro-tilt').checked = touch && settings.get('tilt') !== false;
+  // Phones and tablets: offer steering, and the browser's voice for people without a screen reader.
+  const touch = steering.isTouchDevice() && steering.steeringSupported();
+  $('intro-steer-row').hidden = !touch;
+  $('intro-steer').checked = touch && settings.get('steering') !== false;
   $('intro-speech').value = settings.get('speech');
   const hasSaved = !!(settings.get('position') && Number.isFinite(settings.get('position').lat));
   $('intro-where').querySelector('[value="last"]').hidden = !hasSaved;
   $('intro-where').value = hasSaved ? 'last' : touch ? 'here' : 'choose';
-  $('btn-tilt').hidden = !touch;
-  $('btn-level').hidden = true;
+  $('btn-steer').hidden = !touch;
+  $('btn-centre').hidden = true;
   $('start').addEventListener('click', start);
   try {
     await loadWorld((msg) => { $('load-status').textContent = `${msg}…`; });
@@ -55,8 +59,8 @@ async function boot() {
 
 async function start() {
   // Both must run straight from the tap: iPhone refuses them otherwise.
-  const wantTilt = !$('intro-tilt-row').hidden && $('intro-tilt').checked;
-  const tiltAllowed = wantTilt ? tilt.requestTiltPermission() : Promise.resolve(false);
+  const wantSteer = !$('intro-steer-row').hidden && $('intro-steer').checked;
+  const steerAllowed = wantSteer ? steering.requestSteeringPermission() : Promise.resolve(false);
   settings.set('speech', $('intro-speech').value);
   audio.unlock();
   unlockVoice();
@@ -65,14 +69,14 @@ async function start() {
   $('app').hidden = false;
   $('map').focus();
   drawMap();
-  if (wantTilt) {
+  if (wantSteer) {
     // Don't hold up the start waiting for the permission answer.
-    tiltAllowed.then((ok) => {
-      if (ok) setTilt(true, { quiet: true });
-      else say('Tilt is not available. Motion access was not allowed.');
+    steerAllowed.then((ok) => {
+      if (ok) setSteering(true, { quiet: true });
+      else say('Steering is not available. Motion access was not allowed.');
     });
   } else {
-    settings.set('tilt', false);
+    settings.set('steering', false);
   }
   const where = $('intro-where').value;
   const saved = settings.get('position');
@@ -91,6 +95,7 @@ async function start() {
 // ── Moving and announcing ─────────────────────────────────────────────────
 
 async function moved({ tone = true, prefix = '' } = {}) {
+  if (state.mode === 'street') return movedStreet({ tone, prefix });
   const seq = ++state.seq;
   settings.set('position', { lat: state.lat, lon: state.lon });
   if (tone) audio.spatialTone(state.lat, state.lon, toneBounds());
@@ -120,6 +125,7 @@ function landHint(lat, lon) {
 }
 
 function toneBounds() {
+  if (state.mode === 'street') return street.areaBounds(state.lat, state.lon);
   if (settings.get('toneScope') !== 'country') return null;
   const c = countryByName(state.info.country);
   if (!c) return null;
@@ -206,37 +212,269 @@ function whereAmI(onFail = () => {}) {
   );
 }
 
-// ── Tilt ──────────────────────────────────────────────────────────────────
+// ── Street mode ───────────────────────────────────────────────────────────
 
-const TILT_BEARING = { north: 0, east: 90, south: 180, west: 270 };
-
-let tiltCrossing = false;
-
-function onTiltStep(direction, size, angle) {
-  if (!state.started || document.querySelector('dialog[open]') || tiltCrossing) return;
-  const bearing = TILT_BEARING[direction];
-  if (!state.info.onLand) {
-    // Seas are huge: a sharp tilt crosses to the next country in that
-    // direction, and gentler tilts take bigger steps than on land.
-    if (size === 'large') {
-      tilt.buzz(40);
-      tiltCrossing = true;
-      nextCountry(bearing, direction);
-      // Give the landing time to be heard before the tilt carries on.
-      setTimeout(() => { tiltCrossing = false; }, 2500);
-      return;
-    }
-    tilt.buzz(12);
-    step(bearing, angle >= 25 ? 50 : 25);
+async function toggleStreetMode() {
+  if (state.mode === 'street') return exitStreetMode();
+  state.mode = 'street';
+  state.streetName = '';
+  const seq = ++state.seq;
+  showMode();
+  audio.stopAmbient();
+  say('Street mode. Loading streets…');
+  const { lat, lon } = state;
+  const result = await waitForArea(lat, lon, seq);
+  if (state.mode !== 'street' || seq !== state.seq) return;
+  if (!result.ok) {
+    say(`Could not load the streets here. ${result.error} Press F11 to go back to the world map, or try again.`);
     return;
   }
-  tilt.buzz(size === 'large' ? 30 : 12);
-  step(bearing, size === 'large' ? 100 : stepKm());
+  // Land on the nearest street, as the desktop does.
+  const snap = street.nearestStreet(lat, lon, 3000);
+  if (!snap) {
+    say('Street mode. No streets found within 3 kilometres. Use Jump to go to a town.');
+    return;
+  }
+  state.lat = snap.lat;
+  state.lon = snap.lon;
+  state.streetName = snap.name;
+  movedStreet({ prefix: 'Street mode.' });
+}
+
+function exitStreetMode() {
+  state.mode = 'world';
+  state.streetName = '';
+  showMode();
+  state.info = { ...state.info, country: '', admin: '' }; // so the country and its sound come back
+  moved({ prefix: 'World map.' });
+}
+
+function showMode() {
+  const inStreet = state.mode === 'street';
+  $('btn-street').setAttribute('aria-pressed', String(inStreet));
+  $('map').setAttribute('aria-roledescription', inStreet ? 'street map' : 'world map');
+  $('map').setAttribute('aria-label', inStreet
+    ? 'Street map. Use the arrow keys to move. Press P for places nearby, F11 for the world map.'
+    : 'World map. Use the arrow keys to move. Press F11 for street mode, F1 for help.');
+  for (const el of document.querySelectorAll('[data-street-only]')) el.hidden = !inStreet;
+  setStreetDrawer(inStreet ? street.drawStreets : null);
+  showStep();
+}
+
+async function movedStreet({ tone = true, prefix = '', note = '' } = {}) {
+  const seq = ++state.seq;
+  const { lat, lon } = state;
+  settings.set('position', { lat, lon });
+  if (tone) audio.spatialTone(lat, lon, toneBounds());
+  updateMapView(lat, lon, null, null);
+  if (!street.areaReady(lat, lon)) {
+    say('Loading streets…');
+    const result = await waitForArea(lat, lon, seq);
+    if (seq !== state.seq) return;
+    if (!result.ok) {
+      say(`Could not load the streets here. ${result.error}`);
+      return;
+    }
+  } else {
+    street.ensureArea(lat, lon); // fetch the next tile ahead of time
+  }
+  const label = street.streetLabel(lat, lon, state.streetName);
+  state.streetLabel = label;
+  const near = street.nearestStreet(lat, lon, 25, state.streetName);
+  state.streetName = near ? near.name : '';
+  say([prefix, note, label.endsWith('.') ? label : `${label}.`].filter(Boolean).join(' '));
+  updateMapView(lat, lon, label, null);
+  // Keep the country and region up to date for C, R and the other keys.
+  describe(lat, lon, state.info).then((info) => {
+    if (seq === state.seq) state.info = info;
+  });
+}
+
+/**
+ * Load the streets around a point. The street service can take most of a
+ * minute for an area nobody has visited yet, so say it is still working.
+ */
+async function waitForArea(lat, lon, seq) {
+  const timer = setInterval(() => {
+    if (seq === state.seq) say('Still loading streets. The first visit to an area can take up to a minute.');
+  }, 15000);
+  try {
+    return await street.ensureArea(lat, lon);
+  } finally {
+    clearInterval(timer);
+  }
+}
+
+/** One step in street mode, straight in any direction, in metres. */
+function streetMove(bearing, m) {
+  const p = offsetKm(state.lat, state.lon, m / 1000, bearing);
+  state.lat = p.lat;
+  state.lon = p.lon;
+  movedStreet();
+}
+
+let noStreetSaidAt = 0;
+
+/** Follow the streets the way nearest a heading, stopping at the next corner. */
+function streetFollow(bearing, m) {
+  if (!street.areaReady(state.lat, state.lon)) return streetMove(bearing, m);
+  const r = street.followStep(state.lat, state.lon, bearing, m, state.streetName);
+  if (!r) return streetMove(bearing, m); // not on a street yet: head straight for one
+  if (r.none) {
+    audio.edgeTone();
+    // Steering repeats this every step, so only say it now and then.
+    const now = performance.now();
+    if (now - noStreetSaidAt > 4000) {
+      noStreetSaidAt = now;
+      say(`No street goes ${compassName(bearing).replace('-', ' ')} from here.`);
+    }
+    return;
+  }
+  state.lat = r.lat;
+  state.lon = r.lon;
+  state.streetName = r.name;
+  movedStreet({ note: r.end ? `End of ${r.name}.` : '' });
+}
+
+// ── Places nearby ─────────────────────────────────────────────────────────
+
+let placeResults = [];
+
+function openPlaces() {
+  if (state.mode !== 'street') return say('Places nearby are in street mode. Press F11 first.');
+  if (!street.areaReady(state.lat, state.lon)) return say('The streets are still loading.');
+  let radius = 300;
+  let found = street.placesNear(state.lat, state.lon, radius);
+  if (found.length < 5) {
+    radius = 1000;
+    found = street.placesNear(state.lat, state.lon, radius);
+  }
+  if (!found.length) return say(`No places found within ${formatDistance(radius)}.`);
+  placeResults = found;
+  const list = $('places-list');
+  list.replaceChildren(...found.map((p, i) => new Option(street.placeText(p), String(i))));
+  const how = found.length >= 60 ? `The ${found.length} nearest places` : `${found.length} places within ${formatDistance(radius)}`;
+  $('places-prompt').textContent = `${how}, nearest first. Choose one to go there.`;
+  if (steering.isTouchDevice()) {
+    // A phone shows the list as a picker with the first entry chosen, so a prompt goes first.
+    const prompt = new Option(`${found.length} places. Choose one…`, '');
+    prompt.disabled = true;
+    list.prepend(prompt);
+  }
+  list.selectedIndex = 0;
+  $('places-dialog').showModal();
+  list.focus();
+}
+
+function choosePlace() {
+  const value = $('places-list').value;
+  const p = value === '' ? null : placeResults[Number(value)];
+  if (!p) return;
+  $('places-dialog').close();
+  state.lat = p.lat;
+  state.lon = p.lon;
+  state.streetName = '';
+  movedStreet({ prefix: `${p.name}, ${p.kind}.` });
+}
+
+// ── Steering wheel ────────────────────────────────────────────────────────
+
+let crossing = false;
+let steerMoved = false;
+let steerIntroduced = false;
+
+function headingWord(h) {
+  const name = compassName(h).replace('-', ' ');
+  return name[0].toUpperCase() + name.slice(1);
+}
+
+function steerBlocked() {
+  return !state.started || !!document.querySelector('dialog[open]');
+}
+
+const steerHandlers = {
+  ready(heading) {
+    steering.buzz(30);
+    audio.steerClick(true);
+    showSteerStatus();
+    if (steerBlocked()) return;
+    say(steerIntroduced
+      ? `Steering ready. ${headingWord(heading)}.`
+      : `Steering ready, stopped, facing ${headingWord(heading).toLowerCase()}. Tilt the top away from you to go.`);
+    steerIntroduced = true;
+  },
+  heading(heading) {
+    steering.buzz(12);
+    audio.steerClick();
+    showSteerStatus();
+    if (!steerBlocked()) say(`${headingWord(heading)}.`);
+  },
+  go() {
+    steering.buzz(25);
+    steerMoved = false;
+    showSteerStatus();
+  },
+  step(heading, fast) {
+    showSteerStatus();
+    onSteerStep(heading, fast);
+  },
+  stop() {
+    steering.buzz(15);
+    showSteerStatus();
+    if (!steerBlocked() && steerMoved) say('Stopped.');
+  },
+  paused(wasMoving) {
+    showSteerStatus();
+    if (!steerBlocked()) say(wasMoving ? 'Stopped. Steering paused.' : 'Steering paused.');
+  },
+};
+
+function onSteerStep(bearing, fast) {
+  if (steerBlocked() || crossing) return;
+  steerMoved = true;
+  if (state.mode === 'street') {
+    const m = streetStepM() * (fast ? 2 : 1);
+    if (settings.get('streetSteer') === 'free') streetMove(bearing, m);
+    else streetFollow(bearing, m);
+    return;
+  }
+  if (!state.info.onLand) {
+    // Seas are huge: a fast tilt crosses to the next country that way,
+    // and a gentle one takes bigger steps than on land.
+    if (fast) {
+      steering.buzz(40);
+      crossing = true;
+      nextCountry(bearing, compassName(bearing).replace('-', ' '));
+      // Give the landing time to be heard before steering carries on.
+      setTimeout(() => { crossing = false; }, 2500);
+      return;
+    }
+    step(bearing, 50);
+    return;
+  }
+  step(bearing, fast ? Math.max(25, stepKm() * 4) : stepKm());
+}
+
+function showSteerStatus() {
+  const el = $('steer-status');
+  const st = steering.steeringStatus();
+  el.hidden = st.mode === 'off';
+  if (st.mode === 'off') return;
+  const where = headingWord(st.heading).toLowerCase();
+  if (st.mode !== 'ready') el.textContent = 'Steering paused: hold the device sideways like a wheel.';
+  else if (st.gear === 'stop') el.textContent = `Steering: stopped, facing ${where}.`;
+  else el.textContent = `Steering: going ${where}${st.fast ? ', fast' : ''}.`;
 }
 
 // ── Step size ─────────────────────────────────────────────────────────────
 
 const STEP_SIZES = [1, 2, 5, 10, 25];
+const STREET_STEPS = [5, 10, 20, 50, 100]; // metres
+
+function streetStepM() {
+  const m = settings.get('streetStepM');
+  return STREET_STEPS.includes(m) ? m : 20;
+}
 
 function stepKm() {
   const km = settings.get('stepKm');
@@ -248,41 +486,61 @@ function stepText(km) {
   return `${km} ${km === 1 ? 'kilometre' : 'kilometres'}`;
 }
 
+function streetStepText(m) {
+  return settings.get('units') === 'imperial' ? formatDistance(m) : `${m} metres`;
+}
+
 function showStep() {
-  const km = stepKm();
   const slider = $('step-size');
-  slider.value = String(STEP_SIZES.indexOf(km));
-  slider.setAttribute('aria-valuetext', stepText(km));
-  $('step-value').textContent = stepText(km);
+  const inStreet = state.mode === 'street';
+  const text = inStreet ? streetStepText(streetStepM()) : stepText(stepKm());
+  slider.value = String(inStreet ? STREET_STEPS.indexOf(streetStepM()) : STEP_SIZES.indexOf(stepKm()));
+  slider.setAttribute('aria-valuetext', text);
+  $('step-value').textContent = text;
+  $('step-hint').textContent = inStreet
+    ? 'How far each arrow key or steering step moves in street mode.'
+    : 'How far each arrow key or steering step moves on land. Smaller steps find more suburbs.';
+}
+
+function stepIndex() {
+  return state.mode === 'street' ? STREET_STEPS.indexOf(streetStepM()) : STEP_SIZES.indexOf(stepKm());
 }
 
 function setStepIndex(i, announce = true) {
-  const idx = Math.max(0, Math.min(STEP_SIZES.length - 1, i));
-  settings.set('stepKm', STEP_SIZES[idx]);
+  const inStreet = state.mode === 'street';
+  const sizes = inStreet ? STREET_STEPS : STEP_SIZES;
+  const idx = Math.max(0, Math.min(sizes.length - 1, i));
+  settings.set(inStreet ? 'streetStepM' : 'stepKm', sizes[idx]);
   showStep();
-  if (announce) say(`Step size ${stepText(STEP_SIZES[idx])}.`);
+  if (announce) say(`Step size ${inStreet ? streetStepText(sizes[idx]) : stepText(sizes[idx])}.`);
 }
 
-function setTilt(on, { quiet = false } = {}) {
-  settings.set('tilt', on);
-  if (on) tilt.startTilt(onTiltStep);
-  else tilt.stopTilt();
-  $('btn-tilt').textContent = on ? 'Tilt: on' : 'Tilt: off';
-  $('btn-tilt').setAttribute('aria-pressed', String(on));
-  $('btn-level').hidden = !on;
-  if (!quiet) say(on ? 'Tilt on. Hold the device how you like, then tap Set level.' : 'Tilt off.');
-  else if (on) say('Tilt on. The way you are holding the device now counts as level. Tilt it to move.');
+function setSteering(on, { quiet = false } = {}) {
+  settings.set('steering', on);
+  if (on) steering.startSteering(steerHandlers);
+  else steering.stopSteering();
+  $('btn-steer').textContent = on ? 'Steering: on' : 'Steering: off';
+  $('btn-steer').setAttribute('aria-pressed', String(on));
+  $('btn-centre').hidden = !on;
+  showSteerStatus();
+  if (!on) return say('Steering off.');
+  steerIntroduced = false;
+  const how = 'Hold the device sideways with the screen towards you, like a steering wheel.';
+  say(quiet ? `Steering on. ${how}` : `Steering on. ${how} Turn it to steer, tilt the top away to go, and hold it upright to stop.`);
 }
 
-async function toggleTilt() {
-  if (tilt.tiltActive()) return setTilt(false);
-  if (await tilt.requestTiltPermission()) setTilt(true);
-  else say('Tilt is not available. Motion access was not allowed.');
+async function toggleSteering() {
+  if (steering.steeringActive()) return setSteering(false);
+  if (await steering.requestSteeringPermission()) setSteering(true);
+  else say('Steering is not available. Motion access was not allowed.');
 }
 
-function setLevelNow() {
-  if (!tilt.tiltActive()) return;
-  say(tilt.setLevel() ? 'Level set.' : 'No tilt reading yet. Move the device a little and try again.');
+function centreNow() {
+  if (!steering.steeringActive()) return;
+  say(steering.centre()
+    ? 'Stopped. The way you are holding it now counts as stopped.'
+    : 'Hold the device sideways like a steering wheel first, then try again.');
+  showSteerStatus();
 }
 
 /** iPhone only lets the page talk after a tap, so say something quietly from the Start tap. */
@@ -355,7 +613,7 @@ function repeatLocation() {
   const now = performance.now();
   f2Taps = f2Taps.filter((t) => now - t < 600);
   f2Taps.push(now);
-  const label = state.info.label || 'No location yet.';
+  const label = (state.mode === 'street' ? state.streetLabel : state.info.label) || 'No location yet.';
   if (f2Taps.length >= 3) {
     navigator.clipboard?.writeText(label).then(() => say('Location copied.'), () => say('Could not copy.'));
     f2Taps = [];
@@ -379,8 +637,16 @@ function onMapKey(e) {
   if (ARROWS[key]) {
     handled();
     const [bearing, name] = ARROWS[key];
+    if (state.mode === 'street') {
+      if (alt && !ctrl) return streetFollow(bearing, 3000);
+      return streetMove(bearing, ctrl ? 100 : shift ? 5 : streetStepM());
+    }
     if (alt && !ctrl) return nextCountry(bearing, name);
     return step(bearing, ctrl ? 100 : shift ? 1 : stepKm());
+  }
+  if (key === 'F11' || (key === 'Enter' && shift && !ctrl && !alt)) {
+    handled();
+    return toggleStreetMode();
   }
 
   const k = key.length === 1 ? key.toLowerCase() : key;
@@ -434,10 +700,11 @@ const KEYS = {
   PageUp: cycleToneScope,
   PageDown: cycleToneScope,
   j: () => openJump(),
+  p: openPlaces,
   y: whereAmI,
-  '-': () => setStepIndex(STEP_SIZES.indexOf(stepKm()) - 1),
-  '=': () => setStepIndex(STEP_SIZES.indexOf(stepKm()) + 1),
-  'Shift++': () => setStepIndex(STEP_SIZES.indexOf(stepKm()) + 1),
+  '-': () => setStepIndex(stepIndex() - 1),
+  '=': () => setStepIndex(stepIndex() + 1),
+  'Shift++': () => setStepIndex(stepIndex() + 1),
   'Ctrl+h': () => openJumpHistory(),
   l: () => say(`${formatLat(state.lat)}, ${formatLon(state.lon)}.`),
   c: () => say(noCountry() ? 'Open water.' : `${state.info.country}.`),
@@ -515,7 +782,7 @@ function setJumpResults(results) {
   $('jump-go').hidden = !results.length;
   // On a phone the picker's first entry is already selected, so a "choose"
   // prompt goes first; otherwise picking that first place would change nothing.
-  if (results.length && tilt.isTouchDevice()) {
+  if (results.length && steering.isTouchDevice()) {
     const prompt = new Option(`${results.length} results. Choose a place…`, '');
     prompt.disabled = true;
     list.prepend(prompt);
@@ -585,6 +852,7 @@ function openSettings() {
   f.sounds.checked = settings.get('sounds');
   f.visualAssist.checked = settings.get('visualAssist');
   f.geoFeatures.checked = settings.get('geoFeatures');
+  f.streetSteer.value = settings.get('streetSteer') === 'free' ? 'free' : 'follow';
   $('settings-dialog').showModal();
   f.units.focus();
 }
@@ -595,6 +863,7 @@ function saveSettings(e) {
   settings.set('units', f.units.value);
   settings.set('speech', f.speech.value);
   settings.set('geoFeatures', f.geoFeatures.checked);
+  settings.set('streetSteer', f.streetSteer.value);
   audio.setSoundsEnabled(f.sounds.checked);
   settings.set('visualAssist', f.visualAssist.checked);
   applyVisualAssist();
@@ -623,8 +892,14 @@ function chooseSelected() {
 $('jump-results').addEventListener('dblclick', chooseSelected);
 $('jump-go').addEventListener('click', chooseSelected);
 // Phones show the list as a picker: picking a place is the choice, with no Enter key to press.
-$('jump-results').addEventListener('change', () => { if (tilt.isTouchDevice()) chooseSelected(); });
-for (const id of ['jump-dialog', 'help-dialog', 'settings-dialog']) {
+$('jump-results').addEventListener('change', () => { if (steering.isTouchDevice()) chooseSelected(); });
+$('places-list').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); choosePlace(); }
+});
+$('places-list').addEventListener('dblclick', choosePlace);
+$('places-list').addEventListener('change', () => { if (steering.isTouchDevice()) choosePlace(); });
+$('places-go').addEventListener('click', choosePlace);
+for (const id of ['jump-dialog', 'help-dialog', 'settings-dialog', 'places-dialog']) {
   $(id).addEventListener('close', () => { if (state.started) $('map').focus(); });
 }
 for (const btn of document.querySelectorAll('[data-close]')) {
@@ -634,7 +909,8 @@ $('settings-form').addEventListener('submit', saveSettings);
 $('btn-jump').addEventListener('click', () => openJump());
 $('btn-help').addEventListener('click', openHelp);
 $('btn-settings').addEventListener('click', openSettings);
-$('btn-tilt').addEventListener('click', toggleTilt);
+$('btn-steer').addEventListener('click', toggleSteering);
+$('btn-street').addEventListener('click', () => { if (state.started) toggleStreetMode(); });
 showStep();
 // The slider reports its own new value (aria-valuetext), so it doesn't speak as well.
 $('step-size').addEventListener('input', (e) => setStepIndex(Number(e.target.value), false));
@@ -642,13 +918,18 @@ for (const btn of document.querySelectorAll('#panel [data-key]')) {
   btn.addEventListener('click', () => { if (state.started) KEYS[btn.dataset.key]?.(); });
 }
 for (const btn of document.querySelectorAll('#panel [data-move]')) {
-  btn.addEventListener('click', () => { if (state.started) step(Number(btn.dataset.move), stepKm()); });
+  btn.addEventListener('click', () => {
+    if (!state.started) return;
+    const bearing = Number(btn.dataset.move);
+    if (state.mode === 'street') streetMove(bearing, streetStepM());
+    else step(bearing, stepKm());
+  });
 }
 $('btn-where').addEventListener('click', whereAmI);
 $('jump-here').addEventListener('click', whereAmI);
-$('btn-level').addEventListener('click', setLevelNow);
-// Tapping the map (a double tap with VoiceOver or TalkBack) sets level while tilting.
-$('map').addEventListener('click', () => { if (tilt.tiltActive()) setLevelNow(); });
+$('btn-centre').addEventListener('click', centreNow);
+// Tapping the map (a double tap with VoiceOver or TalkBack) sets the stopped position while steering.
+$('map').addEventListener('click', () => { if (steering.steeringActive()) centreNow(); });
 // Keys pressed while focus is on the toolbar still drive the map.
 document.addEventListener('keydown', (e) => {
   if (e.target === $('map') || document.querySelector('dialog[open]')) return;
@@ -656,6 +937,6 @@ document.addEventListener('keydown', (e) => {
 });
 
 // Exported for the browser console while testing.
-window.miab = { state, describe, nearestCity, city, bearingDeg, compassName, lastSpoken, setTilt };
+window.miab = { state, describe, nearestCity, city, bearingDeg, compassName, lastSpoken, setSteering, street, steering, toggleStreetMode, streetFollow };
 
 boot();

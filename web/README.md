@@ -1,8 +1,15 @@
 # Map in a Box Web
 
-An early browser edition of Map in a Box. It currently has the world map
-mode: arrow-key exploration, country sounds, spatial tones, jumping, country
-facts, weather, time and Visual Assist. Street mode comes next.
+An early browser edition of Map in a Box. It has the world map mode
+(arrow-key exploration, country sounds, spatial tones, jumping, country
+facts, weather, time and Visual Assist) and a first street mode: moving by
+metres with the nearest street or corner spoken, following streets to the
+next corner, and a list of places nearby. Street data comes from
+OpenStreetMap, one tile of about 2 km at a time.
+
+On phones and tablets the device can be held like a steering wheel
+(`public/src/steering.js`): turn it to steer, tilt the top away to go, pull
+it back to go south, hold it upright to stop.
 
 It is plain JavaScript modules with no build step for the code. The map data
 is generated from the desktop data files.
@@ -26,7 +33,7 @@ python -m http.server 8765 --directory web/public
 ```
 
 Then open http://localhost:8765/. Without the Worker, online search goes
-straight to Photon.
+straight to Photon and street mode straight to the public Overpass servers.
 
 To run it with the Worker as it will be hosted:
 
@@ -47,7 +54,10 @@ Set a custom domain in `wrangler.jsonc` so schools can allow it by name.
 
 ## Services it contacts
 
-- Its own domain, for the map, sounds and `/api/search` (Photon, via the Worker).
+- Its own domain, for the map, sounds, `/api/search` (Photon, via the Worker)
+  and `/api/streets` (OpenStreetMap streets and places from Overpass, via the
+  Worker, cached for two weeks per tile). A tile nobody has asked for yet can
+  take up to a minute when the public Overpass servers are busy.
 - `api.open-meteo.com` and `air-quality-api.open-meteo.com` for weather,
   time zone, sunrise and air quality, when those keys are pressed.
 - `en.wikipedia.org` for Wikipedia summaries, when asked.

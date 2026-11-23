@@ -15,7 +15,7 @@
 
   <main id="intro">
     <h1>Map in a Box Web</h1>
-    <p>Explore the world by ear. Move across the map with the arrow keys, or on a phone or tablet by tilting it. Map in a Box tells you the country, city or ocean you are over, and plays a sound for each country.</p>
+    <p>Explore the world by ear. Move across the map with the arrow keys, or on a phone or tablet by holding it like a steering wheel. Map in a Box tells you the country, city or ocean you are over, and plays a sound for each country. Street mode takes you down to the streets of a town, with the places along them.</p>
     <p>It works with NVDA, JAWS, Narrator, VoiceOver and TalkBack, or with the browser's own voice. Headphones help you hear the tones move from left to right.</p>
     <label for="intro-speech">Speech</label>
     <select id="intro-speech">
@@ -29,9 +29,9 @@
       <option value="here">My location</option>
       <option value="choose">A place I choose</option>
     </select>
-    <p id="intro-tilt-row" hidden>
-      <label class="check"><input type="checkbox" id="intro-tilt"> Move by tilting this device</label>
-      <span class="small">Hold it comfortably, then tilt forward, back, left or right to move. The further you tilt, the faster you go. Over the sea, a sharp tilt crosses to the next country. Tap the map to make the way you are holding it level again.</span>
+    <p id="intro-steer-row" hidden>
+      <label class="check"><input type="checkbox" id="intro-steer"> Steer by holding this device like a steering wheel</label>
+      <span class="small">Hold it sideways with the screen towards you. Turn it a little left for north-west, further for west; right for north-east and east. Tilt the top away from you to go, and further to go faster. Pull the top towards you to go south. Hold it upright to stop. Put it down, or hold it like a phone, and nothing moves.</span>
     </p>
     <p id="load-status" role="status">Loading…</p>
     <button id="start" type="button" disabled>Start exploring</button>
@@ -44,8 +44,9 @@
       <span class="brand" aria-hidden="true">Map in a Box</span>
       <button id="btn-where" type="button">Where am I (Y)</button>
       <button id="btn-jump" type="button">Jump (J)</button>
-      <button id="btn-tilt" type="button" aria-pressed="false" hidden>Tilt: off</button>
-      <button id="btn-level" type="button" hidden>Set level</button>
+      <button id="btn-street" type="button" aria-pressed="false">Street mode (F11)</button>
+      <button id="btn-steer" type="button" aria-pressed="false" hidden>Steering: off</button>
+      <button id="btn-centre" type="button" hidden>Set stopped position</button>
       <button id="btn-settings" type="button">Settings (Ctrl+,)</button>
       <button id="btn-help" type="button">Help (F1)</button>
     </header>
@@ -55,11 +56,12 @@
       <p id="map-caption" aria-hidden="true"></p>
     </div>
     <aside id="panel" aria-label="Controls">
+      <p id="steer-status" hidden></p>
       <h2 id="step-heading">Step size</h2>
       <label for="step-size" class="sr-only">Step size</label>
       <input id="step-size" type="range" min="0" max="4" step="1" value="2" aria-describedby="step-hint">
       <p id="step-value" aria-hidden="true">5 kilometres</p>
-      <p id="step-hint" class="small">How far each arrow key or tilt moves on land. Smaller steps find more suburbs.</p>
+      <p id="step-hint" class="small">How far each arrow key or steering step moves on land. Smaller steps find more suburbs.</p>
 
       <h2>Move</h2>
       <div class="grid move">
@@ -71,6 +73,7 @@
 
       <h2>Information</h2>
       <div class="grid">
+        <button type="button" data-key="p" data-street-only hidden>Places nearby</button>
         <button type="button" data-key="F2">Repeat</button>
         <button type="button" data-key="c">Country</button>
         <button type="button" data-key="r">Region or state</button>
@@ -105,6 +108,17 @@
     </div>
   </dialog>
 
+  <dialog id="places-dialog" aria-labelledby="places-title">
+    <h2 id="places-title">Places nearby</h2>
+    <p id="places-prompt"></p>
+    <label for="places-list" class="sr-only">Places</label>
+    <select id="places-list" size="12"></select>
+    <div class="buttons">
+      <button type="button" id="places-go">Go there</button>
+      <button type="button" data-close>Cancel</button>
+    </div>
+  </dialog>
+
   <dialog id="settings-dialog" aria-labelledby="settings-title">
     <form id="settings-form">
       <h2 id="settings-title">Settings</h2>
@@ -118,6 +132,11 @@
         <option value="screenreader">My screen reader</option>
         <option value="voice">The browser's voice</option>
         <option value="both">Both</option>
+      </select>
+      <label for="set-street-steer">Steering in street mode</label>
+      <select id="set-street-steer" name="streetSteer">
+        <option value="follow">Follow the streets, taking the turn nearest my heading</option>
+        <option value="free">Free: go straight that way, across blocks too</option>
       </select>
       <label class="check"><input type="checkbox" name="sounds"> Country sounds and tones</label>
       <label class="check"><input type="checkbox" name="geoFeatures"> Name geographic features (GeoFeatures)</label>
@@ -171,6 +190,22 @@
         <tr><td>Ctrl+Comma</td><td>Settings</td></tr>
       </tbody>
     </table>
+    <table>
+      <caption>Street mode keys</caption>
+      <thead><tr><th scope="col">Key</th><th scope="col">Action</th></tr></thead>
+      <tbody>
+        <tr><td>F11 or Shift+Enter</td><td>Street mode on or off. The streets come from OpenStreetMap</td></tr>
+        <tr><td>Arrow keys</td><td>Move one step (20 metres unless you change the step size) and hear the nearest street</td></tr>
+        <tr><td>Minus, Equals</td><td>Smaller or larger step size: 5, 10, 20, 50 or 100 metres</td></tr>
+        <tr><td>Shift+Arrows</td><td>Move 5 metres</td></tr>
+        <tr><td>Ctrl+Arrows</td><td>Move 100 metres</td></tr>
+        <tr><td>Alt+Arrows</td><td>Follow the street that way to the next corner</td></tr>
+        <tr><td>P</td><td>Places nearby, with distance and direction. Choose one to go there</td></tr>
+        <tr><td>J, Y, F2 and the information keys</td><td>Work as on the world map</td></tr>
+      </tbody>
+    </table>
+    <h3>Steering wheel (phones and tablets)</h3>
+    <p>Turn on Steering, then hold the device sideways with the screen towards you, like a steering wheel. When it says Steering ready, it is stopped. Turn it a little left for north-west and further left for west, a little right for north-east and further right for east. Each new heading is spoken. Tilt the top edge away from you to go, and further to go faster. Pull the top towards you to go south: south-west or south-east when turned. Hold it upright again to stop. Put the device down or hold it like a phone and steering pauses, so nothing moves by accident. Tap the map, or Set stopped position, to make the way you are holding it count as stopped. In street mode, steering follows the streets or goes freely, as chosen in Settings.</p>
     <p>Some browsers keep F6 for themselves. If F6 does nothing, use I.</p>
     <p><a href="https://github.com/sjtaylor82/MapInABox/releases/latest">Download Map in a Box for Windows and macOS</a>, with street mode, walking routes, transport and much more.</p>
     <p>Your location is only used to move the map. It is not stored anywhere except this browser. Weather, time and search send the map position to those services when you ask for them.</p>
