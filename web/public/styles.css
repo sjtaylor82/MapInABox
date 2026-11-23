@@ -54,6 +54,55 @@
   color-scheme: dark;
 }
 
+/* High contrast: yellow on black, and white on black. */
+:root[data-theme="yellow"] {
+  --bg: #000000;
+  --fg: #ffff00;
+  --muted: #ffff00;
+  --accent: #ffff00;
+  --focus: #00ffff;
+  --panel: #000000;
+  --map-water: #000000;
+  --map-land: #333300;
+  --map-current: #ffff00;
+  --map-border: #ffff00;
+  --map-trail: #00ffff;
+  --map-cursor: #ff0000;
+  --map-cursor-halo: #ffffff;
+  --street-road: #ffff00;
+  --street-path: #00ffff;
+  --street-place: #ffffff;
+  color-scheme: dark;
+}
+
+:root[data-theme="white"] {
+  --bg: #000000;
+  --fg: #ffffff;
+  --muted: #ffffff;
+  --accent: #ffffff;
+  --focus: #ffff00;
+  --panel: #000000;
+  --map-water: #000000;
+  --map-land: #3a3a3a;
+  --map-current: #ffff00;
+  --map-border: #ffffff;
+  --map-trail: #ffff00;
+  --map-cursor: #ff0000;
+  --map-cursor-halo: #ffffff;
+  --street-road: #ffffff;
+  --street-path: #ffff00;
+  --street-place: #00ffff;
+  color-scheme: dark;
+}
+
+:root[data-theme="yellow"] button, :root[data-theme="white"] button { border-width: 3px; font-weight: 700; }
+:root[data-theme="yellow"] :focus-visible, :root[data-theme="white"] :focus-visible { outline-width: 6px; }
+:root[data-theme="yellow"] a, :root[data-theme="white"] a { color: var(--fg); }
+
+/* Text size. */
+:root[data-text="large"] { font-size: 125%; }
+:root[data-text="xl"] { font-size: 150%; }
+
 * { box-sizing: border-box; }
 
 html, body { height: 100%; }
@@ -294,3 +343,14 @@ ol.steps li { margin: 0.4rem 0; }
 .result-list { list-style: none; padding: 0; margin: 0.5rem 0; max-height: 50vh; overflow-y: auto; }
 .result-list li { margin: 0.25rem 0; }
 .result-list button { width: 100%; text-align: left; font-size: 1rem; padding: 0.45rem 0.6rem; }
+
+/* The toolbar: the buttons used most, and More for the rest. */
+#toolbar-more { display: contents; }
+#toolbar-more[hidden] { display: none !important; }
+
+/* Visual Assist off: no big empty map area; the controls come straight after the toolbar. */
+body:not(.visual-assist) #app { grid-template-rows: auto auto auto; }
+body:not(.visual-assist) #map { min-height: 2.5rem; height: 2.5rem; }
+
+/* Text boxes take the theme's colours, with a clear border. */
+input[type="text"] { background: var(--bg); color: var(--fg); border: 2px solid var(--muted); border-radius: 4px; padding: 0.35rem 0.5rem; }

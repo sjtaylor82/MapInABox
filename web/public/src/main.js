@@ -42,7 +42,15 @@ const state = {
 async function boot() {
   initSpeech();
   initMapView($('map-canvas'), $('map-caption'));
+  applyLook();
   applyVisualAssist();
+  // More: the toolbar buttons used less often.
+  $('btn-more').addEventListener('click', () => {
+    const open = $('toolbar-more').hidden;
+    $('toolbar-more').hidden = !open;
+    $('btn-more').setAttribute('aria-expanded', String(open));
+    $('btn-more').textContent = open ? 'Less' : 'More';
+  });
   const touch = steering.isTouchDevice() && steering.steeringSupported();
   $('btn-steer').hidden = !touch;
   if (steering.isTouchDevice()) $('map-hint').textContent = '';
@@ -1116,6 +1124,17 @@ function cycleToneScope() {
   say(`Spatial tones: ${next}.`);
 }
 
+/** Colours and text size from Settings. */
+function applyLook() {
+  const theme = settings.get('theme') || 'auto';
+  if (theme === 'auto') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  const size = settings.get('textSize') || 'normal';
+  if (size === 'normal') delete document.documentElement.dataset.text;
+  else document.documentElement.dataset.text = size;
+  requestAnimationFrame(drawMap);
+}
+
 function applyVisualAssist() {
   const on = settings.get('visualAssist');
   document.body.classList.toggle('visual-assist', on);
@@ -1248,6 +1267,28 @@ function setUpPickers() {
     get: () => state.jumpIdx || 0,
     set: (i) => { state.jumpIdx = i; },
   });
+  pickers.push(makePicker($('set-theme'), {
+    shown: $('set-theme-value'),
+    items: () => [
+      { value: 'auto', label: 'Follow my device' },
+      { value: 'light', label: 'Light' },
+      { value: 'dark', label: 'Dark' },
+      { value: 'yellow', label: 'High contrast: yellow on black' },
+      { value: 'white', label: 'High contrast: white on black' },
+    ],
+    get: () => settings.get('theme') || 'auto',
+    set: (v) => { settings.set('theme', v); applyLook(); },
+  }));
+  pickers.push(makePicker($('set-text'), {
+    shown: $('set-text-value'),
+    items: () => [
+      { value: 'normal', label: 'Normal' },
+      { value: 'large', label: 'Large' },
+      { value: 'xl', label: 'Extra large' },
+    ],
+    get: () => settings.get('textSize') || 'normal',
+    set: (v) => { settings.set('textSize', v); applyLook(); },
+  }));
   pickers.push(makePicker($('set-units'), {
     shown: $('set-units-value'),
     items: () => [{ value: 'metric', label: 'Metres and kilometres' }, { value: 'imperial', label: 'Feet and miles' }],

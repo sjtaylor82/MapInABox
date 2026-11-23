@@ -24,16 +24,19 @@
   <div id="app" hidden>
     <header id="toolbar">
       <span class="brand" aria-hidden="true">Map in a Box</span>
-      <button id="btn-help" type="button">Help (F1)</button>
-      <button id="btn-jump" type="button">Jump (J)</button>
       <button id="btn-position" type="button">Map position (F2)</button>
       <button id="btn-journey" type="button">Route</button>
-      <button id="btn-settings" type="button">Settings (Ctrl+,)</button>
-      <button id="btn-steer" type="button" aria-pressed="false" hidden>Steering: off</button>
-      <button id="btn-street-steer" type="button" hidden>Steering: pick turns</button>
       <button id="btn-street" type="button" aria-pressed="false">Street mode (F11)</button>
       <button id="btn-where" type="button">Where am I (Y)</button>
-      <button id="btn-world" type="button">World map</button>
+      <button id="btn-more" type="button" aria-expanded="false" aria-controls="toolbar-more">More</button>
+      <div id="toolbar-more" hidden>
+        <button id="btn-help" type="button">Help (F1)</button>
+        <button id="btn-jump" type="button">Jump (J)</button>
+        <button id="btn-settings" type="button">Settings (Ctrl+,)</button>
+        <button id="btn-steer" type="button" aria-pressed="false" hidden>Steering: off</button>
+        <button id="btn-street-steer" type="button" hidden>Steering: pick turns</button>
+        <button id="btn-world" type="button">World map</button>
+      </div>
     </header>
     <div id="map" tabindex="0" role="application" aria-label="World map" aria-describedby="map-hint">
       <span id="map-hint" class="sr-only">Arrow keys move. F11 street mode. F1 help.</span>
@@ -172,6 +175,12 @@
           <p id="tilt-move-value" class="picker-value" aria-hidden="true"></p>
           <button type="button" id="btn-practice">Practise steering</button>
         </div>
+        <label for="set-theme" class="picker-label">Colours</label>
+        <input id="set-theme" type="range" class="picker">
+        <p id="set-theme-value" class="picker-value" aria-hidden="true"></p>
+        <label for="set-text" class="picker-label">Text size</label>
+        <input id="set-text" type="range" class="picker">
+        <p id="set-text-value" class="picker-value" aria-hidden="true"></p>
         <label for="step-size" class="picker-label">Step size</label>
         <input id="step-size" type="range" min="0" max="4" step="1" value="2" class="picker">
         <p id="step-value" class="picker-value" aria-hidden="true">5 kilometres</p>
@@ -190,7 +199,7 @@
         <label class="check"><input type="checkbox" id="set-postcode"> Say the postcode when I stop</label>
         <label class="check"><input type="checkbox" id="set-sounds"> Country sounds and tones</label>
         <label class="check"><input type="checkbox" id="set-geo"> Name geographic features (GeoFeatures)</label>
-        <label class="check"><input type="checkbox" id="set-visual"> Visual Assist map</label>
+        <label class="check"><input type="checkbox" id="set-visual"> Visual Assist (show the map)</label>
       </details>
     </aside>
   </div>
