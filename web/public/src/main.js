@@ -497,31 +497,16 @@ function takeCorner(m) {
 let placeResults = [];
 let placesPicker = null;
 
-function enabledCategories() {
-  const saved = settings.get('placeCategories');
-  return new Set(Array.isArray(saved) ? saved : street.PLACE_CATEGORIES.map(([k]) => k));
+let categoryTimer = null;
+
+/** The category chosen in the Category picker: 'all' or one of street.PLACE_CATEGORIES. */
+function placeCategory() {
+  const v = settings.get('placeCategory');
+  return v && street.PLACE_CATEGORIES.some(([k]) => k === v) ? v : 'all';
 }
 
-/** The on/off switch for each category, under the Place picker. */
-function buildCategorySwitches() {
-  const box = $('places-categories');
-  if (box.querySelector('input')) return;
-  const on = enabledCategories();
-  for (const [key, label] of street.PLACE_CATEGORIES) {
-    const l = document.createElement('label');
-    const input = document.createElement('input');
-    input.type = 'checkbox';
-    input.setAttribute('role', 'switch');
-    input.checked = on.has(key);
-    input.addEventListener('change', () => {
-      const now = enabledCategories();
-      if (input.checked) now.add(key); else now.delete(key);
-      settings.set('placeCategories', [...now]);
-      if (!$('places-pick').hidden) listPlaces(false);
-    });
-    l.append(input, ` ${label}`);
-    box.append(l);
-  }
+function categoryLabel(key) {
+  return key === 'all' ? 'All places' : street.PLACE_CATEGORIES.find(([k]) => k === key)[1];
 }
 
 /** P, or Find places: list the places around you in the Places nearby picker. */
@@ -542,7 +527,8 @@ const PLACES_MAX = 200;
 
 /** Fill the Place picker with the nearest places in the categories switched on. */
 function listPlaces(focusList) {
-  const cats = enabledCategories();
+  const category = placeCategory();
+  const cats = category === 'all' ? null : new Set([category]);
   let radius = PLACES_RADIUS;
   let found = street.placesNear(state.lat, state.lon, radius, PLACES_MAX, cats);
   if (found.length < 5) {
@@ -556,13 +542,14 @@ function listPlaces(focusList) {
   $('places-list').hidden = !found.length;
   $('places-go').hidden = !found.length;
   if (!found.length) {
-    const why = cats.size ? `No places found within ${formatDistance(radius)} in the categories switched on.` : 'Every category is switched off.';
+    const why = `No ${category === 'all' ? 'places' : categoryLabel(category).toLowerCase()} found within ${formatDistance(radius)}.`;
     $('places-prompt').textContent = why;
     $('places-prompt').hidden = false;
-    if (focusList) $('places-categories').querySelector('input').focus();
+    if (focusList) $('places-category').focus();
     return say(why);
   }
-  const how = `${found.length} places within ${formatDistance(radius)}`;
+  const what = category === 'all' ? 'places' : categoryLabel(category).toLowerCase();
+  const how = `${found.length} ${what} within ${formatDistance(radius)}`;
   $('places-prompt').hidden = true;
   if (focusList) $('places-list').focus();
   say(`${how}. ${street.placeText(found[0])}.`);
@@ -1229,6 +1216,18 @@ function setUpPickers() {
     get: tiltMove,
     set: (v) => settings.set(state.mode === 'street' ? 'tiltMoveStreet' : 'tiltMove', v),
   });
+  makePicker($('places-category'), {
+    shown: $('places-category-value'),
+    items: () => [['all', 'All places'], ...street.PLACE_CATEGORIES].map(([value, label]) => ({ value, label })),
+    get: placeCategory,
+    set: (v) => {
+      settings.set('placeCategory', v);
+      // A list is showing: show this category instead, once the picker has settled,
+      // so swiping through categories doesn't talk over itself.
+      clearTimeout(categoryTimer);
+      if (!$('places-pick').hidden) categoryTimer = setTimeout(() => listPlaces(false), 900);
+    },
+  });
   placesPicker = makePicker($('places-list'), {
     shown: $('places-value'),
     items: () => placeResults.map((p, i) => ({ value: i, label: `${street.placeText(p)}. ${i + 1} of ${placeResults.length}` })),
@@ -1294,7 +1293,7 @@ $('jump-input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); runJumpSearch(); }
 });
 setUpPickers();
-buildCategorySwitches();
+
 $('jump-results').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
     e.preventDefault();
