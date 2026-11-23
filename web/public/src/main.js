@@ -14,6 +14,7 @@ import * as online from './online.js';
 import { initMapView, updateMapView, draw as drawMap, setStreetDrawer } from './mapview.js';
 import * as steering from './steering.js';
 import * as street from './street.js';
+import { makePicker } from './picker.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -43,28 +44,61 @@ async function boot() {
   const touch = steering.isTouchDevice() && steering.steeringSupported();
   $('intro-steer-row').hidden = !touch;
   $('intro-steer').checked = touch && settings.get('steering') !== false;
-  $('intro-speech').value = settings.get('speech');
   const hasSaved = !!(settings.get('position') && Number.isFinite(settings.get('position').lat));
-  $('intro-where').querySelector('[value="last"]').hidden = !hasSaved;
-  $('intro-where').value = hasSaved ? 'last' : touch ? 'here' : 'choose';
+  state.startWhere = hasSaved ? 'last' : touch ? 'here' : 'choose';
+  makePicker($('intro-speech'), {
+    shown: $('intro-speech-value'),
+    items: () => [
+      { value: 'screenreader', label: 'My screen reader is talking' },
+      { value: 'voice', label: "Use the browser's voice (no screen reader)" },
+      { value: 'both', label: 'Both' },
+    ],
+    get: () => settings.get('speech'),
+    set: (v) => settings.set('speech', v),
+  });
+  makePicker($('intro-where'), {
+    shown: $('intro-where-value'),
+    items: () => [
+      ...(hasSaved ? [{ value: 'last', label: 'Where I left off' }] : []),
+      { value: 'here', label: 'My current location' },
+      { value: 'choose', label: 'A place I choose' },
+    ],
+    get: () => state.startWhere,
+    set: (v) => { state.startWhere = v; },
+  });
   $('btn-steer').hidden = !touch;
-  $('start').addEventListener('click', start);
+  $('start').addEventListener('click', () => start());
+  $('start-last').hidden = !hasSaved;
+  $('start-last').addEventListener('click', () => start('last'));
+  $('start-here').addEventListener('click', () => start('here'));
+  $('start-choose').addEventListener('click', () => start('choose'));
+  $('start-options').addEventListener('click', () => {
+    $('start-dialog').close();
+    $('intro-speech').focus();
+  });
+  // Closed with Escape: the start page has the same choices and a Start button.
+  $('start-dialog').addEventListener('cancel', () => setTimeout(() => $('start').focus(), 0));
   try {
     await loadWorld((msg) => { $('load-status').textContent = `${msg}…`; });
     audio.configureAudio(data.sounds, data.tables);
     $('load-status').textContent = 'Ready.';
     $('start').disabled = false;
-    $('start').focus();
+    // Ask straight away where to start; the answer is also the tap that
+    // lets iPhone play sound, speak and use motion.
+    $('start-dialog').showModal();
+    $('start-dialog').querySelector('button:not([hidden])').focus();
   } catch (err) {
     $('load-status').textContent = `Map in a Box could not load its map data. ${err.message}`;
   }
 }
 
-async function start() {
+async function start(choice) {
+  if (state.started) return;
+  if (choice) state.startWhere = choice;
+  if ($('start-dialog').open) $('start-dialog').close();
   // Both must run straight from the tap: iPhone refuses them otherwise.
   const wantSteer = !$('intro-steer-row').hidden && $('intro-steer').checked;
   const steerAllowed = wantSteer ? steering.requestSteeringPermission() : Promise.resolve(false);
-  settings.set('speech', $('intro-speech').value);
   audio.unlock();
   unlockVoice();
   state.started = true;
@@ -81,7 +115,7 @@ async function start() {
   } else {
     settings.set('steering', false);
   }
-  const where = $('intro-where').value;
+  const where = state.startWhere;
   const saved = settings.get('position');
   if (where === 'here') {
     // If the location can't be found, ask where to start instead of leaving the map nowhere.
@@ -427,7 +461,9 @@ function takeCorner(m) {
 // ── Places nearby ─────────────────────────────────────────────────────────
 
 let placeResults = [];
+let placesPicker = null;
 
+/** P, or Find places: list the places around you in the Places nearby picker. */
 function openPlaces() {
   if (state.mode !== 'street') return say('Places nearby are in street mode. Press F11 first.');
   if (!street.areaReady(state.lat, state.lon)) return say('The streets are still loading.');
@@ -437,28 +473,27 @@ function openPlaces() {
     radius = 1000;
     found = street.placesNear(state.lat, state.lon, radius);
   }
-  if (!found.length) return say(`No places found within ${formatDistance(radius)}.`);
-  placeResults = found;
-  const list = $('places-list');
-  list.replaceChildren(...found.map((p, i) => new Option(street.placeText(p), String(i))));
-  const how = found.length >= 60 ? `The ${found.length} nearest places` : `${found.length} places within ${formatDistance(radius)}`;
-  $('places-prompt').textContent = `${how}, nearest first. Choose one to go there.`;
-  if (steering.isTouchDevice()) {
-    // A phone shows the list as a picker with the first entry chosen, so a prompt goes first.
-    const prompt = new Option(`${found.length} places. Choose one…`, '');
-    prompt.disabled = true;
-    list.prepend(prompt);
+  if (!found.length) {
+    $('places-pick').hidden = true;
+    $('places-prompt').textContent = `No places found within ${formatDistance(radius)}.`;
+    return say(`No places found within ${formatDistance(radius)}.`);
   }
-  list.selectedIndex = 0;
-  $('places-dialog').showModal();
-  list.focus();
+  placeResults = found;
+  state.placeIdx = 0;
+  const how = found.length >= 60 ? `The ${found.length} nearest places` : `${found.length} places within ${formatDistance(radius)}`;
+  $('places-prompt').textContent = `${how}, nearest first. Swipe up or down on Place to hear them, then choose Go there.`;
+  $('places-pick').hidden = false;
+  placesPicker.refresh();
+  $('places-list').focus();
+  say(`${how}. ${street.placeText(found[0])}.`);
 }
 
 function choosePlace() {
-  const value = $('places-list').value;
-  const p = value === '' ? null : placeResults[Number(value)];
+  const p = placeResults[state.placeIdx];
   if (!p) return;
-  $('places-dialog').close();
+  $('places-pick').hidden = true;
+  $('places-prompt').textContent = 'Find places lists the places around you, nearest first.';
+  $('map').focus();
   state.lat = p.lat;
   state.lon = p.lon;
   state.streetName = '';
@@ -498,10 +533,10 @@ function tiltMove() {
   return TILT_MOVES[state.mode].some(([v]) => v === value) ? value : 'step';
 }
 
+let tiltMovePicker = null;
+
 function showTiltMove() {
-  const select = $('tilt-move');
-  select.replaceChildren(...TILT_MOVES[state.mode].map(([v, label]) => new Option(label(), v)));
-  select.value = tiltMove();
+  tiltMovePicker?.refresh();
 }
 
 /** Holding a tilt repeats, slowly enough to hear each place; big jumps more slowly still. */
@@ -649,7 +684,7 @@ function showStep() {
   slider.value = String(inStreet ? STREET_STEPS.indexOf(streetStepM()) : STEP_SIZES.indexOf(stepKm()));
   slider.setAttribute('aria-valuetext', text);
   $('step-value').textContent = text;
-  if ($('tilt-move').options.length) showTiltMove(); // its "One step" label shows the size
+  showTiltMove(); // its "One step" label shows the size
   $('step-hint').textContent = inStreet
     ? 'How far each arrow key or steering step moves in street mode.'
     : 'How far each arrow key or steering step moves on land. Smaller steps find more suburbs.';
@@ -682,6 +717,7 @@ function toggleStreetSteer() {
   settings.set('streetSteer', streetSteerMode() === 'free' ? 'pick' : 'free');
   state.corner = null;
   showStreetSteer();
+  refreshSettings();
   say(streetSteerMode() === 'free'
     ? 'Steering free: it goes straight the way you tilt, across blocks too.'
     : 'Steering picks turns: it follows the street and stops at each corner so you can choose the next one.');
@@ -834,6 +870,7 @@ const KEYS = {
   },
   'Shift+F5': () => {
     settings.set('geoFeatures', !settings.get('geoFeatures'));
+    refreshSettings();
     say(`GeoFeatures ${settings.get('geoFeatures') ? 'on' : 'off'}.`);
   },
   F6: announceFacts,
@@ -844,12 +881,14 @@ const KEYS = {
   F7: () => {
     const on = !settings.get('sounds');
     audio.setSoundsEnabled(on);
+    refreshSettings();
     if (on) audio.playPlace(state.info.onLand ? state.info.country : 'ocean', state.info.continent);
     say(`Sounds ${on ? 'on' : 'off'}.`);
   },
   F9: () => {
     settings.set('visualAssist', !settings.get('visualAssist'));
     applyVisualAssist();
+    refreshSettings();
     say(`Visual Assist ${settings.get('visualAssist') ? 'on' : 'off'}.`);
   },
   'Ctrl+=': () => zoom(2),
@@ -936,22 +975,14 @@ function openJumpHistory() {
   $('jump-results').focus();
 }
 
+let jumpPicker = null;
+
 function setJumpResults(results) {
   jumpResults = results;
-  const list = $('jump-results');
-  list.replaceChildren(...results.map((r, i) => new Option(r.label, String(i))));
-  list.hidden = !results.length;
+  state.jumpIdx = 0;
+  $('jump-pick').hidden = !results.length;
   $('jump-go').hidden = !results.length;
-  // On a phone the picker's first entry is already selected, so a "choose"
-  // prompt goes first; otherwise picking that first place would change nothing.
-  if (results.length && steering.isTouchDevice()) {
-    const prompt = new Option(`${results.length} results. Choose a place…`, '');
-    prompt.disabled = true;
-    list.prepend(prompt);
-    list.selectedIndex = 0;
-  } else if (results.length) {
-    list.selectedIndex = 0;
-  }
+  jumpPicker.refresh();
 }
 
 async function runJumpSearch() {
@@ -1007,32 +1038,76 @@ function openHelp() {
   $('help-dialog').querySelector('h2').focus();
 }
 
+/** Ctrl+Comma or the Settings button: go to the Settings section. */
 function openSettings() {
-  const f = $('settings-form');
-  f.units.value = settings.get('units');
-  f.speech.value = settings.get('speech');
-  f.sounds.checked = settings.get('sounds');
-  f.visualAssist.checked = settings.get('visualAssist');
-  f.geoFeatures.checked = settings.get('geoFeatures');
-  f.streetSteer.value = streetSteerMode();
-  $('settings-dialog').showModal();
-  f.units.focus();
+  const h = $('settings-title');
+  h.scrollIntoView({ block: 'start' });
+  h.focus();
 }
 
-function saveSettings(e) {
-  e.preventDefault();
-  const f = $('settings-form');
-  settings.set('units', f.units.value);
-  settings.set('speech', f.speech.value);
-  settings.set('geoFeatures', f.geoFeatures.checked);
-  settings.set('streetSteer', f.streetSteer.value);
-  showStreetSteer();
-  audio.setSoundsEnabled(f.sounds.checked);
-  settings.set('visualAssist', f.visualAssist.checked);
-  applyVisualAssist();
-  $('settings-dialog').close();
-  $('map').focus();
-  say('Settings saved.');
+const pickers = [];
+
+function setUpPickers() {
+  tiltMovePicker = makePicker($('tilt-move'), {
+    shown: $('tilt-move-value'),
+    items: () => TILT_MOVES[state.mode].map(([value, label]) => ({ value, label: label() })),
+    get: tiltMove,
+    set: (v) => settings.set(state.mode === 'street' ? 'tiltMoveStreet' : 'tiltMove', v),
+  });
+  placesPicker = makePicker($('places-list'), {
+    shown: $('places-value'),
+    items: () => placeResults.map((p, i) => ({ value: i, label: `${street.placeText(p)}. ${i + 1} of ${placeResults.length}` })),
+    get: () => state.placeIdx || 0,
+    set: (i) => { state.placeIdx = i; },
+  });
+  jumpPicker = makePicker($('jump-results'), {
+    shown: $('jump-results-value'),
+    items: () => jumpResults.map((r, i) => ({ value: i, label: `${r.label}. ${i + 1} of ${jumpResults.length}` })),
+    get: () => state.jumpIdx || 0,
+    set: (i) => { state.jumpIdx = i; },
+  });
+  pickers.push(makePicker($('set-units'), {
+    shown: $('set-units-value'),
+    items: () => [{ value: 'metric', label: 'Metres and kilometres' }, { value: 'imperial', label: 'Feet and miles' }],
+    get: () => settings.get('units'),
+    set: (v) => { settings.set('units', v); showStep(); },
+  }));
+  pickers.push(makePicker($('set-speech'), {
+    shown: $('set-speech-value'),
+    items: () => [
+      { value: 'screenreader', label: 'My screen reader' },
+      { value: 'voice', label: "The browser's voice" },
+      { value: 'both', label: 'Both' },
+    ],
+    get: () => settings.get('speech'),
+    set: (v) => settings.set('speech', v),
+  }));
+  pickers.push(makePicker($('set-street-steer'), {
+    shown: $('set-street-steer-value'),
+    items: () => [
+      { value: 'pick', label: 'Pick turns: follow the street and stop at each corner' },
+      { value: 'free', label: 'Free: go straight the way I tilt, across blocks too' },
+    ],
+    get: streetSteerMode,
+    set: (v) => { settings.set('streetSteer', v); state.corner = null; showStreetSteer(); },
+  }));
+  $('set-sounds').checked = settings.get('sounds');
+  $('set-geo').checked = settings.get('geoFeatures');
+  $('set-visual').checked = settings.get('visualAssist');
+  $('set-sounds').addEventListener('change', (e) => audio.setSoundsEnabled(e.target.checked));
+  $('set-geo').addEventListener('change', (e) => settings.set('geoFeatures', e.target.checked));
+  $('set-visual').addEventListener('change', (e) => {
+    settings.set('visualAssist', e.target.checked);
+    applyVisualAssist();
+  });
+}
+
+/** Keep the Settings section in step when a key or button changes a setting. */
+function refreshSettings() {
+  for (const pk of pickers) pk.refresh();
+  $('set-sounds').checked = settings.get('sounds');
+  $('set-geo').checked = settings.get('geoFeatures');
+  $('set-visual').checked = settings.get('visualAssist');
 }
 
 // ── Wiring ────────────────────────────────────────────────────────────────
@@ -1041,6 +1116,7 @@ $('map').addEventListener('keydown', onMapKey);
 $('jump-input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); runJumpSearch(); }
 });
+setUpPickers();
 $('jump-results').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
     e.preventDefault();
@@ -1048,34 +1124,25 @@ $('jump-results').addEventListener('keydown', (e) => {
   }
 });
 function chooseSelected() {
-  const value = $('jump-results').value;
-  const r = value === '' ? null : jumpResults[Number(value)];
+  const r = jumpResults[state.jumpIdx || 0];
   if (r) chooseJump(r);
 }
-$('jump-results').addEventListener('dblclick', chooseSelected);
 $('jump-go').addEventListener('click', chooseSelected);
-// Phones show the list as a picker: picking a place is the choice, with no Enter key to press.
-$('jump-results').addEventListener('change', () => { if (steering.isTouchDevice()) chooseSelected(); });
 $('places-list').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); choosePlace(); }
 });
-$('places-list').addEventListener('dblclick', choosePlace);
-$('places-list').addEventListener('change', () => { if (steering.isTouchDevice()) choosePlace(); });
 $('places-go').addEventListener('click', choosePlace);
-for (const id of ['jump-dialog', 'help-dialog', 'settings-dialog', 'places-dialog']) {
+$('places-find').addEventListener('click', () => { if (state.started) openPlaces(); });
+for (const id of ['jump-dialog', 'help-dialog']) {
   $(id).addEventListener('close', () => { if (state.started) $('map').focus(); });
 }
 for (const btn of document.querySelectorAll('[data-close]')) {
   btn.addEventListener('click', () => btn.closest('dialog').close());
 }
-$('settings-form').addEventListener('submit', saveSettings);
 $('btn-jump').addEventListener('click', () => openJump());
 $('btn-help').addEventListener('click', openHelp);
 $('btn-settings').addEventListener('click', openSettings);
 $('btn-steer').addEventListener('click', toggleSteering);
-$('tilt-move').addEventListener('change', (e) => {
-  settings.set(state.mode === 'street' ? 'tiltMoveStreet' : 'tiltMove', e.target.value);
-});
 $('btn-practice').addEventListener('click', () => {
   if (steering.steeringActive()) startPractice();
 });

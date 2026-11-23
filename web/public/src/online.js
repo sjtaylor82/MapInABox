@@ -35,12 +35,15 @@ async function getJson(url, timeoutMs = 12000) {
  */
 export async function streetTile(ty, tx) {
   if (await hasApi()) {
-    const r = await fetch(`api/streets?ty=${ty}&tx=${tx}`, { headers: { Accept: 'application/json' } });
-    const body = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
-    return body;
+    // The Worker shares each tile with everyone once it has it. Overpass
+    // often turns the Worker away, so when it can't get a tile, ask Overpass
+    // straight from this browser instead.
+    try {
+      const r = await fetch(`api/streets?ty=${ty}&tx=${tx}`, { headers: { Accept: 'application/json' } });
+      if (r.ok) return await r.json();
+    } catch { /* fall through */ }
   }
-  // No Worker (local testing): ask the public Overpass servers in turn.
+  // Straight to the public Overpass servers, in turn.
   let lastError = 'could not be reached';
   for (const mirror of OVERPASS_MIRRORS) {
     const ctrl = new AbortController();

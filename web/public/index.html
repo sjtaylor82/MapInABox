@@ -17,18 +17,12 @@
     <h1>Map in a Box Web</h1>
     <p>Explore the world by ear. Move across the map with the arrow keys, or on a phone or tablet by tilting it. Map in a Box tells you the country, city or ocean you are over, and plays a sound for each country. Street mode takes you down to the streets of a town, with the places along them.</p>
     <p>It works with NVDA, JAWS, Narrator, VoiceOver and TalkBack, or with the browser's own voice. Headphones help you hear the tones move from left to right.</p>
-    <label for="intro-speech">Speech</label>
-    <select id="intro-speech">
-      <option value="screenreader">My screen reader is talking</option>
-      <option value="voice">Use the browser's voice (no screen reader)</option>
-      <option value="both">Both</option>
-    </select>
-    <label for="intro-where">Start at</label>
-    <select id="intro-where">
-      <option value="last">Where I left off</option>
-      <option value="here">My location</option>
-      <option value="choose">A place I choose</option>
-    </select>
+    <label for="intro-speech" class="picker-label">Speech</label>
+    <input id="intro-speech" type="range" class="picker">
+    <p id="intro-speech-value" class="picker-value" aria-hidden="true"></p>
+    <label for="intro-where" class="picker-label">Start at</label>
+    <input id="intro-where" type="range" class="picker">
+    <p id="intro-where-value" class="picker-value" aria-hidden="true"></p>
     <p id="intro-steer-row" hidden>
       <label class="check"><input type="checkbox" id="intro-steer"> Steer by tilting this device</label>
       <span class="small">It works like the arrow keys. Hold it steady at a comfortable angle, screen towards you, upright or sideways; when it says Ready, that angle is still. Tilt it firmly one way to move: top edge away for north, towards you for south, lower the right side for east, the left side for west. A tone plays from that side. Come back to still before the next move, or hold the tilt to keep going. The first time, a short practice teaches the four tilts.</span>
@@ -57,14 +51,29 @@
     </div>
     <aside id="panel" aria-label="Controls">
       <p id="steer-status" hidden></p>
-      <label for="tilt-move" data-steer-only hidden>Each tilt moves</label>
-      <select id="tilt-move" data-steer-only hidden></select>
-      <button type="button" id="btn-practice" data-steer-only hidden>Practise tilting</button>
+      <div data-steer-only hidden>
+        <label for="tilt-move" class="picker-label">Each tilt moves</label>
+        <input id="tilt-move" type="range" class="picker">
+        <p id="tilt-move-value" class="picker-value" aria-hidden="true"></p>
+        <button type="button" id="btn-practice">Practise tilting</button>
+      </div>
       <h2 id="step-heading">Step size</h2>
       <label for="step-size" class="sr-only">Step size</label>
       <input id="step-size" type="range" min="0" max="4" step="1" value="2" aria-describedby="step-hint">
       <p id="step-value" aria-hidden="true">5 kilometres</p>
       <p id="step-hint" class="small">How far each arrow key or steering step moves on land. Smaller steps find more suburbs.</p>
+
+      <section id="places-section" data-street-only hidden aria-labelledby="places-title">
+        <h2 id="places-title" tabindex="-1">Places nearby</h2>
+        <p id="places-prompt">Find places lists the places around you, nearest first.</p>
+        <button type="button" id="places-find">Find places (P)</button>
+        <div id="places-pick" hidden>
+          <label for="places-list" class="picker-label">Place</label>
+          <input id="places-list" type="range" class="picker">
+          <p id="places-value" class="picker-value" aria-hidden="true"></p>
+          <button type="button" id="places-go">Go there</button>
+        </div>
+      </section>
 
       <h2>Move</h2>
       <div class="grid move">
@@ -87,23 +96,53 @@
         <button type="button" data-key="t">Local time</button>
         <button type="button" data-key="g">Nearby features</button>
         <button type="button" data-key="n">Nearest city</button>
-        <button type="button" data-key="p" data-street-only hidden>Places nearby</button>
         <button type="button" data-key="r">Region or state</button>
         <button type="button" data-key="F2">Repeat</button>
         <button type="button" data-key="s">Sunrise and sunset</button>
         <button type="button" data-key="w">Weather</button>
         <button type="button" data-key="Shift+i">Wikipedia</button>
       </div>
+
+      <section aria-labelledby="settings-title">
+        <h2 id="settings-title" tabindex="-1">Settings</h2>
+        <label for="set-units" class="picker-label">Distances</label>
+        <input id="set-units" type="range" class="picker">
+        <p id="set-units-value" class="picker-value" aria-hidden="true"></p>
+        <label for="set-speech" class="picker-label">Speech</label>
+        <input id="set-speech" type="range" class="picker">
+        <p id="set-speech-value" class="picker-value" aria-hidden="true"></p>
+        <label for="set-street-steer" class="picker-label">Steering in street mode</label>
+        <input id="set-street-steer" type="range" class="picker">
+        <p id="set-street-steer-value" class="picker-value" aria-hidden="true"></p>
+        <label class="check"><input type="checkbox" id="set-sounds"> Country sounds and tones</label>
+        <label class="check"><input type="checkbox" id="set-geo"> Name geographic features (GeoFeatures)</label>
+        <label class="check"><input type="checkbox" id="set-visual"> Visual Assist map</label>
+        <p class="small">Changes take effect straight away.</p>
+      </section>
     </aside>
   </div>
+
+  <dialog id="start-dialog" role="alertdialog" aria-labelledby="start-title" aria-describedby="start-desc">
+    <h2 id="start-title">Where would you like to start?</h2>
+    <p id="start-desc">Map in a Box is ready.</p>
+    <div class="buttons stack">
+      <button type="button" id="start-last">Where I left off</button>
+      <button type="button" id="start-here">My current location</button>
+      <button type="button" id="start-choose">A place I choose</button>
+      <button type="button" id="start-options">Speech and steering options first</button>
+    </div>
+  </dialog>
 
   <dialog id="jump-dialog" aria-labelledby="jump-title">
     <h2 id="jump-title">Jump to place</h2>
     <p id="jump-prompt"></p>
     <label for="jump-input">Place, country or coordinates</label>
     <input id="jump-input" type="text" autocomplete="off" spellcheck="false">
-    <label for="jump-results" class="sr-only">Results</label>
-    <select id="jump-results" size="10" hidden></select>
+    <div id="jump-pick" hidden>
+      <label for="jump-results" class="picker-label">Result</label>
+      <input id="jump-results" type="range" class="picker">
+      <p id="jump-results-value" class="picker-value" aria-hidden="true"></p>
+    </div>
     <div class="buttons">
       <button type="button" id="jump-go" hidden>Go</button>
       <button type="button" id="jump-here">Use my location</button>
@@ -111,45 +150,9 @@
     </div>
   </dialog>
 
-  <dialog id="places-dialog" aria-labelledby="places-title">
-    <h2 id="places-title">Places nearby</h2>
-    <p id="places-prompt"></p>
-    <label for="places-list" class="sr-only">Places</label>
-    <select id="places-list" size="12"></select>
-    <div class="buttons">
-      <button type="button" id="places-go">Go there</button>
-      <button type="button" data-close>Cancel</button>
-    </div>
-  </dialog>
+  
 
-  <dialog id="settings-dialog" aria-labelledby="settings-title">
-    <form id="settings-form">
-      <h2 id="settings-title">Settings</h2>
-      <label for="set-units">Distances</label>
-      <select id="set-units" name="units">
-        <option value="metric">Metres and kilometres</option>
-        <option value="imperial">Feet and miles</option>
-      </select>
-      <label for="set-speech">Speech</label>
-      <select id="set-speech" name="speech">
-        <option value="screenreader">My screen reader</option>
-        <option value="voice">The browser's voice</option>
-        <option value="both">Both</option>
-      </select>
-      <label for="set-street-steer">Steering in street mode</label>
-      <select id="set-street-steer" name="streetSteer">
-        <option value="pick">Pick turns: follow the street and stop at each corner to choose the next one</option>
-        <option value="free">Free: go straight the way I tilt, across blocks too</option>
-      </select>
-      <label class="check"><input type="checkbox" name="sounds"> Country sounds and tones</label>
-      <label class="check"><input type="checkbox" name="geoFeatures"> Name geographic features (GeoFeatures)</label>
-      <label class="check"><input type="checkbox" name="visualAssist"> Visual Assist map</label>
-      <div class="buttons">
-        <button type="submit">Save</button>
-        <button type="button" data-close>Cancel</button>
-      </div>
-    </form>
-  </dialog>
+  
 
   <dialog id="help-dialog" aria-labelledby="help-title">
     <h2 id="help-title" tabindex="-1">Keys</h2>

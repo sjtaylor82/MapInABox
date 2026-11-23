@@ -69,12 +69,12 @@ async function streets(url, ctx) {
   if (hit) return hit;
 
   const body = new URLSearchParams({ data: buildQuery(ty, tx) });
-  // The public Overpass servers are often busy, and a dense city tile can
-  // take 30 to 50 seconds. Try each in turn, twice, within about 85 seconds
-  // (Cloudflare gives up on a response after 100).
-  const deadline = Date.now() + 85000;
+  // The public Overpass servers are often busy, and they often turn away
+  // Cloudflare's shared addresses. Give up after about 45 seconds so the
+  // page can ask Overpass itself, from the user's own connection.
+  const deadline = Date.now() + 45000;
   let lastError = 'no answer';
-  for (let round = 0; round < 2; round++) {
+  for (let round = 0; round < 1; round++) {
     for (const mirror of OVERPASS_MIRRORS) {
       const left = deadline - Date.now();
       if (left < 5000) break;
@@ -83,7 +83,7 @@ async function streets(url, ctx) {
           method: 'POST',
           body,
           headers: { 'User-Agent': USER_AGENT, 'Content-Type': 'application/x-www-form-urlencoded' },
-          signal: AbortSignal.timeout(Math.min(70000, left)),
+          signal: AbortSignal.timeout(Math.min(40000, left)),
         });
         if (!res.ok) {
           lastError = res.status === 429 || res.status >= 502 ? 'is busy' : `answered ${res.status}`;
@@ -99,7 +99,6 @@ async function streets(url, ctx) {
         lastError = err.name === 'TimeoutError' ? 'took too long' : 'could not be reached';
       }
     }
-    if (round === 0) await new Promise((r) => setTimeout(r, 2000));
   }
   return json({ error: `The street data service ${lastError}. Try again in a minute.` }, 502);
 }

@@ -266,6 +266,11 @@ th, td { text-align: left; padding: 0.3rem 0.5rem; border-bottom: 1px solid var(
 
 td:first-child { white-space: nowrap; font-weight: 600; }
 
-#panel label[for="tilt-move"] { display: block; font-weight: 600; margin: 0.75rem 0 0.25rem; }
-#panel #tilt-move { width: 100%; padding: 0.4rem; }
-#panel #btn-practice { margin-top: 0.5rem; font-size: 1rem; }
+
+.picker-label { display: block; font-weight: 600; margin: 0.75rem 0 0.25rem; }
+input.picker { width: 100%; height: 2rem; accent-color: var(--accent); }
+.picker-value { margin: 0 0 0.5rem; font-weight: 700; }
+#panel section label.check { display: flex; gap: 0.5rem; align-items: center; margin: 0.5rem 0; }
+#panel section button, #panel [data-steer-only] button { font-size: 1rem; margin: 0.25rem 0; }
+
+.buttons.stack { display: flex; flex-direction: column; align-items: stretch; gap: 0.5rem; }
