@@ -17,8 +17,8 @@ const TICK_MS = 50;
 const SECTOR = 45;
 const HYSTERESIS = 8;        // degrees past a sector edge before the direction changes
 const SETTLE_MS = 300;       // a new direction must hold this long before it is spoken
-const TIP_GO = 0.21;         // about 12 degrees off flat: move
-const TIP_FLAT = 0.10;       // back within about 6 degrees: flat again
+const TIP_GO = 0.26;         // about 15 degrees off flat: move
+const TIP_FLAT = 0.14;       // back within about 8 degrees: flat again
 const FLAT_ENOUGH = 0.75;    // "up" through the screen at least this much counts as lying flat
 const CALIBRATE_MS = 500;
 const PAUSE_MS = 900;
@@ -38,7 +38,6 @@ let startedAt = 0;
 let mode = 'paused';         // 'paused' | 'calibrating' | 'ready'
 let lostSince = 0;
 let calibrateSince = 0;
-let flat = null;             // "up" when ready: the resting position
 let heading = null;          // spoken direction, one of the eight compass points
 let pending = null;
 let pendingSince = 0;
@@ -115,12 +114,14 @@ function emit(name, ...args) {
   try { handlers[name]?.(...args); } catch (err) { console.error(err); }
 }
 
-const dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
-
-/** Sine of the angle the device is tipped from its resting position. */
+/**
+ * Sine of the angle the device is tipped from truly flat. Always measured
+ * from level, never from the angle it happened to be at when it said Ready,
+ * so lying flat on a table is always still.
+ */
 function tipAmount() {
-  const d = Math.max(-1, Math.min(1, dot(up, flat)));
-  return Math.sqrt(1 - d * d);
+  const z = Math.max(-1, Math.min(1, up.z));
+  return Math.sqrt(1 - z * z);
 }
 
 function tick() {
@@ -153,8 +154,9 @@ function tick() {
     return;
   }
   if (mode === 'calibrating') {
+    // Ready only once it has been lying flat for a moment.
+    if (tipAmount() > TIP_FLAT) calibrateSince = now;
     if (now - calibrateSince < CALIBRATE_MS) return;
-    flat = { ...up };
     heading = pointFor(compass, null);
     pending = heading;
     tipped = false;
