@@ -44,8 +44,11 @@ const MULTI_SUFFIX = ['com.au', 'net.au', 'org.au', 'co.uk', 'org.uk', 'co.nz', 
 const FOREIGN_CC = new Set(['us', 'gb', 'uk', 'ca', 'ie', 'nz', 'fr', 'de', 'es', 'it', 'nl', 'jp', 'in', 'sg', 'za', 'mx', 'br']);
 
 export function menuRoute(request, url, env, ctx) {
+  if (url.pathname === '/api/menuread' && request.method === 'POST') return menuRead(request, env, ctx);
   if (request.method !== 'GET') return null;
   if (url.pathname === '/api/menu') return menu(url, env, ctx);
+  if (url.pathname === '/api/menuphotos') return menuPhotos(url, ctx);
+  if (url.pathname === '/api/menuimage') return menuImage(url, ctx);
   if (url.pathname === '/api/menutext') return menuText(url, ctx);
   if (url.pathname === '/api/menupdf') return menuPdf(url, ctx);
   return null;
@@ -369,7 +372,7 @@ async function menu(url, env, ctx) {
   const website = (url.searchParams.get('website') || '').trim().slice(0, 300);
   if (!name) return json({ error: 'Bad request' }, 400);
   const cache = caches.default;
-  const key = new Request(`https://cache.mapinabox/menu/v8/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(suburb.toLowerCase())}`);
+  const key = new Request(`https://cache.mapinabox/menu/v9/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(suburb.toLowerCase())}`);
   const hit = await cache.match(key);
   if (hit) return hit;
 
@@ -423,8 +426,13 @@ async function menu(url, env, ctx) {
       }
     }
   }
-  // Menus that can be read here first (web pages, then PDFs), then other menu pages, then delivery.
-  const rank = (r) => (r.kind !== 'own' ? 3 : r.readable && !r.pdf ? 0 : r.pdf ? 1 : 2);
+  // No menu to read: customers' photos of the menu on RestaurantGuru, read by AI.
+  if (!results.some((r) => r.kind === 'own')) {
+    const photo = await restaurantGuru(env, name, suburb, t);
+    if (photo) results.push(photo);
+  }
+  // Menus that can be read here first (web pages, then PDFs), then menu photos, then other menu pages, then delivery.
+  const rank = (r) => (r.kind === 'photo' ? 1.5 : r.kind !== 'own' ? 3 : r.readable && !r.pdf ? 0 : r.pdf ? 1 : 2);
   results.sort((a, b) => rank(a) - rank(b));
   const out = json({ results: results.slice(0, 8), searched: raw.length }, 200, results.length ? 7 * 24 * 3600 : 0);
   if (results.length) ctx.waitUntil(cache.put(key, out.clone())); // an empty answer may be a passing failure
@@ -470,5 +478,164 @@ async function menuPdf(url, ctx) {
   if (bytes.byteLength > 10e6 || String.fromCharCode(...new Uint8Array(bytes.slice(0, 5))) !== '%PDF-') return json({ error: 'Not a PDF' }, 502);
   const out = new Response(bytes, { headers: { 'Content-Type': 'application/pdf', 'Cache-Control': 'public, max-age=604800' } });
   ctx.waitUntil(cache.put(key, out.clone()));
+  return out;
+}
+
+// ---- Menu photos on RestaurantGuru ----------------------------------------
+// Customers upload photos of menus (boards, printed menus) to RestaurantGuru.
+// For a venue with no menu online otherwise, the newest photo is found, cut
+// into enlarged halves in the browser (the AI reads small writing much better
+// that way) and read by the AI model behind miab-menu-search.
+
+const RG_PAGE = /^([a-z]{2}\.)?restaurantguru\.com$/;
+const RG_IMAGE = /^(menu\d*|img\d*)\.restaurantguru\.com$/;
+
+/** The venue's RestaurantGuru menu page, as a 'photo' result, or null. */
+async function restaurantGuru(env, name, suburb, t) {
+  let raw = [];
+  try {
+    raw = await search(env, `site:restaurantguru.com "${name}"${suburb ? ` ${suburb}` : ''}`);
+  } catch {
+    return null;
+  }
+  for (const item of raw) {
+    const host = hostOf(item.url);
+    if (!RG_PAGE.test(host)) continue;
+    // The English page, not the AMP or another language's copy.
+    const parts = new URL(item.url).pathname.replace(/^\/amp\//, '/').split('/').filter(Boolean);
+    if (!parts.length || parts.length > 2 || (parts[1] && parts[1] !== 'menu')) continue;
+    // Its title names the venue and its suburb ("Menu at Muzza's Gourmet Pies & Cafe, Coorparoo").
+    const title = compactOf(item.title);
+    const words = t.distinctive.filter((w) => title.includes(w)).length;
+    if (!((t.compact && title.includes(t.compact)) || words >= Math.min(2, t.distinctive.length))) continue;
+    if (suburb && !title.includes(compactOf(suburb))) continue;
+    return { kind: 'photo', title: 'Customer photo of the menu', url: `https://restaurantguru.com/${parts[0]}/menu`, pdf: false, readable: true };
+  }
+  return null;
+}
+
+/** GET /api/menuphotos?url=  The menu photos on a RestaurantGuru menu page, newest first. */
+async function menuPhotos(url, ctx) {
+  let u;
+  try { u = new URL(url.searchParams.get('url') || ''); } catch { return json({ error: 'Bad request' }, 400); }
+  if (u.protocol !== 'https:' || !RG_PAGE.test(hostOf(u.href))) return json({ error: 'Bad request' }, 400);
+  const cache = caches.default;
+  const key = new Request(`https://cache.mapinabox/menuphotos/v1/${encodeURIComponent(u.href)}`);
+  const hit = await cache.match(key);
+  if (hit) return hit;
+  const page = await fetchPage(u.href);
+  if (!page.ok || !page.html) return json({ error: 'Not readable' }, 502);
+  const images = [];
+  for (const m of page.html.matchAll(/data-(?:src|href)="(https:\/\/menu\d*\.restaurantguru\.com\/[^"]+\.(?:jpe?g|png|webp))"/gi)) {
+    if (!images.includes(m[1])) images.push(m[1]);
+  }
+  const out = json({ images: images.slice(0, 6) }, 200, 7 * 24 * 3600);
+  if (images.length) ctx.waitUntil(cache.put(key, out.clone()));
+  return out;
+}
+
+/** GET /api/menuimage?u=  A menu photo, passed through so the browser can cut it up. */
+async function menuImage(url, ctx) {
+  let u;
+  try { u = new URL(url.searchParams.get('u') || ''); } catch { return json({ error: 'Bad request' }, 400); }
+  if (u.protocol !== 'https:' || !RG_IMAGE.test(u.hostname)) return json({ error: 'Bad request' }, 400);
+  const cache = caches.default;
+  const key = new Request(`https://cache.mapinabox/menuimage/v1/${encodeURIComponent(u.href)}`);
+  const hit = await cache.match(key);
+  if (hit) return hit;
+  let res;
+  try {
+    res = await fetch(u.href, { headers: { 'User-Agent': BROWSER_UA, Referer: 'https://restaurantguru.com/' }, signal: AbortSignal.timeout(15000) });
+  } catch {
+    return json({ error: 'Not readable' }, 502);
+  }
+  const type = res.headers.get('Content-Type') || '';
+  if (!res.ok || !type.startsWith('image/') || Number(res.headers.get('Content-Length') || 0) > 8e6) return json({ error: 'Not readable' }, 502);
+  const out = new Response(await res.arrayBuffer(), { headers: { 'Content-Type': type, 'Cache-Control': 'public, max-age=2592000' } });
+  ctx.waitUntil(cache.put(key, out.clone()));
+  return out;
+}
+
+const READ_PROMPT = `These pictures are parts of one photo of a cafe or restaurant menu, left to right or top to bottom. Transcribe the menu for a blind reader. Use exactly this plain format and nothing else:
+## Section heading
+Item name | price
+
+Copy names and prices as written (a price like 7.00 becomes $7.00). Leave the price out if it can't be read; write "not available" for N/A. Skip anything that isn't on the menu. If there is no menu at all, reply only: NO MENU`;
+
+/** "## Pies\nPlain | $6.00" -> [{ title, items: [{ name, price, desc }] }] */
+function parseRead(text) {
+  const sections = [];
+  let cur = null;
+  for (const raw of String(text).replace(/<think>[\s\S]*?<\/think>/gi, '').split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('```')) continue;
+    const h = line.match(/^#{1,4}\s*(.+)$/);
+    if (h) {
+      cur = { title: h[1].replace(/\*+/g, '').trim(), items: [] };
+      sections.push(cur);
+      continue;
+    }
+    const [name, price = ''] = line.replace(/^[-*•]\s*/, '').split('|').map((x) => x.trim());
+    if (!name) continue;
+    if (!cur) {
+      cur = { title: 'Menu', items: [] };
+      sections.push(cur);
+    }
+    cur.items.push({ name, price: /^\$?N\/?A$/i.test(price) ? 'not available' : price.replace(/^\$\s*/, '$'), desc: '' });
+  }
+  return sections.filter((x) => x.items.length);
+}
+
+/**
+ * POST /api/menuread  { photo: image url, parts: ["data:image/jpeg;base64,...", ...] }
+ * The parts of one menu photo, read by the AI model: { sections }. Cached by
+ * the photo, so each photo is read once.
+ */
+async function menuRead(request, env, ctx) {
+  let body;
+  try { body = await request.json(); } catch { return json({ error: 'Bad request' }, 400); }
+  let photo;
+  try { photo = new URL(body.photo); } catch { return json({ error: 'Bad request' }, 400); }
+  const parts = Array.isArray(body.parts) ? body.parts : [];
+  if (!RG_IMAGE.test(photo.hostname) || !parts.length || parts.length > 4
+    || !parts.every((p) => typeof p === 'string' && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(p))
+    || parts.reduce((n, p) => n + p.length, 0) > 3.5e6) {
+    return json({ error: 'Bad request' }, 400);
+  }
+  const cache = caches.default;
+  const key = new Request(`https://cache.mapinabox/menuread/v1/${encodeURIComponent(photo.href)}`);
+  const hit = await cache.match(key);
+  if (hit) return hit;
+  if (!env.MENU_SEARCH) return json({ error: 'Reading menus is not set up here.' }, 503);
+  let res;
+  try {
+    res = await env.MENU_SEARCH.fetch(`${SEARCH}/ai`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': BROWSER_UA,
+        // The daily limit per person is counted by their address, not this Worker's.
+        'CF-Connecting-IP': request.headers.get('CF-Connecting-IP') || '',
+      },
+      body: JSON.stringify({
+        vision: true,
+        // Groq allows about 1000 output tokens a minute for this model.
+        max_tokens: 950,
+        messages: [{ role: 'user', content: [{ type: 'text', text: READ_PROMPT }, ...parts.map((p) => ({ type: 'image_url', image_url: { url: p } }))] }],
+      }),
+      signal: AbortSignal.timeout(60000),
+    });
+  } catch {
+    return json({ error: 'The menu reader did not answer.' }, 502);
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const busy = res.status === 429;
+    return json({ error: busy ? 'The menu reader is busy. Try again in a minute.' : 'The menu reader could not read this photo.' }, busy ? 429 : 502);
+  }
+  const content = Array.isArray(data.content) ? data.content.map((c) => c.text || '').join('') : String(data.content || '');
+  const sections = /^\s*NO MENU\s*$/i.test(content) ? [] : parseRead(content);
+  const out = json({ sections }, 200, 30 * 24 * 3600);
+  if (sections.length) ctx.waitUntil(cache.put(key, out.clone()));
   return out;
 }

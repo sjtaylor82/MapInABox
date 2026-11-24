@@ -3,7 +3,8 @@
 // the venue's own menu pages and PDFs, and its own store page on Uber Eats,
 // DoorDash or Menulog when one names both the venue and its suburb. Menus on
 // the venue's own site can be read right here, as sections of dishes with
-// prices: web pages are read by the Worker, PDFs in the browser.
+// prices: web pages are read by the Worker, PDFs in the browser. With none
+// of those, a customer's photo of the menu on RestaurantGuru can be read by AI.
 
 import { say } from './speech.js';
 import { postcodeAt } from './postcode.js';
@@ -67,14 +68,17 @@ export async function showMenu(box, place) {
     const site = where(r.url);
     a.textContent = r.kind === 'delivery'
       ? `${place.name} on ${site}`
-      : `${r.pdf ? `${r.title && !/\.pdf$/i.test(r.title) ? r.title : 'Menu'} (PDF)` : r.title || 'Menu'} on ${site}`;
+      : r.kind === 'photo'
+        ? `Customer photo of the menu on ${site}`
+        : `${r.pdf ? `${r.title && !/\.pdf$/i.test(r.title) ? r.title : 'Menu'} (PDF)` : r.title || 'Menu'} on ${site}`;
     li.append(a);
     // A menu on the venue's own site that can be read here: a page with prices, or a PDF.
-    if (r.kind === 'own' && (r.readable || r.pdf)) {
+    if ((r.kind === 'own' && (r.readable || r.pdf)) || r.kind === 'photo') {
       const b = document.createElement('button');
       b.type = 'button';
       b.textContent = 'Read it here';
-      b.addEventListener('click', () => (r.pdf ? readPdf(r.url, text, place.name) : readMenu(r.url, text, place.name)));
+      b.addEventListener('click', () => (r.kind === 'photo' ? readPhoto(r.url, text, place.name)
+        : r.pdf ? readPdf(r.url, text, place.name) : readMenu(r.url, text, place.name)));
       li.append(' ', b);
     }
     ul.append(li);
@@ -82,10 +86,12 @@ export async function showMenu(box, place) {
   box.append(ul, text);
   const readable = results.filter((r) => r.kind === 'own' && (r.readable || r.pdf)).length;
   const own = results.filter((r) => r.kind === 'own').length;
-  const delivery = results.length - own;
+  const photos = results.filter((r) => r.kind === 'photo').length;
+  const delivery = results.length - own - photos;
   const parts = [
     readable && `${plural(readable, 'menu')} you can read here`,
     own - readable && `${plural(own - readable, 'other menu page')}`,
+    photos && 'a customer photo of the menu, which can be read here',
     delivery && `${plural(delivery, 'delivery page')}`,
   ].filter(Boolean);
   say(`${place.name}: ${parts.join(', ')}.`);
@@ -125,6 +131,70 @@ async function readPdf(url, box, name) {
   const sections = structure(text);
   if (pricedCount(sections) >= 3) return showSections(box, name, sections);
   showLines(box, name, text.replace(/^## /gm, '').replace(/^--- Page \d+ ---$/gm, ''));
+}
+
+/**
+ * A customer's photo of the menu (RestaurantGuru), read by AI. The photo is
+ * cut into two enlarged halves first: the AI reads small writing on menu
+ * boards far better that way.
+ */
+async function readPhoto(pageUrl, box, name) {
+  const done = working(null, `Reading the photo of the menu for ${name}`);
+  try {
+    const list = await fetch(`api/menuphotos?url=${encodeURIComponent(pageUrl)}`, { signal: AbortSignal.timeout(20000) })
+      .then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
+    const photo = (list.images || [])[0];
+    if (!photo) return showProblem(box, 'The photo of the menu could not be found. Open the link instead.');
+    let parts;
+    try {
+      const img = await fetch(`api/menuimage?u=${encodeURIComponent(photo)}`, { signal: AbortSignal.timeout(20000) });
+      if (!img.ok) throw new Error(String(img.status));
+      parts = await photoParts(await createImageBitmap(await img.blob()));
+    } catch {
+      return showProblem(box, 'The photo of the menu could not be opened. Open the link instead.');
+    }
+    let data = {};
+    let status = 0;
+    try {
+      const r = await fetch('api/menuread', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ photo, parts }),
+        signal: AbortSignal.timeout(70000),
+      });
+      status = r.status;
+      data = await r.json();
+    } catch { /* below */ }
+    const sections = data.sections || [];
+    if (!sections.length) {
+      return showProblem(box, status === 429 ? 'The menu reader is busy. Try again in a minute.'
+        : data.error || 'No menu could be read from the photo. Open the link instead.');
+    }
+    showSections(box, name, sections);
+    const note = document.createElement('p');
+    note.textContent = 'Read by AI from a photo a customer took, which may be old. Some names or prices may be wrong.';
+    box.querySelector('h4').after(note);
+  } finally {
+    done();
+  }
+}
+
+/** The photo as JPEG data URLs: two overlapping halves of a wide or tall photo, each about 1600 pixels across. */
+async function photoParts(bmp) {
+  const { width: w, height: h } = bmp;
+  const pieces = w >= h * 1.3 ? [[0, 0, w * 0.58, h], [w * 0.42, 0, w * 0.58, h]]
+    : h >= w * 1.3 ? [[0, 0, w, h * 0.58], [0, h * 0.42, w, h * 0.58]]
+      : [[0, 0, w, h]];
+  return pieces.map(([x, y, pw, ph]) => {
+    const scale = Math.min(3, 1600 / Math.max(pw, ph));
+    const c = document.createElement('canvas');
+    c.width = Math.round(pw * scale);
+    c.height = Math.round(ph * scale);
+    const g = c.getContext('2d');
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(bmp, x, y, pw, ph, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.85);
+  });
 }
 
 function showProblem(box, message) {
