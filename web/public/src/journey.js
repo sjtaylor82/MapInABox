@@ -342,9 +342,16 @@ async function locate(text, here, nearOnly = true, maxM = WALK_MAX_M) {
  * list to choose from ("Vision Australia, Coorparoo, 6.2 kilometres"),
  * resolving with the one chosen. Resolves null if nothing matches.
  */
-async function chooseDestination(text, from, maxM) {
-  const list = (await candidates(text, from, true, maxM)).slice(0, 10);
+/**
+ * A place typed in From or To. One match: that one. Several: they're listed
+ * under a heading that gets focus ("3 places called Vision Australia: choose
+ * where you start"), nearest the map position first, and the chosen one is
+ * returned. role: 'start' or 'destination'.
+ */
+async function choosePlace(text, near, maxM, role = 'destination') {
+  const list = (await candidates(text, near, true, maxM)).slice(0, 10);
   if (list.length <= 1) return list[0] || null;
+  const question = `${list.length} places called ${text}: choose where you ${role === 'start' ? 'start' : 'are going'}`;
   const box = $('journey-choices');
   const ul = $('journey-choice-list');
   return new Promise((resolve) => {
@@ -362,10 +369,12 @@ async function chooseDestination(text, from, maxM) {
     }));
     box.hidden = false;
     setPrompt('');
-    say(`${list.length} places match ${text}. Choose one. ${list[0].label}, ${formatDistance(list[0].d)}.`);
-    ul.querySelector('button').focus();
+    $('journey-choices-title').textContent = question;
+    $('journey-choices-title').focus();
   });
 }
+
+const chooseDestination = (text, from, maxM) => choosePlace(text, from, maxM, 'destination');
 
 /**
  * Drive: find From and To, then hand the trip to a navigation app. On a
@@ -388,7 +397,7 @@ async function planDrive() {
   let b = null;
   try {
     if (st.fromHere && from === st.fromHere.label) a = st.fromHere;
-    else a = from ? await locate(from, here, false) : { lat: here.lat, lon: here.lon, label: here.label || 'where you are' };
+    else a = from ? await choosePlace(from, here, Infinity, 'start') : { lat: here.lat, lon: here.lon, label: here.label || 'where you are' };
     if (a) b = await chooseDestination(to, a, Infinity);
   } catch { /* reported below */ }
   if (seq !== st.seq) return;
@@ -688,7 +697,7 @@ async function planWalk(from, to, known = null) {
   if (!known) try {
     // From can be anywhere, so a walk can be looked up for a place you are not.
     if (st.fromHere && from === st.fromHere.label) a = st.fromHere; // Use my location: the exact spot
-    else a = from ? await locate(from, here, false) : { lat: here.lat, lon: here.lon, label: here.label || 'where you are' };
+    else a = from ? await choosePlace(from, here, Infinity, 'start') : { lat: here.lat, lon: here.lon, label: here.label || 'where you are' };
     if (a) b = await chooseDestination(to, a, WALK_MAX_M);
   } catch { /* reported below */ }
   if (seq !== st.seq) return;
