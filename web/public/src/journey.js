@@ -695,8 +695,12 @@ async function planWalk(from, to, known = null) {
   showSteps();
   showOnly('journey-walk');
   const mins = Math.max(1, Math.round(res.duration / 60));
-  const summary = `Walking route to ${b.label}: ${formatDistance(res.distance)}, about ${mins} minute${mins === 1 ? '' : 's'}, ${res.steps.length} steps.`;
-  setPrompt(summary);
+  // A heading to jump to ("Walking route to Ethel Street, Burwood"), then the summary.
+  const summary = `${formatDistance(res.distance)}, about ${mins} minute${mins === 1 ? '' : 's'}, ${res.steps.length} steps.`;
+  setPrompt('');
+  $('journey-walk-title').textContent = `Walking route to ${b.label}`;
+  $('journey-walk-summary').textContent = summary;
+  $('journey-walk-title').focus();
   say(summary);
 }
 
