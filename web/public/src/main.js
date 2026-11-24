@@ -112,8 +112,7 @@ async function moved({ tone = true, prefix = '' } = {}) {
   // A sea can stretch for thousands of kilometres. Repeating just its name
   // sounds like not moving, so say where the nearest land is as well.
   if (sameSea || (prefix && !info.onLand)) text = `${info.label}. ${landHint(state.lat, state.lon)}`;
-  say(prefix ? `${prefix} ${text}` : text, { now: true });
-  schedulePostcode(seq);
+  sayWhenSettled(seq, prefix ? `${prefix} ${text}` : text, { always: true });
   updateMapView(state.lat, state.lon, info.label, info.country);
   if (countryChanged) {
     const place = info.onLand && info.country !== 'Open Water' ? info.country : 'ocean';
@@ -210,18 +209,26 @@ async function announcePostcode() {
   say(`${pc.place ? `${pc.place} ` : ''}${pc.postcode}${pc.admin ? `, ${pc.admin}` : ''}.`);
 }
 
-/** Two seconds after a move, once you have stopped, say the postcode if it has changed. */
-function schedulePostcode(seq) {
+/**
+ * Say where you are once you've stopped moving for 0.3 seconds (holding an
+ * arrow or tilting doesn't speak every step), with the postcode: "Mortlake,
+ * 2137." On the world map the postcode comes with every place; in street mode,
+ * where each step names a street, only when it changes.
+ */
+function sayWhenSettled(seq, text, { always = false } = {}) {
   clearTimeout(postcodeTimer);
-  if (settings.get('autoPostcode') === false) return;
   postcodeTimer = setTimeout(async () => {
     if (seq !== state.seq) return; // moved on since
-    if (state.mode === 'world' && !state.info.onLand) return;
-    const pc = await postcodeAt(state.lat, state.lon);
-    if (seq !== state.seq || !pc || pc.postcode === state.lastPostcode) return;
-    state.lastPostcode = pc.postcode;
-    say(`${pc.place ? `${pc.place} ` : ''}${pc.postcode}.`); // "Cleveland 4163."
-  }, 2000);
+    let code = '';
+    const onLand = state.mode === 'street' || state.info.onLand;
+    if (settings.get('autoPostcode') !== false && onLand) {
+      const pc = await postcodeAt(state.lat, state.lon).catch(() => null);
+      if (seq !== state.seq) return;
+      if (pc && (always || pc.postcode !== state.lastPostcode)) code = pc.postcode;
+      if (pc) state.lastPostcode = pc.postcode;
+    }
+    say(code ? `${text.replace(/\.\s*$/, '')}, ${code}.` : text, { now: true });
+  }, 300);
 }
 
 // ── Where am I (device location) ──────────────────────────────────────────
@@ -387,8 +394,7 @@ async function movedStreet({ tone = true, prefix = '', note = '', suffix = '', k
   state.streetLabel = label;
   const near = street.nearestStreet(lat, lon, 25, state.streetName);
   state.streetName = near ? near.name : '';
-  say([prefix, note, label.endsWith('.') ? label : `${label}.`, suffix].filter(Boolean).join(' '), { now: true });
-  schedulePostcode(seq);
+  sayWhenSettled(seq, [prefix, note, label.endsWith('.') ? label : `${label}.`, suffix].filter(Boolean).join(' '));
   updateMapView(lat, lon, label, null);
   // Keep the country and region up to date for C, R and the other keys.
   describe(lat, lon, state.info).then((info) => {
