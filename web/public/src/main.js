@@ -30,6 +30,7 @@ const state = {
   info: { country: '', admin: '', city: '', iso2: '', continent: '', onLand: false, label: '' },
   seq: 0,
   started: false,
+  soundWaiting: true, // the country's sound starts on the first move
   busy: false,
   mode: 'world',      // 'world' | 'street'
   streetName: '',     // the street being followed in street mode
@@ -71,8 +72,8 @@ async function boot() {
     unlockVoice();
     // The map may already be somewhere (your location, found before any tap):
     // start that country's sound now that sound is allowed.
-    if (state.mode === 'world' && state.info && state.info.country) {
-      audio.playPlace(state.info.onLand && state.info.country !== 'Open Water' ? state.info.country : 'ocean', state.info.continent);
+    if (steering.isTouchDevice() && state.mode === 'world' && state.info && state.info.country) {
+      state.soundWaiting = !audio.playPlace(state.info.onLand && state.info.country !== 'Open Water' ? state.info.country : 'ocean', state.info.continent);
     }
     for (const t of UNLOCK_EVENTS) document.removeEventListener(t, unlockOnce, true);
   };
@@ -91,7 +92,7 @@ async function boot() {
   state.started = true;
   $('intro').hidden = true;
   $('app').hidden = false;
-  focusMap();
+  // Start at the top of the page, not on the map; the map is a Tab away.
   drawMap();
   if (hasSaved) {
     state.lat = saved.lat;
@@ -139,9 +140,9 @@ async function moved({ tone = true, prefix = '' } = {}) {
   if (sameSea || (prefix && !info.onLand)) text = `${info.label}. ${landHint(state.lat, state.lon)}`;
   sayWhenSettled(seq, prefix ? `${prefix} ${text}` : text, { always: true });
   updateMapView(state.lat, state.lon, info.label, info.country);
-  if (countryChanged) {
+  if (countryChanged || state.soundWaiting) {
     const place = info.onLand && info.country !== 'Open Water' ? info.country : 'ocean';
-    audio.playPlace(place, info.continent);
+    state.soundWaiting = !audio.playPlace(place, info.continent);
   }
 }
 
@@ -1049,6 +1050,8 @@ function onMapKey(e) {
       if (next.matches('h2') && !next.hasAttribute('tabindex')) next.tabIndex = -1;
       next.focus();
     }
+    audio.stopAmbient();
+    state.soundWaiting = true;
     return say('Left the map. Shift+Tab goes back to it.');
   }
   if (ARROWS[key]) {

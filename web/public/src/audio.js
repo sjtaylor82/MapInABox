@@ -143,13 +143,13 @@ function loadBuffer(path) {
  * iPhone will not start a new <audio> element without a fresh tap.
  */
 export function playPlace(place, continent) {
-  if (!ctx || !settings.get('sounds')) return;
+  if (!ctx || !settings.get('sounds')) return false;
   const path = soundPathFor(place, continent);
-  if (ambient && ambient.path === path) return; // neighbours sharing a regional loop
+  if (ambient && ambient.path === path) return true; // neighbours sharing a regional loop
   const old = ambient;
   ambient = null;
   if (old) fadeOutAndStop(old);
-  if (!path) return sleepSoon();
+  if (!path) { sleepSoon(); return true; }
   wake();
   const mine = { path, src: null, gain: ctx.createGain() };
   mine.gain.gain.value = 0;
@@ -165,6 +165,7 @@ export function playPlace(place, continent) {
     mine.src = src;
     mine.gain.gain.setTargetAtTime(0.5, ctx.currentTime, 0.4);
   }).catch(() => { /* no sound for this place */ });
+  return true;
 }
 
 function fadeOutAndStop(a) {
