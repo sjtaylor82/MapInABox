@@ -48,6 +48,7 @@ async function boot() {
   applyLook();
   applyLevel();
   applyVisualAssist();
+  showMode();
   // More: the toolbar buttons used less often.
   $('btn-more').addEventListener('click', () => {
     const open = $('toolbar-more').hidden;
@@ -366,7 +367,16 @@ function showMode() {
   $('btn-street').setAttribute('aria-pressed', String(inStreet));
   // Short label; the keys go in a hint, which VoiceOver says after a pause
   // (and can be switched off). Phones and tablets have no keys, so no hint.
-  $('map').setAttribute('aria-label', inStreet ? 'Street map' : 'World map');
+  if (steering.isTouchDevice()) {
+    // Phones and tablets: no "World map, web application". The map just holds
+    // where you are, which VoiceOver reads when focus moves to it.
+    for (const a of ['role', 'aria-label', 'aria-describedby']) $('map').removeAttribute(a);
+    $('map-caption').removeAttribute('aria-hidden');
+  } else {
+    // Computers: an application, so screen readers pass the arrow keys to the map.
+    $('map').setAttribute('role', 'application');
+    $('map').setAttribute('aria-label', inStreet ? 'Street map' : 'World map');
+  }
   $('map-hint').textContent = steering.isTouchDevice() ? ''
     : inStreet ? 'Arrow keys move. P places nearby. F11 world map.' : 'Arrow keys move. F11 street mode. F1 help.';
   for (const el of document.querySelectorAll('[data-street-only]')) el.hidden = !inStreet;

@@ -271,7 +271,8 @@ button[aria-pressed="true"] {
 
 #map-caption:empty { display: none; }
 
-body:not(.visual-assist) #map-caption { display: none; }
+/* Visual Assist off: the place name is still there for screen readers. */
+body:not(.visual-assist) #map-caption { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 dialog {
   width: min(36rem, calc(100vw - 32px));
