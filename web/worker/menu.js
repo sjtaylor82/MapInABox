@@ -44,7 +44,6 @@ const MULTI_SUFFIX = ['com.au', 'net.au', 'org.au', 'co.uk', 'org.uk', 'co.nz', 
 const FOREIGN_CC = new Set(['us', 'gb', 'uk', 'ca', 'ie', 'nz', 'fr', 'de', 'es', 'it', 'nl', 'jp', 'in', 'sg', 'za', 'mx', 'br']);
 
 export function menuRoute(request, url, env, ctx) {
-  if (url.pathname === '/api/menuread' && request.method === 'POST') return menuRead(request, env, ctx);
   if (request.method !== 'GET') return null;
   if (url.pathname === '/api/menu') return menu(url, env, ctx);
   if (url.pathname === '/api/menuphotos') return menuPhotos(url, ctx);
@@ -426,7 +425,7 @@ async function menu(url, env, ctx) {
       }
     }
   }
-  // No menu to read: customers' photos of the menu on RestaurantGuru, read by AI.
+  // No menu to read: customers' photos of the menu on RestaurantGuru.
   if (!results.some((r) => r.kind === 'own')) {
     const photo = await restaurantGuru(env, name, suburb, t);
     if (photo) results.push(photo);
@@ -483,9 +482,8 @@ async function menuPdf(url, ctx) {
 
 // ---- Menu photos on RestaurantGuru ----------------------------------------
 // Customers upload photos of menus (boards, printed menus) to RestaurantGuru.
-// For a venue with no menu online otherwise, the newest photo is found, cut
-// into enlarged halves in the browser (the AI reads small writing much better
-// that way) and read by the AI model behind miab-menu-search.
+// For a venue with no menu online otherwise, the newest photo is passed
+// through, so it can be shared to a reading app such as Seeing AI.
 
 const RG_PAGE = /^([a-z]{2}\.)?restaurantguru\.com$/;
 const RG_IMAGE = /^(menu\d*|img\d*)\.restaurantguru\.com$/;
@@ -534,7 +532,7 @@ async function menuPhotos(url, ctx) {
   return out;
 }
 
-/** GET /api/menuimage?u=  A menu photo, passed through so the browser can cut it up. */
+/** GET /api/menuimage?u=  A menu photo, passed through so it can be shared from the browser. */
 async function menuImage(url, ctx) {
   let u;
   try { u = new URL(url.searchParams.get('u') || ''); } catch { return json({ error: 'Bad request' }, 400); }
@@ -553,89 +551,5 @@ async function menuImage(url, ctx) {
   if (!res.ok || !type.startsWith('image/') || Number(res.headers.get('Content-Length') || 0) > 8e6) return json({ error: 'Not readable' }, 502);
   const out = new Response(await res.arrayBuffer(), { headers: { 'Content-Type': type, 'Cache-Control': 'public, max-age=2592000' } });
   ctx.waitUntil(cache.put(key, out.clone()));
-  return out;
-}
-
-const READ_PROMPT = `These pictures are parts of one photo of a cafe or restaurant menu, left to right or top to bottom. Transcribe the menu for a blind reader. Use exactly this plain format and nothing else:
-## Section heading
-Item name | price
-
-Copy names and prices as written (a price like 7.00 becomes $7.00). Leave the price out if it can't be read; write "not available" for N/A. Skip anything that isn't on the menu. If there is no menu at all, reply only: NO MENU`;
-
-/** "## Pies\nPlain | $6.00" -> [{ title, items: [{ name, price, desc }] }] */
-function parseRead(text) {
-  const sections = [];
-  let cur = null;
-  for (const raw of String(text).replace(/<think>[\s\S]*?<\/think>/gi, '').split('\n')) {
-    const line = raw.trim();
-    if (!line || line.startsWith('```')) continue;
-    const h = line.match(/^#{1,4}\s*(.+)$/);
-    if (h) {
-      cur = { title: h[1].replace(/\*+/g, '').trim(), items: [] };
-      sections.push(cur);
-      continue;
-    }
-    const [name, price = ''] = line.replace(/^[-*•]\s*/, '').split('|').map((x) => x.trim());
-    if (!name) continue;
-    if (!cur) {
-      cur = { title: 'Menu', items: [] };
-      sections.push(cur);
-    }
-    cur.items.push({ name, price: /^\$?N\/?A$/i.test(price) ? 'not available' : price.replace(/^\$\s*/, '$'), desc: '' });
-  }
-  return sections.filter((x) => x.items.length);
-}
-
-/**
- * POST /api/menuread  { photo: image url, parts: ["data:image/jpeg;base64,...", ...] }
- * The parts of one menu photo, read by the AI model: { sections }. Cached by
- * the photo, so each photo is read once.
- */
-async function menuRead(request, env, ctx) {
-  let body;
-  try { body = await request.json(); } catch { return json({ error: 'Bad request' }, 400); }
-  let photo;
-  try { photo = new URL(body.photo); } catch { return json({ error: 'Bad request' }, 400); }
-  const parts = Array.isArray(body.parts) ? body.parts : [];
-  if (!RG_IMAGE.test(photo.hostname) || !parts.length || parts.length > 4
-    || !parts.every((p) => typeof p === 'string' && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(p))
-    || parts.reduce((n, p) => n + p.length, 0) > 3.5e6) {
-    return json({ error: 'Bad request' }, 400);
-  }
-  const cache = caches.default;
-  const key = new Request(`https://cache.mapinabox/menuread/v1/${encodeURIComponent(photo.href)}`);
-  const hit = await cache.match(key);
-  if (hit) return hit;
-  if (!env.MENU_SEARCH) return json({ error: 'Reading menus is not set up here.' }, 503);
-  let res;
-  try {
-    res = await env.MENU_SEARCH.fetch(`${SEARCH}/ai`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': BROWSER_UA,
-        // The daily limit per person is counted by their address, not this Worker's.
-        'CF-Connecting-IP': request.headers.get('CF-Connecting-IP') || '',
-      },
-      body: JSON.stringify({
-        vision: true,
-        // Groq allows about 1000 output tokens a minute for this model.
-        max_tokens: 950,
-        messages: [{ role: 'user', content: [{ type: 'text', text: READ_PROMPT }, ...parts.map((p) => ({ type: 'image_url', image_url: { url: p } }))] }],
-      }),
-      signal: AbortSignal.timeout(60000),
-    });
-  } catch {
-    return json({ error: 'The menu reader did not answer.' }, 502);
-  }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const busy = res.status === 429;
-    return json({ error: busy ? 'The menu reader is busy. Try again in a minute.' : 'The menu reader could not read this photo.' }, busy ? 429 : 502);
-  }
-  const content = Array.isArray(data.content) ? data.content.map((c) => c.text || '').join('') : String(data.content || '');
-  const sections = /^\s*NO MENU\s*$/i.test(content) ? [] : parseRead(content);
-  const out = json({ sections }, 200, 30 * 24 * 3600);
-  if (sections.length) ctx.waitUntil(cache.put(key, out.clone()));
   return out;
 }
