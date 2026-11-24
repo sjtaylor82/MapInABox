@@ -470,11 +470,11 @@ function cornerText(s) {
  * "Burwood Road on your right" when it only leaves one side.
  */
 function crossingWords(c) {
-  const at = c.control ? ` ${c.control}` : '';
-  if (c.side === 'both') return `cross ${c.name}${at}, which runs left and right`;
+  const at = c.control ? `, ${c.control}` : '';
+  if (c.side === 'both') return `cross ${c.name}, which runs left and right${at}`;
   if (!c.side) return `cross ${c.name}${at}`;
   // On the footpath on that side, you cross the street; on the other side, you pass it across the road.
-  if (c.foot && c.foot === c.side) return `cross ${c.name}${at}, which joins from your ${c.side}`;
+  if (c.foot && c.foot === c.side) return `cross ${c.name}, which joins from your ${c.side}${at}`;
   if (c.foot) return `${c.name} joins from across the road on your ${c.side}`;
   return `${c.name} on your ${c.side}`;
 }
