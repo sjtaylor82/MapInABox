@@ -70,7 +70,7 @@ export async function showMenu(box, place) {
     a.textContent = r.kind === 'delivery'
       ? `${place.name} on ${site}`
       : r.kind === 'photo'
-        ? `Photos of the menu on ${site}`
+        ? `Photos of the menu${r.age ? `, newest ${r.age}` : ''}, on ${site}`
         : `${r.pdf ? `${r.title && !/\.pdf$/i.test(r.title) ? r.title : 'Menu'} (PDF)` : r.title || 'Menu'} on ${site}`;
     li.append(a);
     // A menu on the venue's own site that can be read here: a page with prices, or a PDF.
