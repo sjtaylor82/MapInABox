@@ -1583,6 +1583,12 @@ $('btn-where').addEventListener('click', whereAmI);
 $('btn-position').addEventListener('click', () => { if (state.started) repeatLocation(); });
 initJourney({
   getHere: () => ({ lat: state.lat, lon: state.lon, label: state.streetLabel || state.info.label || state.info.city }),
+  // Where the device is, for ranking place matches nearest you first; null if
+  // location is off or slow (then the map position is used).
+  nearMe: () => Promise.race([
+    devicePosition().catch(() => null),
+    new Promise((r) => setTimeout(() => r(null), 4000)),
+  ]),
   // Where the device really is, with a short street address for the From box.
   myLocation: async () => {
     const { lat, lon } = await devicePosition();

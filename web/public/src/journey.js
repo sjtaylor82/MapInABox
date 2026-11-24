@@ -376,6 +376,12 @@ async function choosePlace(text, near, maxM, role = 'destination') {
 
 const chooseDestination = (text, from, maxM) => choosePlace(text, from, maxM, 'destination');
 
+/** Where you are, for ranking matches nearest you: the device if it can say within 4 seconds, else the map. */
+async function nearYou(here) {
+  const p = hooks.nearMe ? await hooks.nearMe() : null;
+  return p ? { lat: p.lat, lon: p.lon, label: 'your location' } : here;
+}
+
 /**
  * Drive: find From and To, then hand the trip to a navigation app. On a
  * phone, these links open Apple Maps or Google Maps straight into driving
@@ -397,7 +403,7 @@ async function planDrive() {
   let b = null;
   try {
     if (st.fromHere && from === st.fromHere.label) a = st.fromHere;
-    else a = from ? await choosePlace(from, here, Infinity, 'start') : { lat: here.lat, lon: here.lon, label: here.label || 'where you are' };
+    else a = from ? await choosePlace(from, await nearYou(here), Infinity, 'start') : { lat: here.lat, lon: here.lon, label: here.label || 'where you are' };
     if (a) b = await chooseDestination(to, a, Infinity);
   } catch { /* reported below */ }
   if (seq !== st.seq) return;
@@ -697,7 +703,7 @@ async function planWalk(from, to, known = null) {
   if (!known) try {
     // From can be anywhere, so a walk can be looked up for a place you are not.
     if (st.fromHere && from === st.fromHere.label) a = st.fromHere; // Use my location: the exact spot
-    else a = from ? await choosePlace(from, here, Infinity, 'start') : { lat: here.lat, lon: here.lon, label: here.label || 'where you are' };
+    else a = from ? await choosePlace(from, await nearYou(here), Infinity, 'start') : { lat: here.lat, lon: here.lon, label: here.label || 'where you are' };
     if (a) b = await chooseDestination(to, a, WALK_MAX_M);
   } catch { /* reported below */ }
   if (seq !== st.seq) return;
