@@ -91,7 +91,7 @@ async function boot() {
   state.started = true;
   $('intro').hidden = true;
   $('app').hidden = false;
-  $('map').focus();
+  focusMap();
   drawMap();
   if (hasSaved) {
     state.lat = saved.lat;
@@ -389,7 +389,7 @@ function showMode() {
     $('map').setAttribute('aria-label', inStreet ? 'Street map' : 'World map');
   }
   $('map-hint').textContent = steering.isTouchDevice() ? ''
-    : inStreet ? 'Arrow keys move. P places nearby. F11 world map.' : 'Arrow keys move. F11 street mode. F1 help.';
+    : inStreet ? 'Arrow keys move. P places nearby. F11 world map. Escape leaves the map.' : 'Arrow keys move. F11 street mode. F1 help. Escape leaves the map.';
   for (const el of document.querySelectorAll('[data-street-only]')) el.hidden = !inStreet;
   showTiltMove();
   showStreetSteer();
@@ -680,7 +680,7 @@ function choosePlace() {
   if (!p) return;
   // The list stays open, so details for the place are still a button away.
   $('places-prompt').hidden = true;
-  $('map').focus();
+  focusMap();
   state.lat = p.lat;
   state.lon = p.lon;
   state.streetName = '';
@@ -1029,6 +1029,28 @@ function onMapKey(e) {
   const ctrl = ctrlKey || metaKey;
   const handled = () => { e.preventDefault(); e.stopPropagation(); };
 
+  // Ctrl+Home and Ctrl+End go to the top and bottom of the page, as screen
+  // reader users expect, instead of being kept by the map.
+  if (ctrl && !alt && (key === 'Home' || key === 'End')) {
+    handled();
+    const all = [...document.querySelectorAll('#app button, #app a[href], #app input, #app h2[tabindex]')]
+      .filter((el) => el.offsetParent !== null && el.id !== 'map');
+    const target = key === 'Home' ? all[0] : all[all.length - 1];
+    if (target) target.focus();
+    return;
+  }
+  // Escape leaves the map: with a screen reader the map takes every key, so
+  // reading on past it with the arrow keys would move the map instead.
+  if (key === 'Escape' && !ctrl && !alt && !shift) {
+    handled();
+    const next = [...document.querySelectorAll('#panel h2, #panel button, #panel input')]
+      .find((el) => el.offsetParent !== null);
+    if (next) {
+      if (next.matches('h2') && !next.hasAttribute('tabindex')) next.tabIndex = -1;
+      next.focus();
+    }
+    return say('Left the map. Shift+Tab goes back to it.');
+  }
   if (ARROWS[key]) {
     handled();
     const [bearing, name] = ARROWS[key];
@@ -1093,8 +1115,6 @@ const KEYS = {
   'Ctrl+-': () => zoom(0.5),
   'Ctrl+0': () => { settings.set('zoom', 1); drawMap(); say('Map zoom 1 times.'); },
   'Ctrl+,': () => openSettings(),
-  'Ctrl+Home': () => jumpTo(90, state.lon, 'North Pole.'),
-  'Ctrl+End': () => jumpTo(-90, state.lon, 'South Pole.'),
   PageUp: cycleToneScope,
   PageDown: cycleToneScope,
   j: () => openJump(),
@@ -1150,6 +1170,15 @@ function cycleToneScope() {
   const next = settings.get('toneScope') === 'world' ? 'country' : 'world';
   settings.set('toneScope', next);
   say(`Spatial tones: ${next}.`);
+}
+
+/**
+ * Put keyboard focus on the map, on computers only, where the arrow keys move
+ * it. On phones and tablets the map isn't something you operate, and sending
+ * VoiceOver there kept pulling it away from the button you'd just used.
+ */
+function focusMap() {
+  if (!steering.isTouchDevice()) $('map').focus();
 }
 
 /** Starter (the default) or Expert. */
@@ -1293,7 +1322,7 @@ async function chooseJump(r) {
   const history = (settings.get('jumpHistory') || []).filter((h) => h.label !== r.label);
   history.unshift({ label: r.label, country: r.country, lat: r.lat, lon: r.lon });
   settings.set('jumpHistory', history.slice(0, 5));
-  $('map').focus();
+  focusMap();
   jumpTo(r.lat, r.lon, r.country ? `${r.country}.` : '');
 }
 
@@ -1456,7 +1485,7 @@ $('places-menu').addEventListener('click', () => {
 });
 $('places-find').addEventListener('click', () => { if (state.started) openPlaces(); });
 for (const id of ['jump-dialog', 'help-dialog', 'venue-dialog']) {
-  $(id).addEventListener('close', () => { if (state.started) $('map').focus(); });
+  $(id).addEventListener('close', () => { if (state.started) focusMap(); });
 }
 for (const btn of document.querySelectorAll('[data-close]')) {
   btn.addEventListener('click', () => btn.closest('dialog').close());
@@ -1520,7 +1549,7 @@ initJourney({
   },
   // A food place on the journey: go there, in street mode if it is on.
   goTo: (p) => {
-    $('map').focus();
+    focusMap();
     const prefix = `${p.name}, ${p.kind}.`;
     if (state.mode === 'street') {
       state.lat = p.lat;
