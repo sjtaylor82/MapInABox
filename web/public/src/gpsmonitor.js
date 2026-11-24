@@ -206,9 +206,14 @@ function checkCorners(lat, lon, driving) {
     if (!names.length || (mon.street && !c.names.has(mon.street))) continue;
     if (c.dist > 6 && angleDiff(bearingDeg(lat, lon, c.lat, c.lon), mon.heading) > 50) continue; // behind or beside
     mon.passed.set(key, Date.now());
+    const foot = footSide(lat, lon);
     const parts = names.slice(0, 2).map((n) => {
       const side = street.streetSide(c, n, mon.heading);
-      return side === 'both' ? `crossing ${n}, which runs left and right` : side ? `${n} on your ${side}` : `${n} ahead`;
+      if (side === 'both') return `crossing ${n}, which runs left and right`;
+      if (!side) return `${n} ahead`;
+      // On that side's footpath you cross it; on the other side it's across the road.
+      if (foot && !driving) return foot === side ? `crossing ${n}, which joins from your ${side}` : `${n} joins from across the road on your ${side}`;
+      return `${n} on your ${side}`;
     });
     const text = parts.join(', and ');
     tell(`${text[0].toUpperCase()}${text.slice(1)}.`);
@@ -217,6 +222,15 @@ function checkCorners(lat, lon, driving) {
   // Forget corners passed long ago, so a second trip past one is said again.
   const old = Date.now() - 10 * 60e3;
   for (const [k, t] of mon.passed) if (t < old) mon.passed.delete(k);
+}
+
+/** Which footpath of the current street you're on, as you walk: 'left', 'right' or ''. */
+function footSide(lat, lon) {
+  if (!mon.street || mon.heading === null) return '';
+  const n = street.nearestStreet(lat, lon, 25, mon.street);
+  if (!n || n.name !== mon.street || n.dist < 3) return '';
+  const rel = ((bearingDeg(lat, lon, n.lat, n.lon) - mon.heading + 540) % 360) - 180;
+  return rel < 0 ? 'right' : 'left';
 }
 
 async function checkSuburb(lat, lon) {

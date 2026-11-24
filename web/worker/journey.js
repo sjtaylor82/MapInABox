@@ -10,6 +10,8 @@
 //                                for finding food along a journey leg
 //   POST /api/food {line, radius} Named food places within radius metres of an
 //                                encoded polyline (OpenStreetMap, via Overpass)
+//   POST /api/crossings {line}    Traffic lights and marked pedestrian crossings
+//                                within 20 m of a walking route (OpenStreetMap)
 //   GET /api/stations?lat=&lon=  Train, metro and light rail stations within
 //                                15 km, nearest first (OpenStreetMap, via
 //                                Overpass), cached for a day
@@ -34,6 +36,7 @@ export function journeyRoute(request, url, env, ctx) {
     case '/api/walk': return request.method === 'GET' ? walk(url, ctx) : null;
     case '/api/food': return request.method === 'POST' ? food(request) : null;
     case '/api/stations': return request.method === 'GET' ? stations(url, ctx) : null;
+    case '/api/crossings': return request.method === 'POST' ? crossings(request) : null;
     default: return null;
   }
 }
@@ -312,4 +315,46 @@ async function stations(url, ctx) {
     }
   }
   return json({ error: last }, 502);
+}
+
+
+/** Traffic lights and pedestrian crossings along a walk: { controls: [{ lat, lon, kind }] }, kind 'lights' or 'crossing'. */
+async function crossings(request) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: 'Bad crossing search.' }, 400);
+  }
+  const line = typeof body.line === 'string' ? body.line.slice(0, 20000) : '';
+  const pts = line ? decodePolyline(line).slice(0, 800) : [];
+  if (pts.length < 2 || pts.some(([a, b]) => !(Math.abs(a) <= 90 && Math.abs(b) <= 180))) {
+    return json({ error: 'Bad crossing search.' }, 400);
+  }
+  const around = `(around:20,${pts.map(([a, b]) => `${a.toFixed(5)},${b.toFixed(5)}`).join(',')})`;
+  const query = `[out:json][timeout:20];(node["highway"="traffic_signals"]${around};node["highway"="crossing"]${around};`
+    + `node["crossing"="traffic_signals"]${around};);out tags;`;
+  for (const endpoint of FOOD_OVERPASS) {
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'User-Agent': USER_AGENT, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ data: query }),
+        signal: AbortSignal.timeout(20000),
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data.remark && !(data.elements || []).length) continue;
+      const controls = [];
+      for (const el of data.elements || []) {
+        const t = el.tags || {};
+        const lights = t.highway === 'traffic_signals' || t.crossing === 'traffic_signals' || t['crossing:signals'] === 'yes';
+        const marked = ['marked', 'zebra', 'uncontrolled', 'pelican', 'toucan', 'puffin'].includes(t.crossing) || t.crossing_ref === 'zebra';
+        if (!lights && !marked) continue;
+        controls.push({ lat: el.lat, lon: el.lon, kind: lights ? 'lights' : 'crossing' });
+      }
+      return json({ controls });
+    } catch { /* next server */ }
+  }
+  return json({ error: 'The crossing search service could not be reached.' }, 502);
 }

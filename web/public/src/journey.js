@@ -437,7 +437,7 @@ function stepAction(s) {
   }
   if (s.crossing) {
     const way = s.modifier && TURN[s.modifier] && s.modifier !== 'straight' ? `${TURN[s.modifier][0].toUpperCase()}${TURN[s.modifier].slice(1)} and cross` : 'Cross';
-    return `${way} ${s.near}`;
+    return `${way} ${s.near}${s.control ? ` ${s.control}` : ''}`;
   }
   switch (s.type) {
     case 'depart': return `Start${along}, heading ${compassName(s.bearing || 0).replace('-', ' ')}`;
@@ -470,8 +470,12 @@ function cornerText(s) {
  * "Burwood Road on your right" when it only leaves one side.
  */
 function crossingWords(c) {
-  if (c.side === 'both') return `cross ${c.name}, which runs left and right`;
-  if (!c.side) return `cross ${c.name}`;
+  const at = c.control ? ` ${c.control}` : '';
+  if (c.side === 'both') return `cross ${c.name}${at}, which runs left and right`;
+  if (!c.side) return `cross ${c.name}${at}`;
+  // On the footpath on that side, you cross the street; on the other side, you pass it across the road.
+  if (c.foot && c.foot === c.side) return `cross ${c.name}${at}, which joins from your ${c.side}`;
+  if (c.foot) return `${c.name} joins from across the road on your ${c.side}`;
   return `${c.name} on your ${c.side}`;
 }
 
@@ -518,6 +522,50 @@ async function loadStreetsAlong(res) {
   return !!all && all.every(Boolean);
 }
 
+/**
+ * Which footpath you're on along a street: 'left' or 'right' of its centre
+ * line as you walk, or '' when the route follows the centre line (no
+ * footpaths mapped) or the street can't be found.
+ */
+function footSide(lat, lon, heading, streetName) {
+  if (!streetName) return '';
+  const n = street.nearestStreet(lat, lon, 25, streetName);
+  if (!n || n.name !== streetName || n.dist < 3) return '';
+  const toCentre = bearingDeg(lat, lon, n.lat, n.lon);
+  const rel = ((toCentre - heading + 540) % 360) - 180; // negative: centre to the left
+  return rel < 0 ? 'right' : 'left';
+}
+
+/**
+ * Traffic lights and pedestrian crossings where the walk crosses a street:
+ * "cross Old Cleveland Road at the traffic lights". Optional: if the
+ * lookup is slow or fails, the steps simply don't mention them.
+ */
+async function addTrafficControls(res) {
+  let controls = [];
+  try {
+    controls = (await api('api/crossings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ line: res.line }),
+    }, 12000)).controls || [];
+  } catch { return; }
+  if (!controls.length) return;
+  const nearest = (lat, lon) => {
+    let best = null;
+    for (const c of controls) {
+      const d = haversineM(lat, lon, c.lat, c.lon);
+      if (d <= 25 && (!best || d < best.d)) best = { d, kind: c.kind };
+    }
+    return best ? (best.kind === 'lights' ? 'at the traffic lights' : 'at a pedestrian crossing') : '';
+  };
+  for (const s of res.steps) {
+    if (s.crossing && s.lat != null) s.control = nearest(s.lat, s.lon);
+    for (const c of s.crossings || []) if (c.side === 'both' || !c.foot || c.foot === c.side) c.control = nearest(c.lat, c.lon);
+    for (const c of s.cornerSides || []) if (c.lat != null && (c.side === 'both' || !c.foot || c.foot === c.side)) c.control = nearest(c.lat, c.lon);
+  }
+}
+
 async function addCrossStreets(res) {
   const line = decodePolyline(res.line);
   const cum = cumulative(line);
@@ -552,11 +600,16 @@ async function addCrossStreets(res) {
     // Every street meeting within 25 metres of the turn: two corners can be that close.
     s.corner = [];
     s.cornerSides = [];
+    let footHere = '';
+    if (s.bearing != null && at[i] > 15) {
+      const [fl, fo] = pointAlong(line, cum, at[i] - 15);
+      footHere = footSide(fl, fo, s.bearing, mine || prevStreet);
+    }
     for (const ix of street.intersectionsNear(s.lat, s.lon, 25)) {
       for (const n of ix.names) {
         if (n === mine || n === s.near || n === prevStreet || s.corner.includes(n)) continue;
         s.corner.push(n);
-        s.cornerSides.push({ name: n, side: s.bearing != null ? street.streetSide(ix, n, s.bearing) : '' });
+        s.cornerSides.push({ name: n, side: s.bearing != null ? street.streetSide(ix, n, s.bearing) : '', foot: footHere, lat: ix.lat, lon: ix.lon });
       }
     }
     if (s.corner.length > 3) s.corner = s.corner.slice(0, 3);
@@ -575,7 +628,9 @@ async function addCrossStreets(res) {
       for (const name of c.names) {
         if (seen.has(name)) continue;
         seen.add(name);
-        s.crossings.push({ name, lat: c.lat, lon: c.lon, side: street.streetSide(c, name, heading), along: a });
+        const [fl, fo] = pointAlong(line, cum, Math.max(0, a - 15));
+        const foot = footSide(fl, fo, heading, mine || prevStreet);
+        s.crossings.push({ name, lat: c.lat, lon: c.lon, side: street.streetSide(c, name, heading), foot, along: a });
       }
     }
   });
@@ -689,6 +744,7 @@ async function planWalk(from, to, known = null) {
   }
   setPrompt('Finding the cross streets…');
   await addCrossStreets(res);
+  await addTrafficControls(res);
   if (seq !== st.seq) return;
   st.walk = res;
   st.walk.toLabel = b.label;
@@ -862,8 +918,8 @@ function onGuidePosition(pos) {
     for (const c of (cur && cur.crossings) || []) {
       if (guide.crossed.has(c.name) || haversineM(lat, lon, c.lat, c.lon) > 15) continue;
       guide.crossed.add(c.name);
-      say(c.side === 'both' ? `Crossing ${c.name}, which runs left and right.`
-        : !c.side ? `Crossing ${c.name}.` : `${c.name} on your ${c.side}.`);
+      const words = crossingWords(c);
+      say(`${words[0].toUpperCase()}${words.slice(1)}.`.replace(/^Cross /, 'Crossing '));
       spoke = true;
       break;
     }
