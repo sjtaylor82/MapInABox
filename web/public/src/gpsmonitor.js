@@ -20,7 +20,31 @@ const mon = {
   street: '', candidate: '', candidateCount: 0,
   passed: new Map(), // corner key -> time announced
   suburb: '', suburbAt: null, waitingSaid: false, loading: false,
+  lastSaid: '', accuracy: null,
 };
+
+/** Say something and keep it as the last thing said, for the status panel. */
+function tell(text) {
+  mon.lastSaid = text;
+  say(text);
+  report();
+}
+
+/** What the status panel shows: { street, suburb, lastSaid, moving, accuracy }. */
+export function monitorStatus() {
+  const kmh = Math.round(mon.speed * 3.6);
+  const moving = !mon.last ? 'Finding your position'
+    : mon.speed > DRIVE_SPEED ? `Driving, about ${kmh} kilometres an hour`
+      : mon.speed > 0.5 ? 'Walking' : 'Standing still';
+  return {
+    street: mon.street, suburb: mon.suburb, lastSaid: mon.lastSaid, moving,
+    accuracy: mon.accuracy === null ? '' : `Accurate to about ${Math.round(mon.accuracy)} metres`,
+  };
+}
+
+function report() {
+  if (mon.hooks.status) mon.hooks.status(monitorStatus());
+}
 
 const angleDiff = (a, b) => Math.abs(((a - b + 540) % 360) - 180);
 const cornerKey = (c) => `${c.lat.toFixed(6)},${c.lon.toFixed(6)}`;
@@ -39,8 +63,9 @@ export async function startMonitor(hooks = {}, level = 'suburbs') {
   }
   Object.assign(mon, {
     hooks, level, last: null, heading: null, speed: 0, street: '', candidate: '', candidateCount: 0,
-    passed: new Map(), suburb: '', suburbAt: null, waitingSaid: false,
+    passed: new Map(), suburb: '', suburbAt: null, waitingSaid: false, lastSaid: '', accuracy: null,
   });
+  report();
   say('GPS monitor on. Finding your position…');
   mon.watch = navigator.geolocation.watchPosition(onFix, onError, { enableHighAccuracy: true, maximumAge: 2000, timeout: 30000 });
   keepAwake();
@@ -83,10 +108,13 @@ export function onFix(pos) {
   if (mon.watch === null) return;
   const { latitude: lat, longitude: lon, accuracy, speed, heading } = pos.coords;
   if (!(accuracy <= MAX_ACCURACY)) {
-    if (!mon.waitingSaid) say(`Waiting for a better GPS signal (now about ${Math.round(accuracy)} metres).`);
+    mon.accuracy = accuracy;
+    report();
+    if (!mon.waitingSaid) tell(`Waiting for a better GPS signal (now about ${Math.round(accuracy)} metres).`);
     mon.waitingSaid = true;
     return;
   }
+  mon.accuracy = accuracy;
   const now = pos.timestamp || Date.now();
   // Speed and heading: from the device when it gives them, else from the last fix.
   if (mon.last) {
@@ -115,6 +143,7 @@ export function onFix(pos) {
   checkStreet(lat, lon, driving);
   if (mon.level !== 'streets' && mon.heading !== null && mon.street) checkCorners(lat, lon, driving);
   if (mon.level === 'suburbs') checkSuburb(lat, lon);
+  report();
 }
 
 /** A new street: said once you are clearly on it (two fixes in a row, or very close to it). */
@@ -138,7 +167,7 @@ function checkStreet(lat, lon, driving) {
   mon.street = near.name;
   mon.candidate = '';
   mon.candidateCount = 0;
-  say(first ? `On ${near.name}.` : `Now on ${near.name}.`);
+  tell(first ? `On ${near.name}.` : `Now on ${near.name}.`);
 }
 
 /** A cross street ahead: say it once, with its side, as you reach it. */
@@ -156,7 +185,7 @@ function checkCorners(lat, lon, driving) {
       return side === 'both' ? `crossing ${n}` : side ? `${n} on your ${side}` : `${n} ahead`;
     });
     const text = parts.join(', and ');
-    say(`${text[0].toUpperCase()}${text.slice(1)}.`);
+    tell(`${text[0].toUpperCase()}${text.slice(1)}.`);
     break;
   }
   // Forget corners passed long ago, so a second trip past one is said again.
@@ -171,5 +200,6 @@ async function checkSuburb(lat, lon) {
   if (!pc || !pc.place || pc.place === mon.suburb) return;
   const first = !mon.suburb;
   mon.suburb = pc.place;
-  if (!first) say(`Entering ${pc.place}.`);
+  if (!first) tell(`Entering ${pc.place}.`);
+  else report();
 }

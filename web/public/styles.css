@@ -319,8 +319,8 @@ td:first-child { white-space: nowrap; font-weight: 600; }
 .picker-label { display: block; font-weight: 600; margin: 0.75rem 0 0.25rem; }
 input.picker { width: 100%; height: 2rem; accent-color: var(--accent); }
 .picker-value { margin: 0 0 0.5rem; font-weight: 700; }
-#panel section label.check { display: flex; gap: 0.5rem; align-items: center; margin: 0.5rem 0; }
-#panel section button, #panel [data-steer-only] button { font-size: 1rem; margin: 0.25rem 0; }
+#panel .panel-section label.check { display: flex; gap: 0.5rem; align-items: center; margin: 0.5rem 0; }
+#panel .panel-section button, #panel [data-steer-only] button { font-size: 1rem; margin: 0.25rem 0; }
 
 .buttons.stack { display: flex; flex-direction: column; align-items: stretch; gap: 0.5rem; }
 
@@ -376,4 +376,11 @@ input[type="text"] { background: var(--bg); color: var(--fg); border: 2px solid 
   background: var(--bg); transition: transform 0.15s; }
 .switch input:checked { background: var(--accent); }
 .switch input:checked::after { transform: translateX(1.35rem); }
-.switch-hint { font-size: 0.9rem; color: var(--muted); }
+.key { font-weight: 400; }
+@media (pointer: coarse) { .key { display: none; } }
+
+/* GPS monitor status, in the top bar while the monitor is on. */
+#gps-panel { flex-basis: 100%; border: 2px solid var(--fg); border-radius: 8px; padding: 0.5rem 0.75rem; }
+#gps-panel h2 { margin: 0 0 0.25rem; font-size: 1.1rem; }
+#gps-status { margin: 0 0 0.5rem; padding-left: 1.2rem; }
+#gps-panel[hidden] { display: none; }

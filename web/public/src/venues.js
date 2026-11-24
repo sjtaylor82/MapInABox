@@ -95,12 +95,10 @@ export async function checkVenue({ lat, lon, accuracy }) {
     const p = guess.at;
     openDialog(`Looks like you're at ${p.name}.`);
     $('venue-choices').append(button(`Menu for ${p.name}`, () => menuFor(p)), notHere);
-    say(`Looks like you're at ${p.name}, ${p.kind}. Want to see the menu?`);
   } else {
     openDialog('Looks like you\'re at one of these.');
     for (const p of places) $('venue-choices').append(button(`${p.name}, ${p.kind}`, () => menuFor(p)));
     $('venue-choices').append(notHere);
-    say(`Looks like you're at one of these: ${places.map((p) => p.name).join(', ')}. Choose one for its menu.`);
   }
   $('venue-choices').querySelector('button').focus();
 }
@@ -112,7 +110,6 @@ export async function openMenusNearby(lat, lon) {
   wait.textContent = 'Finding places to eat…';
   $('venue-choices').append(wait);
   $('venue-title').focus();
-  say('Finding places to eat nearby…');
   await Promise.race([street.ensureRadius(lat, lon, NEARBY_M), new Promise((r) => setTimeout(r, 15000))]);
   const near = eatingNear(lat, lon, NEARBY_M, NEARBY_MAX);
   $('venue-choices').replaceChildren();
@@ -131,6 +128,6 @@ export async function openMenusNearby(lat, lon) {
     ul.append(li);
   }
   $('venue-choices').append(ul);
-  say(`${near.length} places to eat within ${NEARBY_M} metres, nearest first. Choose one for its menu.`);
+  $('venue-title').textContent = `Menus nearby: ${near.length} places to eat`;
   ul.querySelector('button').focus();
 }

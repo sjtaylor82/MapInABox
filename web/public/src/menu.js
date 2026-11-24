@@ -67,7 +67,6 @@ export async function showMenu(box, place) {
       const b = document.createElement('button');
       b.type = 'button';
       b.textContent = 'Read it here';
-      b.setAttribute('aria-label', `Read ${r.pdf ? 'the PDF' : 'it'} here: ${a.textContent}`);
       b.addEventListener('click', () => (r.pdf ? readPdf(r.url, text, place.name) : readMenu(r.url, text, place.name)));
       li.append(' ', b);
     }
@@ -155,8 +154,8 @@ function showSections(box, name, sections) {
     }
     box.append(sh, ul);
   }
+  h.textContent = `${name} menu: ${plural(sections.length, 'section')}, ${dishes} dish${dishes === 1 ? '' : 'es'}`;
   h.focus();
-  say(`${name} menu: ${plural(sections.length, 'section')}, ${dishes} dish${dishes === 1 ? '' : 'es'}. Use headings to move between sections.`);
 }
 
 function showLines(box, name, text) {
@@ -171,5 +170,5 @@ function showLines(box, name, text) {
     return p;
   }));
   h.focus();
-  say(`${name} menu. ${plural(lines.length, 'line')}.`);
+
 }

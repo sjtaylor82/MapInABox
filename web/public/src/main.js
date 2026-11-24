@@ -18,7 +18,7 @@ import { makePicker } from './picker.js';
 import { postcodeAt } from './postcode.js';
 import { showMenu } from './menu.js';
 import { checkVenue, openMenusNearby } from './venues.js';
-import { startMonitor, stopMonitor, monitorActive, setMonitorLevel } from './gpsmonitor.js';
+import { startMonitor, stopMonitor, monitorActive, setMonitorLevel, monitorStatus } from './gpsmonitor.js';
 import { speakableHours } from './placedetails.js';
 import { initJourney, openJourney } from './journey.js';
 
@@ -53,7 +53,6 @@ async function boot() {
     const open = $('toolbar-more').hidden;
     $('toolbar-more').hidden = !open;
     $('btn-more').setAttribute('aria-expanded', String(open));
-    $('btn-more').textContent = open ? 'Less' : 'More';
   });
   const touch = steering.isTouchDevice() && steering.steeringSupported();
   $('btn-steer').hidden = !touch;
@@ -898,7 +897,6 @@ function setSteering(on, { byShake = false } = {}) {
   } else {
     steering.stopSteering();
   }
-  $('btn-steer').textContent = on ? 'Steering: on' : 'Steering: off';
   $('btn-steer').setAttribute('aria-pressed', String(on));
   showSteerStatus();
   if (!on) return say(byShake ? 'Steering off. Shake again to turn it back on.' : 'Steering off.');
@@ -1142,12 +1140,23 @@ function applyLevel() {
   if (level() !== 'expert' && monitorActive()) stopMonitor();
 }
 
+/** The GPS monitor's panel: plain text to read at any time (not spoken by itself). */
+function showMonitorStatus(s) {
+  const put = (id, text) => { if ($(id).textContent !== text) $(id).textContent = text; };
+  put('gps-street', s.street || 'not known yet');
+  put('gps-suburb', s.suburb || 'not known yet');
+  put('gps-last', s.lastSaid || 'nothing yet');
+  put('gps-moving', s.moving);
+  $('gps-accuracy').hidden = !s.accuracy;
+  put('gps-accuracy', s.accuracy);
+}
+
 /** GPS monitor on or off (Expert). */
 function toggleMonitor() {
   if (monitorActive()) return stopMonitor();
   const btn = $('btn-gps');
   btn.setAttribute('aria-pressed', 'true');
-  btn.textContent = 'GPS monitor: on';
+  $('gps-panel').hidden = false;
   startMonitor({
     // Keep the map on where you are, quietly.
     follow: (p) => {
@@ -1158,8 +1167,9 @@ function toggleMonitor() {
     },
     stopped: () => {
       btn.setAttribute('aria-pressed', 'false');
-      btn.textContent = 'GPS monitor: off';
+      $('gps-panel').hidden = true;
     },
+    status: showMonitorStatus,
   }, settings.get('gpsLevel') || 'suburbs');
 }
 
@@ -1432,6 +1442,11 @@ for (const btn of document.querySelectorAll('[data-close]')) {
 }
 $('btn-jump').addEventListener('click', () => openJump());
 $('btn-gps').addEventListener('click', toggleMonitor);
+$('gps-stop').addEventListener('click', () => { stopMonitor(); $('btn-gps').focus(); });
+$('gps-repeat').addEventListener('click', () => {
+  const s = monitorStatus();
+  say([s.street && `On ${s.street}`, s.suburb, s.moving].filter(Boolean).join(', ') + '.');
+});
 // Starter or Expert: a switch, which VoiceOver reads as "Expert mode, switch, off".
 $('set-expert').checked = level() === 'expert';
 $('set-expert').addEventListener('change', (e) => {

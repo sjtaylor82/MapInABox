@@ -13,44 +13,55 @@
   <div id="live-a" class="sr-only" aria-live="assertive" aria-atomic="true"></div>
   <div id="live-b" class="sr-only" aria-live="assertive" aria-atomic="true"></div>
 
-  <main id="intro">
+  <div id="intro">
     <h1>Map in a Box Web</h1>
     <p>Explore the world by ear. Move across the map with the arrow keys, or on a phone or tablet by tilting it. Map in a Box tells you the country, city or ocean you are over, and plays a sound for each country. Street mode takes you down to the streets of a town, with the places along them.</p>
     <p>It works with NVDA, JAWS, Narrator, VoiceOver and TalkBack, or with the browser's own voice. Headphones help you hear the tones move from left to right.</p>
     <p id="load-status" role="status">Loading…</p>
     <p>The full Map in a Box, with street mode, walking routes, transport and much more, is a free download for Windows and macOS: <a href="https://github.com/sjtaylor82/MapInABox/releases/latest">download Map in a Box for desktop</a>.</p>
-  </main>
+  </div>
 
   <div id="app" hidden>
-    <header id="toolbar">
+    <div id="toolbar">
       <div id="level-bar">
-        <label class="switch"><input type="checkbox" role="switch" id="set-expert" aria-describedby="set-expert-hint"> Expert mode</label>
-        <span id="set-expert-hint" class="switch-hint">Adds the GPS monitor, Jump and more settings.</span>
+        <label class="switch"><input type="checkbox" role="switch" id="set-expert"> Expert mode</label>
       </div>
       <span class="brand" aria-hidden="true">Map in a Box</span>
-      <button id="btn-position" type="button">Map position (F2)</button>
+      <button id="btn-position" type="button">Map position <span class="key" aria-hidden="true">(F2)</span></button>
       <button id="btn-journey" type="button">Route</button>
-      <button id="btn-street" type="button" aria-pressed="false">Street mode (F11)</button>
-      <button id="btn-where" type="button">Where am I (Y)</button>
-      <button id="btn-gps" type="button" aria-pressed="false" data-expert>GPS monitor: off</button>
+      <button id="btn-street" type="button" aria-pressed="false">Street mode <span class="key" aria-hidden="true">(F11)</span></button>
+      <button id="btn-where" type="button">Where am I <span class="key" aria-hidden="true">(Y)</span></button>
+      <button id="btn-gps" type="button" aria-pressed="false" aria-controls="gps-panel" data-expert>GPS monitor</button>
       <button id="btn-more" type="button" aria-expanded="false" aria-controls="toolbar-more">More</button>
       <div id="toolbar-more" hidden>
         <button id="btn-menus" type="button">Menus nearby</button>
-        <button id="btn-help" type="button">Help (F1)</button>
-        <button id="btn-jump" type="button" data-expert>Jump (J)</button>
-        <button id="btn-settings" type="button">Settings (Ctrl+,)</button>
-        <button id="btn-steer" type="button" aria-pressed="false" hidden>Steering: off</button>
+        <button id="btn-help" type="button">Help <span class="key" aria-hidden="true">(F1)</span></button>
+        <button id="btn-jump" type="button" data-expert>Jump <span class="key" aria-hidden="true">(J)</span></button>
+        <button id="btn-settings" type="button">Settings <span class="key" aria-hidden="true">(Ctrl+,)</span></button>
+        <button id="btn-steer" type="button" aria-pressed="false" hidden>Steering</button>
         <button id="btn-street-steer" type="button" hidden data-expert>Steering: pick turns</button>
         <button id="btn-world" type="button">World map</button>
       </div>
-    </header>
+      <div class="panel-section" id="gps-panel" hidden>
+        <h2 id="gps-title" tabindex="-1">GPS monitor</h2>
+        <ul id="gps-status">
+          <li>Street: <span id="gps-street">not known yet</span></li>
+          <li>Suburb: <span id="gps-suburb">not known yet</span></li>
+          <li>Last said: <span id="gps-last">nothing yet</span></li>
+          <li id="gps-moving">Finding your position</li>
+          <li id="gps-accuracy" hidden></li>
+        </ul>
+        <button type="button" id="gps-repeat">Say where I am</button>
+        <button type="button" id="gps-stop">Stop GPS monitor</button>
+      </div>
+    </div>
     <div id="map" tabindex="0" role="application" aria-label="World map" aria-describedby="map-hint">
       <span id="map-hint" class="sr-only">Arrow keys move. F11 street mode. F1 help.</span>
       <canvas id="map-canvas" aria-hidden="true"></canvas>
       <p id="map-caption" aria-hidden="true"></p>
     </div>
-    <aside id="panel" aria-label="Controls">
-      <section id="journey-section" aria-labelledby="journey-title">
+    <div id="panel">
+      <div class="panel-section" id="journey-section">
         <h2 id="journey-title" tabindex="-1">Route</h2>
         <label for="journey-from">From (leave empty to start where you are on the map)</label>
         <input id="journey-from" type="text" autocomplete="off" spellcheck="false">
@@ -112,16 +123,16 @@
             <a id="journey-food-doordash" target="_blank" rel="noopener">Search DoorDash</a>
           </p>
         </div>
-      </section>
+      </div>
 
 
-      <section id="places-section" data-street-only hidden aria-labelledby="places-title">
+      <div class="panel-section" id="places-section" data-street-only hidden>
         <h2 id="places-title" tabindex="-1">Places nearby</h2>
         <p id="places-prompt" hidden></p>
         <label for="places-category" class="picker-label">Category</label>
         <input id="places-category" type="range" class="picker">
         <p id="places-category-value" class="picker-value" aria-hidden="true"></p>
-        <button type="button" id="places-find">Find places (P)</button>
+        <button type="button" id="places-find">Find places <span class="key" aria-hidden="true">(P)</span></button>
         <div id="places-pick" hidden>
           <label for="places-list" class="picker-label">Place</label>
           <input id="places-list" type="range" class="picker">
@@ -143,7 +154,7 @@
             <a id="place-doordash" target="_blank" rel="noopener" hidden>Search DoorDash</a>
           </p>
         </div>
-      </section>
+      </div>
 
 
       <h2>Move</h2>
@@ -217,7 +228,7 @@
         <label class="check" data-expert><input type="checkbox" id="set-geo"> Name geographic features (GeoFeatures)</label>
         <label class="check"><input type="checkbox" id="set-visual"> Visual Assist (show the map)</label>
       </details>
-    </aside>
+    </div>
   </div>
 
   <dialog id="start-dialog" role="alertdialog" aria-labelledby="start-title" aria-describedby="start-desc">
