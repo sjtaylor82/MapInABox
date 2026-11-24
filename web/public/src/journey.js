@@ -464,9 +464,13 @@ function cornerText(s) {
   return `, at ${s.corner.length > 1 ? 'the corner of ' : ''}${listJoin(s.corner)}`;
 }
 
-/** One cross street: "cross Wilga Street", or "Burwood Road on your right" when it only leaves one side. */
+/**
+ * One cross street: "cross Wilga Street, which runs left and right", or
+ * "Burwood Road on your right" when it only leaves one side.
+ */
 function crossingWords(c) {
-  if (c.side === 'both' || !c.side) return `cross ${c.name}`;
+  if (c.side === 'both') return `cross ${c.name}, which runs left and right`;
+  if (!c.side) return `cross ${c.name}`;
   return `${c.name} on your ${c.side}`;
 }
 
@@ -853,7 +857,8 @@ function onGuidePosition(pos) {
     for (const c of (cur && cur.crossings) || []) {
       if (guide.crossed.has(c.name) || haversineM(lat, lon, c.lat, c.lon) > 15) continue;
       guide.crossed.add(c.name);
-      say(c.side === 'both' || !c.side ? `Crossing ${c.name}.` : `${c.name} on your ${c.side}.`);
+      say(c.side === 'both' ? `Crossing ${c.name}, which runs left and right.`
+        : !c.side ? `Crossing ${c.name}.` : `${c.name} on your ${c.side}.`);
       spoke = true;
       break;
     }

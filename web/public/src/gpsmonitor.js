@@ -208,7 +208,7 @@ function checkCorners(lat, lon, driving) {
     mon.passed.set(key, Date.now());
     const parts = names.slice(0, 2).map((n) => {
       const side = street.streetSide(c, n, mon.heading);
-      return side === 'both' ? `crossing ${n}` : side ? `${n} on your ${side}` : `${n} ahead`;
+      return side === 'both' ? `crossing ${n}, which runs left and right` : side ? `${n} on your ${side}` : `${n} ahead`;
     });
     const text = parts.join(', and ');
     tell(`${text[0].toUpperCase()}${text.slice(1)}.`);
