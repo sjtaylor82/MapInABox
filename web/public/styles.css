@@ -401,3 +401,4 @@ input[type="text"] { background: var(--bg); color: var(--fg); border: 2px solid 
 /* Get the Desktop App: a link that looks like the toolbar buttons. */
 #toolbar .toolbar-link { display: inline-flex; align-items: center; min-height: 44px; padding: 0.35rem 0.8rem; background: var(--accent); color: var(--bg); border: 2px solid var(--accent); border-radius: 6px; font-size: 1rem; text-decoration: none; }
 #toolbar .toolbar-link:hover { text-decoration: underline; }
+#toolbar .toolbar-link[hidden] { display: none; }

@@ -55,6 +55,11 @@ async function boot() {
     $('toolbar-more').hidden = !open;
     $('btn-more').setAttribute('aria-expanded', String(open));
   });
+  // Get the Desktop App: only on Windows and Mac computers, where it runs.
+  // (An iPad reports itself as a Mac, but has a touch screen.)
+  const ua = navigator.userAgent;
+  const iPad = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;
+  $('link-desktop').hidden = !(/Windows NT|Macintosh/.test(ua) && !iPad && !/CrOS|Android|iPhone|iPad/.test(ua));
   const touch = steering.isTouchDevice() && steering.steeringSupported();
   $('btn-steer').hidden = !touch;
   if (steering.isTouchDevice()) $('map-hint').textContent = '';
