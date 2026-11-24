@@ -1375,6 +1375,16 @@ async function jumpDetails() {
     $('jump-web').href = d.website.split(';')[0];
     $('jump-web').textContent = `${name} website`;
   }
+  // Uber's universal link (the app if installed, else the website), picking you up where you are.
+  const label = String(r.label).split(', ').slice(0, 2).join(', ');
+  $('jump-uber').href = `https://m.uber.com/ul/?${new URLSearchParams({
+    action: 'setPickup',
+    pickup: 'my_location',
+    'dropoff[latitude]': r.lat.toFixed(6),
+    'dropoff[longitude]': r.lon.toFixed(6),
+    'dropoff[nickname]': label,
+  })}`;
+  $('jump-uber').textContent = `Book an Uber to ${name}`;
   $('jump-details-box').hidden = false;
   $('jump-details-text').tabIndex = -1;
   $('jump-details-text').focus();
