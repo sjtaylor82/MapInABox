@@ -17,6 +17,7 @@ import { ROAD_KINDS, decodePolyline, encodePolyline } from './rome2rio.js';
 import { postcodeAt } from './postcode.js';
 import { showMenu } from './menu.js';
 import { onSlowClick } from './busy.js';
+import { addressAt } from './online.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -1342,13 +1343,32 @@ function showFoodList() {
     b.addEventListener('click', () => {
       st.foodIdx = i;
       showFoodLinks();
-      $('journey-food-chosen').textContent = `${p.name} chosen.`;
+      $('journey-food-chosen').textContent = `${p.name}. Finding the address…`;
       $('journey-food-go').focus();
+      foodAddress(p).then((addr) => {
+        if (st.foodIdx !== i) return; // another place chosen meanwhile
+        $('journey-food-chosen').textContent = addr ? `${p.name}. Address: ${addr}.` : `${p.name}. No address found.`;
+      });
     });
     li.append(b);
     return li;
   }));
   $('journey-food-chosen').textContent = '';
+}
+
+/**
+ * A food place's street address: its own from OpenStreetMap, else the nearest
+ * house number in the street map, else an address lookup at its position.
+ */
+async function foodAddress(p) {
+  if (p.addr) return p.addr;
+  if (street.areaReady(p.lat, p.lon)) {
+    const a = street.nearestAddress(p.lat, p.lon, 30);
+    if (a && a.street) return [`${a.num} ${a.street}`, p.suburb].filter(Boolean).join(', ');
+  }
+  const a = await addressAt(p.lat, p.lon).catch(() => null);
+  if (!a || !a.street) return '';
+  return [a.number ? `${a.number} ${a.street}` : a.street, a.place].filter(Boolean).join(', ');
 }
 
 function foodLabel(i) {

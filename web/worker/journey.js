@@ -240,7 +240,10 @@ async function food(request) {
         const lon = el.lon ?? el.center?.lon;
         if (!t.name || !Number.isFinite(lat) || !Number.isFinite(lon)) continue;
         const cuisine = (t.cuisine || '').split(';')[0].replace(/_/g, ' ').trim();
-        places.push({ id: `${el.type[0]}${el.id}`, name: t.name, kind: FOOD_KIND[t.amenity || t.shop] || 'food', cuisine, lat, lon });
+        // The venue's own address, when OpenStreetMap has it: "4 Parramatta Square, Parramatta".
+        const streetPart = [t['addr:housenumber'], t['addr:street']].filter(Boolean).join(' ');
+        const addr = streetPart ? [streetPart, t['addr:suburb'] || t['addr:city']].filter(Boolean).join(', ') : '';
+        places.push({ id: `${el.type[0]}${el.id}`, name: t.name, kind: FOOD_KIND[t.amenity || t.shop] || 'food', cuisine, lat, lon, addr });
       }
       return json({ places });
     } catch (err) {
