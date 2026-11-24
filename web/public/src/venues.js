@@ -1,5 +1,5 @@
 // Menus where you are: "Looks like you're at Ruse Bar and Brasserie. Menu?"
-// when the app opens at a café, restaurant or pub, and Menus nearby (under
+// when the app opens at a food venue, and Menus nearby (under
 // More) for the places to eat around the map position.
 //
 // Only speaks up when the location is good (25 metres or better) and one
@@ -80,7 +80,8 @@ function menuFor(p) {
  * to be at a place to eat. Waits for the street data (up to 8 seconds).
  */
 export async function checkVenue({ lat, lon, accuracy }) {
-  if (settings.get('venueAsk') === false || !(accuracy <= GOOD_FIX_M)) return;
+  // Expert only, like Routes and Menus nearby: Starter is just the map.
+  if (settings.get('level') !== 'expert' || settings.get('venueAsk') === false || !(accuracy <= GOOD_FIX_M)) return;
   await Promise.race([street.ensureArea(lat, lon), new Promise((r) => setTimeout(r, 8000))]);
   if (!street.areaReady(lat, lon) || document.querySelector('dialog[open]')) return;
   const guess = venueGuess(lat, lon, accuracy);
@@ -115,7 +116,7 @@ export async function openMenusNearby(lat, lon) {
   $('venue-choices').replaceChildren();
   if (!near.length) {
     const p = document.createElement('p');
-    p.textContent = `No cafés, restaurants, takeaways or pubs found within ${NEARBY_M} metres.`;
+    p.textContent = `No food venues found within ${NEARBY_M} metres.`;
     $('venue-choices').append(p);
     say(p.textContent);
     return;

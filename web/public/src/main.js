@@ -95,7 +95,7 @@ async function boot() {
   }
   goToMyLocation({
     quiet: true,
-    // At a café or restaurant? Offer its menu.
+    // At a food venue? Offer its menu (Expert).
     onFound: (fix) => { checkVenue(fix).catch(() => {}); },
     onFail: () => (hasSaved ? moved({ tone: false })
       : openJump('Where would you like to start? Type a city, country or coordinates, then press Enter.')),

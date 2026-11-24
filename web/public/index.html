@@ -28,13 +28,13 @@
       </div>
       <span class="brand" aria-hidden="true">Map in a Box</span>
       <button id="btn-position" type="button">Map position <span class="key" aria-hidden="true">(F2)</span></button>
-      <button id="btn-journey" type="button">Route</button>
+      <button id="btn-journey" type="button" data-expert>Route</button>
       <button id="btn-street" type="button" aria-pressed="false">Street mode <span class="key" aria-hidden="true">(F11)</span></button>
       <button id="btn-where" type="button">Where am I <span class="key" aria-hidden="true">(Y)</span></button>
       <button id="btn-gps" type="button" aria-pressed="false" aria-controls="gps-panel" data-expert>GPS monitor</button>
       <button id="btn-more" type="button" aria-expanded="false" aria-controls="toolbar-more">More</button>
       <div id="toolbar-more" hidden>
-        <button id="btn-menus" type="button">Menus nearby</button>
+        <button id="btn-menus" type="button" data-expert>Menus nearby</button>
         <button id="btn-help" type="button">Help <span class="key" aria-hidden="true">(F1)</span></button>
         <button id="btn-jump" type="button" data-expert>Jump <span class="key" aria-hidden="true">(J)</span></button>
         <button id="btn-settings" type="button">Settings <span class="key" aria-hidden="true">(Ctrl+,)</span></button>
@@ -61,7 +61,7 @@
       <p id="map-caption" aria-hidden="true"></p>
     </div>
     <div id="panel">
-      <div class="panel-section" id="journey-section">
+      <div class="panel-section" id="journey-section" data-expert>
         <h2 id="journey-title" tabindex="-1">Route</h2>
         <label for="journey-from">From (leave empty to start where you are on the map)</label>
         <input id="journey-from" type="text" autocomplete="off" spellcheck="false">
@@ -139,7 +139,7 @@
           <p id="places-value" class="picker-value" aria-hidden="true"></p>
           <button type="button" id="places-go">Go there</button>
           <button type="button" id="places-details">Details: address, phone, hours</button>
-          <button type="button" id="places-menu" hidden>Menu</button>
+          <button type="button" id="places-menu" hidden data-expert>Menu</button>
           <div id="place-menu" hidden></div>
           <div id="place-details" hidden>
             <p id="place-details-text"></p>
@@ -150,8 +150,8 @@
           </div>
           <p id="places-links" class="place-links">
             <a id="place-maps" target="_blank" rel="noopener">Open in Apple Maps</a>
-            <a id="place-ubereats" target="_blank" rel="noopener" hidden>Search Uber Eats</a>
-            <a id="place-doordash" target="_blank" rel="noopener" hidden>Search DoorDash</a>
+            <a id="place-ubereats" target="_blank" rel="noopener" hidden data-expert>Search Uber Eats</a>
+            <a id="place-doordash" target="_blank" rel="noopener" hidden data-expert>Search DoorDash</a>
           </p>
         </div>
       </div>
@@ -222,7 +222,7 @@
         <input id="set-street-steer" type="range" class="picker">
         <p id="set-street-steer-value" class="picker-value" aria-hidden="true"></p>
         </div>
-        <label class="check"><input type="checkbox" id="set-venue"> Offer the menu when I open the app at a café or restaurant</label>
+        <label class="check" data-expert><input type="checkbox" id="set-venue"> Offer the menu when I open the app at a food venue</label>
         <label class="check"><input type="checkbox" id="set-postcode"> Say the postcode when I stop</label>
         <label class="check"><input type="checkbox" id="set-sounds"> Country sounds and tones</label>
         <label class="check" data-expert><input type="checkbox" id="set-geo"> Name geographic features (GeoFeatures)</label>
@@ -331,7 +331,7 @@
     </table>
     <h3>Journey planner</h3>
     <p>The Journey planner button, or the Journey planner section under the map, plans a trip with Rome2Rio: flights, trains, buses, ferries and driving. Type where you are going, and where from (leave From empty to start where you are on the map), then choose Plan journey. Swipe up or down on Option (or use the arrow keys) to hear each way, with its time and price; choose Show steps to go through its legs one by one, or Read all to hear the whole plan. For a flight, the flights on the travel date are listed, non-stop first. Rome2Rio's times and prices are estimates, not timetables.</p>
-    <p>Find food along the way lists cafés, restaurants, take-aways, pubs and bakeries from OpenStreetMap in journey order: within 100 metres of the road for drive, bus and walk legs, and near each station, airport and stop. Choose one to hear it on the map, open it in Apple Maps, or search for it on Uber Eats or DoorDash.</p>
+    <p>Find food along the way lists food venues from OpenStreetMap in journey order: within 100 metres of the road for drive, bus and walk legs, and near each station, airport and stop. Choose one to hear it on the map, open it in Apple Maps, or search for it on Uber Eats or DoorDash.</p>
     <p>Some browsers keep F6 for themselves. If F6 does nothing, use I.</p>
     <p><a href="https://github.com/sjtaylor82/MapInABox/releases/latest">Download Map in a Box for Windows and macOS</a>, with street mode, walking routes, transport and much more.</p>
     <p class="small">Street data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>, through Overpass (overpass.openstreetmap.fr). When that is busy, from <a href="https://openfreemap.org/">OpenFreeMap</a> (© <a href="https://openmaptiles.org/">OpenMapTiles</a>), which has no phone numbers and fewer addresses. Journey options from <a href="https://www.rome2rio.com/">Rome2Rio</a>.</p>
