@@ -16,6 +16,7 @@ import * as street from './street.js';
 import { ROAD_KINDS, decodePolyline, encodePolyline } from './rome2rio.js';
 import { postcodeAt } from './postcode.js';
 import { showMenu } from './menu.js';
+import { onSlowClick } from './busy.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -239,7 +240,7 @@ function walkToStation() {
   const s = st.station;
   const from = st.stationFrom;
   if (!s || !from) return;
-  planWalk(from.label || '', s.name, {
+  return planWalk(from.label || '', s.name, {
     a: { lat: from.lat, lon: from.lon, label: from.label || 'where you are' },
     b: { lat: s.lat, lon: s.lon, label: s.name },
   });
@@ -1388,17 +1389,17 @@ export function initJourney(h) {
   enter('journey-from', walkClick);
   enter('journey-to', walkClick);
   enter('journey-option-list', chooseOption);
-  $('journey-plan').addEventListener('click', plan);
-  $('journey-stations-find').addEventListener('click', nearestStations);
-  $('journey-station-walk').addEventListener('click', walkToStation);
-  $('journey-walk-plan').addEventListener('click', walkClick);
-  $('journey-drive-plan').addEventListener('click', planDrive);
-  $('journey-drive-food').addEventListener('click', driveFood);
-  $('journey-walk-food').addEventListener('click', walkFood);
+  onSlowClick($('journey-plan'), 'Finding ways to make the trip', plan, { slow: true });
+  onSlowClick($('journey-stations-find'), 'Finding stations near you', nearestStations, { slow: true });
+  onSlowClick($('journey-station-walk'), 'Finding a walking route', walkToStation);
+  onSlowClick($('journey-walk-plan'), 'Finding a walking route', walkClick);
+  onSlowClick($('journey-drive-plan'), 'Finding the place', planDrive);
+  onSlowClick($('journey-drive-food'), 'Finding food along the drive', driveFood, { slow: true });
+  onSlowClick($('journey-walk-food'), 'Finding food along the walk', walkFood);
   $('journey-guide').addEventListener('click', toggleGuiding);
   $('journey-choose').addEventListener('click', chooseOption);
   $('journey-read').addEventListener('click', readAll);
-  $('journey-food-find').addEventListener('click', findFood);
+  onSlowClick($('journey-food-find'), 'Finding food along the way', findFood, { slow: true });
   $('journey-food-go').addEventListener('click', goToFood);
   $('journey-food-menu').addEventListener('click', () => {
     const p = st.food[st.foodIdx];

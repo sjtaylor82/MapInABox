@@ -8,6 +8,7 @@
 import { say } from './speech.js';
 import { postcodeAt } from './postcode.js';
 import { structure, pricedCount } from './menustructure.js';
+import { working } from './busy.js';
 
 const DELIVERY = { 'ubereats.com': 'Uber Eats', 'doordash.com': 'DoorDash', 'menulog.com.au': 'Menulog', 'deliveroo.com.au': 'Deliveroo' };
 
@@ -26,8 +27,12 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
  */
 export async function showMenu(box, place) {
   box.hidden = false;
-  box.replaceChildren();
-  say(`Looking for the menu for ${place.name}…`);
+  // Shown in the box while the search runs, with a reminder every 10 seconds.
+  const wait = document.createElement('p');
+  wait.className = 'working-status';
+  wait.textContent = `Looking for the menu for ${place.name}… This can take up to half a minute.`;
+  box.replaceChildren(wait);
+  const done = working(null, `Looking for the menu for ${place.name}`, { slow: true });
   const pc = await postcodeAt(place.lat, place.lon).catch(() => null);
   const params = new URLSearchParams({ name: place.name, suburb: (pc && pc.place) || '' });
   if (place.website) params.set('website', place.website);
@@ -36,6 +41,8 @@ export async function showMenu(box, place) {
     const r = await fetch(`api/menu?${params}`, { signal: AbortSignal.timeout(45000) });
     if (r.ok) results = (await r.json()).results || [];
   } catch { /* none */ }
+  done();
+  box.replaceChildren();
   const h = document.createElement('h3');
   h.tabIndex = -1;
   h.textContent = `Menu for ${place.name}`;

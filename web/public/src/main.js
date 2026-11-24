@@ -18,6 +18,7 @@ import { makePicker } from './picker.js';
 import { postcodeAt } from './postcode.js';
 import { showMenu } from './menu.js';
 import { checkVenue, openMenusNearby } from './venues.js';
+import { onSlowClick } from './busy.js';
 import { startMonitor, stopMonitor, monitorActive, setMonitorLevel, monitorStatus } from './gpsmonitor.js';
 import { speakableHours } from './placedetails.js';
 import { initJourney, openJourney } from './journey.js';
@@ -1517,7 +1518,7 @@ $('places-menu').addEventListener('click', () => {
   const p = placeResults[state.placeIdx || 0];
   if (p) showMenu($('place-menu'), { name: p.name, lat: p.lat, lon: p.lon, website: p.details && p.details.website });
 });
-$('places-find').addEventListener('click', () => { if (state.started) openPlaces(); });
+onSlowClick($('places-find'), 'Finding places', () => (state.started ? openPlaces() : null));
 for (const id of ['jump-dialog', 'help-dialog', 'venue-dialog']) {
   $(id).addEventListener('close', () => { if (state.started) focusMap(); });
 }

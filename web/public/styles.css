@@ -412,3 +412,7 @@ input[type="text"] { background: var(--bg); color: var(--fg); border: 2px solid 
 /* Map switched off (Expert). */
 body.map-off #map, body.map-off #move-title, body.map-off #panel .move,
 body.map-off #btn-street, body.map-off #btn-position { display: none !important; }
+
+/* Busy: a search is running for this button. */
+button.is-working { opacity: 0.6; cursor: progress; }
+.working-status { margin: 0.25rem 0 0.5rem; font-weight: 700; }
