@@ -19,10 +19,20 @@ import { menuRoute } from './menu.js';
 const PHOTON = 'https://photon.komoot.io/api/';
 const SEARCH_TTL = 7 * 24 * 3600;
 
+// Expert features answer only at expert.mapinabox.org (and on this computer
+// while developing). mapinabox.org is Starter only, and schools block the
+// expert address, so these can't be reached from a student's device.
+const EXPERT_APIS = new Set(['/api/menu', '/api/menutext', '/api/menupdf', '/api/stations', '/api/journey',
+  '/api/flights', '/api/walk', '/api/road', '/api/food']);
+const isExpertHost = (url) => /^expert\./.test(url.hostname) || ['localhost', '127.0.0.1'].includes(url.hostname);
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
+    if (EXPERT_APIS.has(url.pathname) && !isExpertHost(url)) {
+      return json({ error: 'This is part of Expert mode, at expert.mapinabox.org.' }, 403);
+    }
     const menuAnswer = menuRoute(request, url, env, ctx);
     if (menuAnswer) return menuAnswer;
     const planned = journeyRoute(request, url, env, ctx);

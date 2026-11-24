@@ -16,6 +16,8 @@
   "workers_dev": true,
   "routes": [
     { "pattern": "mapinabox.org", "custom_domain": true },
-    { "pattern": "www.mapinabox.org", "custom_domain": true }
+    { "pattern": "www.mapinabox.org", "custom_domain": true },
+    // The full app, with Expert mode. Schools block this address; mapinabox.org is Starter only.
+    { "pattern": "expert.mapinabox.org", "custom_domain": true }
   ]
 }

@@ -1203,7 +1203,14 @@ function focusMap() {
 }
 
 /** Starter (the default) or Expert. */
-const level = () => (settings.get('level') === 'expert' ? 'expert' : 'starter');
+/**
+ * Expert is only offered at expert.mapinabox.org (and on this computer while
+ * developing). Everywhere else, mapinabox.org included, is Starter only, with
+ * no switch to change it: schools block the expert address in their web
+ * filters, so students can't reach Expert at all.
+ */
+const EXPERT_SITE = /^expert\./.test(location.hostname) || ['localhost', '127.0.0.1'].includes(location.hostname);
+const level = () => (EXPERT_SITE && settings.get('level') === 'expert' ? 'expert' : 'starter');
 
 /** Map on or off (Expert): off hides the map and Move, and silences its sounds. Starter always has it on. */
 const mapOn = () => level() !== 'expert' || settings.get('mapOn') !== false;
@@ -1539,6 +1546,11 @@ $('gps-repeat').addEventListener('click', () => {
   say([s.street && `On ${s.street}`, s.suburb, s.moving].filter(Boolean).join(', ') + '.');
 });
 // Starter or Expert: a switch, which VoiceOver reads as "Expert mode, switch, off".
+// Starter-only site: no Expert switch at all.
+if (!EXPERT_SITE) {
+  $('set-expert').disabled = true;
+  $('set-expert').closest('label').hidden = true;
+}
 $('set-expert').checked = level() === 'expert';
 $('set-expert').addEventListener('change', (e) => {
   settings.set('level', e.target.checked ? 'expert' : 'starter');
