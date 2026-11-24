@@ -1385,7 +1385,8 @@ async function foodAddress(p) {
   }
   const a = await addressAt(p.lat, p.lon).catch(() => null);
   if (!a || !a.street) return '';
-  return [a.number ? `${a.number} ${a.street}` : a.street, a.place].filter(Boolean).join(', ');
+  // The suburb the list already gives (the lookup's place can be the city, "Sydney").
+  return [a.number ? `${a.number} ${a.street}` : a.street, p.suburb || a.place].filter(Boolean).join(', ');
 }
 
 function foodLabel(i) {
