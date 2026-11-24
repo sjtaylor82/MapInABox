@@ -442,8 +442,19 @@ function streetOf(s) {
  * "Arrive at Factory 51, on your right", or "…, on the other side of the
  * road, on your right" when it's across the street from your footpath.
  */
+/** The destination's street address when known: "51 Holdsworth Street", or ''. */
+function destinationAddress(b) {
+  const parts = String(b.label || '').split(', ');
+  const numbered = parts.slice(1).find((x) => /^\d/.test(x));
+  if (numbered) return numbered;
+  const a = street.areaReady(b.lat, b.lon) ? street.nearestAddress(b.lat, b.lon, 40) : null;
+  return a && a.street ? `${a.num} ${a.street}` : '';
+}
+
 function arriveText(s) {
-  const name = st.walk && st.walk.toLabel ? st.walk.toLabel.split(', ')[0] : 'your destination';
+  const base = st.walk && st.walk.toLabel ? st.walk.toLabel.split(', ')[0] : 'your destination';
+  const addr = st.walk && st.walk.toAddress && st.walk.toAddress !== base ? st.walk.toAddress : '';
+  const name = addr ? `${base}, ${addr}` : base;
   const side = s.modifier === 'left' || s.modifier === 'right' ? s.modifier : s.modifier === 'straight' ? 'ahead' : '';
   if (!side) return `Arrive at ${name}`;
   if (side === 'ahead') return `Arrive at ${name}, straight ahead`;
@@ -594,6 +605,43 @@ async function addTrafficControls(res) {
   }
 }
 
+/**
+ * Places you pass close by on your side (within 15 metres of the route: a
+ * landmark to confirm you're on track), and bus stops (within 20 metres).
+ * Stored as res.passes: [{ name, along, side, bus }], in walking order.
+ */
+const LANDMARK_CATEGORIES = new Set(['food', 'shopping', 'community', 'health', 'arts', 'accommodation', 'parks', 'trains']);
+function addLandmarks(res) {
+  const line = decodePolyline(res.line);
+  const cum = cumulative(line);
+  const seen = new Set();
+  const passes = [];
+  for (let a = 0; a <= cum[cum.length - 1]; a += 10) {
+    const [la, lo] = pointAlong(line, cum, a);
+    for (const p of street.placesNear(la, lo, 20, 40)) {
+      const bus = /bus stop/i.test(p.kind || '');
+      if (!bus && !LANDMARK_CATEGORIES.has(p.category)) continue;
+      const key = bus ? `bus|${p.lat.toFixed(4)},${p.lon.toFixed(4)}` : p.name.toLowerCase();
+      if (seen.has(key)) continue;
+      const at = alongLine(line, cum, p.lat, p.lon);
+      if (at.cross > (bus ? 20 : 15)) continue;
+      seen.add(key);
+      passes.push({ name: p.name, along: at.along, side: at.side, bus });
+    }
+  }
+  res.passes = passes.sort((x, y) => x.along - y.along);
+}
+
+/** ", passing Burwood Hotel on your right and a bus stop on your left": at most two, between from and to metres. */
+function passingText(from, to) {
+  const here = ((st.walk && st.walk.passes) || []).filter((p) => p.along > from + 5 && p.along < to - 5);
+  if (!here.length) return '';
+  const marks = here.filter((p) => !p.bus);
+  const bus = here.find((p) => p.bus);
+  const pick = [...marks.slice(0, bus ? 1 : 2), ...(bus ? [bus] : [])].sort((x, y) => x.along - y.along);
+  return `, passing ${pick.map((p) => `${p.bus ? 'a bus stop' : p.name} on your ${p.side}`).join(' and ')}`;
+}
+
 async function addCrossStreets(res) {
   const line = decodePolyline(res.line);
   const cum = cumulative(line);
@@ -684,17 +732,18 @@ function showSteps() {
     li.dataset.step = String(i);
     const crossings = s.crossings || [];
     if (!crossings.length || s.along == null) {
-      li.textContent = stepText(s);
+      const passing = s.along != null && s.nextAlong != null ? passingText(s.along, s.nextAlong) : '';
+      li.textContent = passing ? stepText(s).replace(/\.$/, `${passing}.`) : stepText(s);
       items.push(li);
       return;
     }
-    li.textContent = `${stepAction(s)}${cornerText(s)}, then walk ${metresTo(s.along, crossings[0].along)}.`;
+    li.textContent = `${stepAction(s)}${cornerText(s)}, then walk ${metresTo(s.along, crossings[0].along)}${passingText(s.along, crossings[0].along)}.`;
     items.push(li);
     crossings.forEach((c, k) => {
       const next = k + 1 < crossings.length ? crossings[k + 1].along : s.nextAlong;
       const words = crossingWords(c);
       const cli = document.createElement('li');
-      cli.textContent = `${words[0].toUpperCase()}${words.slice(1)}${next != null ? `, then walk ${metresTo(c.along, next)}` : ''}.`;
+      cli.textContent = `${words[0].toUpperCase()}${words.slice(1)}${next != null ? `, then walk ${metresTo(c.along, next)}${passingText(c.along, next)}` : ''}.`;
       items.push(cli);
     });
   });
@@ -778,9 +827,11 @@ async function planWalk(from, to, known = null) {
   setPrompt('Finding the cross streets…');
   await addCrossStreets(res);
   await addTrafficControls(res);
+  addLandmarks(res);
   if (seq !== st.seq) return;
   st.walk = res;
   st.walk.toLabel = b.label;
+  st.walk.toAddress = destinationAddress(b);
   st.stepIdx = 0;
   showSteps();
   showOnly('journey-walk');
