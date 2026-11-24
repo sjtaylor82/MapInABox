@@ -1447,8 +1447,8 @@ function setUpPickers() {
   pickers.push(makePicker($('set-speech'), {
     shown: $('set-speech-value'),
     items: () => [
-      { value: 'screenreader', label: 'My screen reader' },
-      { value: 'voice', label: "The browser's voice" },
+      { value: 'screenreader', label: 'My screen reader (VoiceOver, TalkBack, NVDA, JAWS)' },
+      { value: 'voice', label: 'The built-in voice, for use without a screen reader' },
       { value: 'both', label: 'Both' },
     ],
     get: () => settings.get('speech'),
