@@ -10,8 +10,12 @@
   },
   // The menu search Worker (holds the Serper key), called directly: one
   // Worker cannot fetch another's workers.dev address.
-  "services": [{ "binding": "MENU_SEARCH", "service": "miab-menu-search" }]
-  // Serve it from your own domain rather than *.workers.dev, which many school
-  // filters block. Add this once the domain is on Cloudflare:
-  // "routes": [{ "pattern": "web.example.org", "custom_domain": true }]
+  "services": [{ "binding": "MENU_SEARCH", "service": "miab-menu-search" }],
+  // Served from our own domain rather than *.workers.dev, which many school
+  // filters block. (mapinabox.miab.workers.dev keeps working too.)
+  "workers_dev": true,
+  "routes": [
+    { "pattern": "mapinabox.org", "custom_domain": true },
+    { "pattern": "www.mapinabox.org", "custom_domain": true }
+  ]
 }
