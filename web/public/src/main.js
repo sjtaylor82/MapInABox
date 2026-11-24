@@ -64,6 +64,11 @@ async function boot() {
   const unlockOnce = () => {
     audio.unlock();
     unlockVoice();
+    // The map may already be somewhere (your location, found before any tap):
+    // start that country's sound now that sound is allowed.
+    if (state.mode === 'world' && state.info && state.info.country) {
+      audio.playPlace(state.info.onLand && state.info.country !== 'Open Water' ? state.info.country : 'ocean', state.info.continent);
+    }
     for (const t of ['pointerdown', 'keydown', 'touchend']) document.removeEventListener(t, unlockOnce, true);
   };
   for (const t of ['pointerdown', 'keydown', 'touchend']) document.addEventListener(t, unlockOnce, true);
