@@ -92,12 +92,25 @@ async function boot() {
     state.lat = saved.lat;
     state.lon = saved.lon;
   }
+  // No location within 5 seconds (blocked by a school, or the Allow question
+  // not answered): go to where you left off, or ask where to start. If the
+  // location turns up later, and you haven't moved or typed meanwhile, go there.
+  let fellBack = false;
+  let seqAtFallback = -1;
+  const fallBack = () => {
+    if (fellBack) return;
+    fellBack = true;
+    if (hasSaved) moved({ tone: false });
+    else openJump('Where would you like to start? Type a city, country or coordinates, then press Enter.');
+    seqAtFallback = state.seq;
+  };
+  const fallbackTimer = setTimeout(fallBack, 5000);
   goToMyLocation({
     quiet: true,
+    accept: () => !fellBack || (state.seq === seqAtFallback && !$('jump-input').value.trim()),
     // At a food venue? Offer its menu (Expert).
-    onFound: (fix) => { checkVenue(fix).catch(() => {}); },
-    onFail: () => (hasSaved ? moved({ tone: false })
-      : openJump('Where would you like to start? Type a city, country or coordinates, then press Enter.')),
+    onFound: (fix) => { clearTimeout(fallbackTimer); checkVenue(fix).catch(() => {}); },
+    onFail: () => { clearTimeout(fallbackTimer); fallBack(); },
   });
 }
 
@@ -262,12 +275,13 @@ function devicePosition() {
 }
 
 /** Move the map to where the device is. quiet: no "Finding your location" first. */
-async function goToMyLocation({ quiet = false, onFail = () => {}, onFound = () => {} } = {}) {
+async function goToMyLocation({ quiet = false, onFail = () => {}, onFound = () => {}, accept = () => true } = {}) {
   if (locating) return;
   locating = true;
   if (!quiet) say('Finding your location…');
   try {
     const { lat, lon, accuracy } = await devicePosition();
+    if (!accept()) return; // arrived too late: you've already gone somewhere
     if (document.querySelector('dialog[open]')) document.querySelector('dialog[open]').close();
     const near = accuracy <= 1000 ? '' : ' Only roughly, perhaps from your internet connection.';
     jumpTo(lat, lon, `You are here.${near}`);
