@@ -41,11 +41,15 @@ export async function streetTile(ty, tx) {
   let bytes = null;
   if (await hasApi()) {
     // First choice: full OpenStreetMap data through the Worker (Overpass),
-    // with addresses, phone numbers and opening hours.
-    try {
-      const r = await fetch(`api/area/${ZOOM}/${tx}/${ty}`, { signal: AbortSignal.timeout(30000) });
-      if (r.ok) return await r.json();
-    } catch { /* fall back to the map tiles */ }
+    // with addresses, phone numbers and opening hours. A part of the map
+    // asked for the first time can take 10 to 20 seconds, so after 5 seconds
+    // use the OpenFreeMap tile (street names, fewer addresses) instead. The
+    // OpenStreetMap request carries on, so the Worker stores it and it is
+    // quick next time.
+    const full = fetch(`api/area/${ZOOM}/${tx}/${ty}`, { signal: AbortSignal.timeout(60000) })
+      .then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    const data = await Promise.race([full, new Promise((r) => setTimeout(() => r(undefined), 5000))]);
+    if (data) return data;
     try {
       const r = await fetch(`api/tile/${ZOOM}/${tx}/${ty}`);
       if (r.ok) bytes = new Uint8Array(await r.arrayBuffer());
