@@ -22,7 +22,7 @@ import { onSlowClick, working } from './busy.js';
 import { describeLocation } from './placeinfo.js';
 import { startMonitor, stopMonitor, monitorActive, setMonitorLevel, monitorStatus } from './gpsmonitor.js';
 import { speakableHours } from './placedetails.js';
-import { initJourney, walkTo } from './journey.js';
+import { initJourney, walkTo, driveTo } from './journey.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -1587,12 +1587,16 @@ function chooseSelected() {
 }
 $('jump-go').addEventListener('click', chooseSelected);
 onSlowClick($('jump-details'), 'Looking it up', jumpDetails);
-$('jump-walk').addEventListener('click', () => {
-  const r = jumpResults[state.jumpIdx || 0];
-  if (!r || !Number.isFinite(r.lat)) return;
-  $('jump-dialog').close();
-  walkTo({ lat: r.lat, lon: r.lon, label: String(r.label).split(', ').slice(0, 2).join(', ') });
-});
+// Walk there / Drive there: the Navigation section takes over from Details.
+for (const [id, go] of [['jump-walk', walkTo], ['jump-drive', driveTo]]) {
+  $(id).addEventListener('click', () => {
+    const r = jumpResults[state.jumpIdx || 0];
+    if (!r || !Number.isFinite(r.lat)) return;
+    state.handOff = true;
+    $('jump-dialog').close();
+    go({ lat: r.lat, lon: r.lon, label: String(r.label).split(', ').slice(0, 2).join(', ') });
+  });
+}
 $('places-list').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); choosePlace(); }
 });
@@ -1604,7 +1608,11 @@ $('places-menu').addEventListener('click', () => {
 });
 onSlowClick($('places-find'), 'Finding places', () => (state.started ? openPlaces() : null));
 for (const id of ['jump-dialog', 'help-dialog', 'venue-dialog']) {
-  $(id).addEventListener('close', () => { if (state.started) focusMap(); });
+  $(id).addEventListener('close', () => {
+    // Walk there / Drive there move focus to the Navigation section themselves.
+    if (state.handOff) { state.handOff = false; return; }
+    if (state.started) focusMap();
+  });
 }
 for (const btn of document.querySelectorAll('[data-close]')) {
   btn.addEventListener('click', () => btn.closest('dialog').close());

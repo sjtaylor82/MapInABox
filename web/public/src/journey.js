@@ -274,6 +274,8 @@ export async function walkTo(place) {
   const me = await nearYou(here);
   $('journey-to').value = place.label;
   $('journey-title').scrollIntoView({ block: 'start' });
+  // Somewhere to be while the route is found (it then moves to the route's heading).
+  $('journey-title').focus();
   return planWalk('', place.label, {
     a: { lat: me.lat, lon: me.lon, label: me === here ? (here.label || 'the map position') : 'your location' },
     b: { lat: place.lat, lon: place.lon, label: place.label },
@@ -425,6 +427,26 @@ async function planDrive() {
     setPrompt(msg);
     return say(msg);
   }
+  showDrive(a, b);
+}
+
+/** Drive from where you are to a place already found (Jump's Drive there). */
+export async function driveTo(place) {
+  const here = hooks.getHere();
+  const me = await nearYou(here);
+  $('journey-to').value = place.label;
+  $('journey-title').scrollIntoView({ block: 'start' });
+  st.seq++;
+  stopGuiding(false);
+  showOnly();
+  showDrive(
+    { lat: me.lat, lon: me.lon, label: me === here ? (here.label || 'the map position') : 'your location' },
+    { lat: place.lat, lon: place.lon, label: place.label },
+  );
+}
+
+/** The Apple Maps and Google Maps driving links from a to b. */
+function showDrive(a, b) {
   const s = `${a.lat.toFixed(6)},${a.lon.toFixed(6)}`;
   const d = `${b.lat.toFixed(6)},${b.lon.toFixed(6)}`;
   $('journey-drive-apple').href = `https://maps.apple.com/?saddr=${s}&daddr=${d}&dirflg=d`;
