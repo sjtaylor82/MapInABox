@@ -344,14 +344,14 @@ async function locate(text, here, nearOnly = true, maxM = WALK_MAX_M) {
  */
 /**
  * A place typed in From or To. One match: that one. Several: they're listed
- * under a heading that gets focus ("3 places called Vision Australia: choose
- * where you start"), nearest the map position first, and the chosen one is
+ * under a heading that gets focus ("Choose start" or "Choose destination"),
+ * nearest first, and the chosen one is
  * returned. role: 'start' or 'destination'.
  */
 async function choosePlace(text, near, maxM, role = 'destination') {
   const list = (await candidates(text, near, true, maxM)).slice(0, 10);
   if (list.length <= 1) return list[0] || null;
-  const question = `${list.length} places called ${text}: choose where you ${role === 'start' ? 'start' : 'are going'}`;
+  const question = role === 'start' ? 'Choose start' : 'Choose destination';
   const box = $('journey-choices');
   const ul = $('journey-choice-list');
   return new Promise((resolve) => {
