@@ -333,7 +333,7 @@ async function crossings(request) {
   }
   const around = `(around:20,${pts.map(([a, b]) => `${a.toFixed(5)},${b.toFixed(5)}`).join(',')})`;
   const query = `[out:json][timeout:20];(node["highway"="traffic_signals"]${around};node["highway"="crossing"]${around};`
-    + `node["crossing"="traffic_signals"]${around};);out tags;`;
+    + `node["crossing"="traffic_signals"]${around};);out;`; // "out" includes each node's position
   for (const endpoint of FOOD_OVERPASS) {
     try {
       const res = await fetch(endpoint, {
