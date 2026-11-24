@@ -64,6 +64,7 @@ export async function startMonitor(hooks = {}, level = 'suburbs') {
   Object.assign(mon, {
     hooks, level, last: null, heading: null, speed: 0, street: '', candidate: '', candidateCount: 0,
     passed: new Map(), suburb: '', suburbAt: null, waitingSaid: false, lastSaid: '', accuracy: null,
+    announced: false,
   });
   report();
   say('GPS monitor on. Finding your position…');
@@ -135,15 +136,40 @@ export function onFix(pos) {
   if (!street.areaReady(lat, lon)) {
     if (!mon.loading) {
       mon.loading = true;
-      street.ensureRadius(lat, lon, 400).catch(() => {}).finally(() => { mon.loading = false; });
+      street.ensureRadius(lat, lon, 400).catch(() => {}).finally(() => {
+        mon.loading = false;
+        // Standing still, the phone may not report again: say where you are now.
+        if (mon.watch !== null && !mon.announced && mon.last && street.areaReady(mon.last.lat, mon.last.lon)) {
+          announceStart(mon.last.lat, mon.last.lon);
+        }
+      });
     }
     return;
   }
+  if (!mon.announced) return announceStart(lat, lon);
   const driving = mon.speed > DRIVE_SPEED;
   checkStreet(lat, lon, driving);
   if (mon.level !== 'streets' && mon.heading !== null && mon.street) checkCorners(lat, lon, driving);
   if (mon.level === 'suburbs') checkSuburb(lat, lon);
   report();
+}
+
+/**
+ * Where you are, as soon as the monitor has a good position and the streets
+ * around it: "On Shore Street, Cleveland." Nobody needs to move first.
+ */
+async function announceStart(lat, lon) {
+  mon.announced = true;
+  const near = street.nearestStreet(lat, lon, 40);
+  const pc = await postcodeAt(lat, lon).catch(() => null);
+  if (mon.watch === null) return;
+  if (pc && pc.place) {
+    mon.suburb = pc.place;
+    mon.suburbAt = { lat, lon };
+  }
+  if (near && near.name) mon.street = near.name;
+  const where = [near && near.name ? `${near.dist <= 12 ? 'On' : 'Near'} ${near.name}` : '', pc && pc.place].filter(Boolean).join(', ');
+  tell(where ? `${where}.` : 'Position found. No street close by.');
 }
 
 /** A new street: said once you are clearly on it (two fixes in a row, or very close to it). */
