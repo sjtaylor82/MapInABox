@@ -24,9 +24,8 @@
   <div id="app" hidden>
     <header id="toolbar">
       <div id="level-bar">
-        <label for="set-level" class="picker-label">Mode</label>
-        <input id="set-level" type="range" class="picker">
-        <p id="set-level-value" class="picker-value" aria-hidden="true"></p>
+        <label class="switch"><input type="checkbox" role="switch" id="set-expert" aria-describedby="set-expert-hint"> Expert mode</label>
+        <span id="set-expert-hint" class="switch-hint">Adds the GPS monitor, Jump and more settings.</span>
       </div>
       <span class="brand" aria-hidden="true">Map in a Box</span>
       <button id="btn-position" type="button">Map position (F2)</button>

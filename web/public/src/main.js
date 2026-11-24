@@ -1306,19 +1306,6 @@ function setUpPickers() {
     get: () => state.jumpIdx || 0,
     set: (i) => { state.jumpIdx = i; },
   });
-  pickers.push(makePicker($('set-level'), {
-    shown: $('set-level-value'),
-    items: () => [
-      { value: 'starter', label: 'Starter' },
-      { value: 'expert', label: 'Expert: GPS monitor and more settings' },
-    ],
-    get: () => level(),
-    set: (v) => {
-      settings.set('level', v);
-      applyLevel();
-      say(v === 'expert' ? 'Expert. GPS monitor, Jump and more settings are shown.' : 'Starter. Fewer buttons and settings.');
-    },
-  }));
   pickers.push(makePicker($('set-gps'), {
     shown: $('set-gps-value'),
     items: () => [
@@ -1445,6 +1432,12 @@ for (const btn of document.querySelectorAll('[data-close]')) {
 }
 $('btn-jump').addEventListener('click', () => openJump());
 $('btn-gps').addEventListener('click', toggleMonitor);
+// Starter or Expert: a switch, which VoiceOver reads as "Expert mode, switch, off".
+$('set-expert').checked = level() === 'expert';
+$('set-expert').addEventListener('change', (e) => {
+  settings.set('level', e.target.checked ? 'expert' : 'starter');
+  applyLevel();
+});
 $('btn-menus').addEventListener('click', () => { if (state.started) openMenusNearby(state.lat, state.lon); });
 $('btn-help').addEventListener('click', openHelp);
 $('btn-settings').addEventListener('click', openSettings);
