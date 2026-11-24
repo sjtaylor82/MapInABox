@@ -51,6 +51,42 @@ function recentlyDismissed(places) {
   return places.some((p) => d.keys.includes(placeKey(p)));
 }
 
+/**
+ * A place's street address, short: "164 Cavendish Road", or '' when unknown.
+ * Its own address on the map, else one looked up (lookUpAddresses), else
+ * a house number right beside it (any further and it's often next door's).
+ */
+function shortAddress(p) {
+  const own = ((p.details && p.details.address) || '').split(', ')[0];
+  if (/\d/.test(own) && /[a-z]{3}/i.test(own)) return own;
+  if (p.lookedUp) return p.lookedUp;
+  const a = street.nearestAddress(p.lat, p.lon, 12);
+  return a && a.street ? `${a.num} ${a.street}` : '';
+}
+
+/** Look up the addresses the map doesn't have (HERE, through the Worker), six at a time, for up to 8 seconds. */
+async function lookUpAddresses(places) {
+  const todo = places.filter((p) => !/\d/.test(((p.details && p.details.address) || '').split(', ')[0]));
+  const one = async (p) => {
+    const q = new URLSearchParams({ name: p.name, lat: p.lat.toFixed(6), lon: p.lon.toFixed(6) });
+    const r = await fetch(`api/venueaddr?${q}`, { signal: AbortSignal.timeout(8000) }).catch(() => null);
+    const j = r && r.ok ? await r.json().catch(() => ({})) : {};
+    if (j.addr) p.lookedUp = j.addr;
+  };
+  const all = (async () => {
+    for (let i = 0; i < todo.length; i += 6) await Promise.all(todo.slice(i, i + 6).map(one));
+  })();
+  await Promise.race([all, new Promise((r) => setTimeout(r, 8000))]);
+}
+
+/** "Yami Sushi, restaurant, 164 Cavendish Road, 120 metres north" */
+function venueText(p) {
+  const addr = shortAddress(p);
+  if (!addr) return street.placeText(p);
+  const [name, kind, ...rest] = street.placeText(p).split(', ');
+  return [name, kind, addr, ...rest].join(', ');
+}
+
 function button(text, onClick) {
   const b = document.createElement('button');
   b.type = 'button';
@@ -88,17 +124,20 @@ export async function checkVenue({ lat, lon, accuracy }) {
   if (!guess) return;
   const places = guess.at ? [guess.at] : guess.choices;
   if (recentlyDismissed(places)) return;
+  await lookUpAddresses(places);
+  if (document.querySelector('dialog[open]')) return;
   const notHere = button(guess.at ? 'Not here' : 'None of these', () => {
     settings.set('venueDismissed', { t: Date.now(), keys: places.map(placeKey) });
     $('venue-dialog').close();
   });
   if (guess.at) {
     const p = guess.at;
-    openDialog(`Looks like you're at ${p.name}.`);
+    const addr = shortAddress(p);
+    openDialog(`Looks like you're at ${p.name}${addr ? `, ${addr}` : ''}.`);
     $('venue-choices').append(button(`Menu for ${p.name}`, () => menuFor(p)), notHere);
   } else {
     openDialog('Looks like you\'re at one of these.');
-    for (const p of places) $('venue-choices').append(button(`${p.name}, ${p.kind}`, () => menuFor(p)));
+    for (const p of places) $('venue-choices').append(button([p.name, p.kind, shortAddress(p)].filter(Boolean).join(', '), () => menuFor(p)));
     $('venue-choices').append(notHere);
   }
   $('venue-choices').querySelector('button').focus();
@@ -113,6 +152,7 @@ export async function openMenusNearby(lat, lon) {
   $('venue-title').focus();
   await Promise.race([street.ensureRadius(lat, lon, NEARBY_M), new Promise((r) => setTimeout(r, 15000))]);
   const near = eatingNear(lat, lon, NEARBY_M, NEARBY_MAX);
+  await lookUpAddresses(near);
   $('venue-choices').replaceChildren();
   if (!near.length) {
     const p = document.createElement('p');
@@ -125,7 +165,7 @@ export async function openMenusNearby(lat, lon) {
   ul.className = 'result-list';
   for (const p of near) {
     const li = document.createElement('li');
-    li.append(button(street.placeText(p), () => menuFor(p)));
+    li.append(button(venueText(p), () => menuFor(p)));
     ul.append(li);
   }
   $('venue-choices').append(ul);

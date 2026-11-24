@@ -22,7 +22,7 @@ const SEARCH_TTL = 7 * 24 * 3600;
 // Expert features answer only at expert.mapinabox.org (and on this computer
 // while developing). mapinabox.org is Starter only, and schools block the
 // expert address, so these can't be reached from a student's device.
-const EXPERT_APIS = new Set(['/api/menu', '/api/menutext', '/api/menupdf', '/api/menuphotos', '/api/menuimage', '/api/stations', '/api/journey',
+const EXPERT_APIS = new Set(['/api/menu', '/api/menutext', '/api/menupdf', '/api/menuphotos', '/api/menuimage', '/api/venueaddr', '/api/stations', '/api/journey',
   '/api/flights', '/api/walk', '/api/road', '/api/food', '/api/crossings']);
 // wrangler dev presents requests as the first custom domain, so testing the
 // Expert features on this computer needs `--var DEV_EXPERT:1`.
@@ -48,6 +48,7 @@ export default {
     const tile = url.pathname.match(/^\/api\/tile\/(\d+)\/(\d+)\/(\d+)$/);
     if (tile) return mapTile(Number(tile[1]), Number(tile[2]), Number(tile[3]), ctx);
     if (url.pathname === '/api/place') return placeDetails(url, env, ctx);
+    if (url.pathname === '/api/venueaddr') return venueAddress(url, env, ctx);
     const area = url.pathname.match(/^\/api\/area\/(\d+)\/(\d+)\/(\d+)$/);
     if (area) return streetArea(Number(area[1]), Number(area[2]), Number(area[3]), ctx);
     return json({ error: 'Not found' }, 404);
@@ -357,7 +358,46 @@ async function hereDetails(apiKey, name, lat, lon) {
     // Not HERE's "open now": answers are kept for a day, so it would go stale.
     hoursText = (oh.text || []).join('; ');
   }
-  return { phone, website, hoursText, address: (item.address && item.address.label) || '' };
+  const a = item.address || {};
+  // "164 Cavendish Road": just the street address, abbreviations spelt out.
+  const streetName = String(a.street || '').replace(/\b([A-Za-z]+)\.?$/, (w, x) => STREET_TYPES[x.toLowerCase()] || w);
+  const street = a.houseNumber && streetName ? `${a.houseNumber} ${streetName}` : '';
+  return { phone, website, hoursText, address: a.label || '', street };
+}
+
+const STREET_TYPES = {
+  rd: 'Road', st: 'Street', ave: 'Avenue', av: 'Avenue', pde: 'Parade', hwy: 'Highway', dr: 'Drive', tce: 'Terrace',
+  ct: 'Court', pl: 'Place', cres: 'Crescent', cr: 'Crescent', blvd: 'Boulevard', bvd: 'Boulevard', ln: 'Lane',
+  cl: 'Close', esp: 'Esplanade', cct: 'Circuit', gr: 'Grove', sq: 'Square', mall: 'Mall', way: 'Way', wy: 'Way',
+};
+
+/**
+ * GET /api/venueaddr?name=&lat=&lon=  A shop's or cafe's street address from
+ * HERE: { addr: "164 Cavendish Road" } ('' when unknown). For lists of places
+ * (Menus nearby), where the nearest house number on the map is often the
+ * shop next door.
+ */
+async function venueAddress(url, env, ctx) {
+  const name = (url.searchParams.get('name') || '').trim().slice(0, 200);
+  const lat = Number(url.searchParams.get('lat'));
+  const lon = Number(url.searchParams.get('lon'));
+  if (!name || !Number.isFinite(lat) || !Number.isFinite(lon)) return json({ error: 'Bad request' }, 400);
+  const cache = caches.default;
+  const key = new Request(`https://cache.mapinabox/venueaddr/v2/${encodeURIComponent(name)}/${lat.toFixed(4)}/${lon.toFixed(4)}`);
+  const hit = await cache.match(key);
+  if (hit) return hit;
+  if (!env.HERE_API_KEY) return json({ addr: '' });
+  let here;
+  try {
+    here = await hereDetails(env.HERE_API_KEY, name, lat, lon);
+  } catch {
+    return json({ error: 'The address service is busy.' }, 502);
+  }
+  const out = new Response(JSON.stringify({ addr: (here && here.street) || '' }), {
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': `public, max-age=${30 * 24 * 3600}` },
+  });
+  ctx.waitUntil(cache.put(key, out.clone()));
+  return out;
 }
 
 function clampInt(v, min, max, dflt) {
