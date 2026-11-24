@@ -96,6 +96,9 @@ function labelMatchesVenue(label, t) {
   return t.distinctive.some((w) => label.includes(w));
 }
 
+// Review, listing and social sites: they copy menus, which may be old or guessed.
+const LISTING_SITES = /(^|\.)(wheree|restaurantguru|yelp|tripadvisor|zomato|mapquest|facebook|instagram|tiktok|google|brisbane\.guide|menulist|sirved|menupix|allmenus)(\.|$)/;
+
 const isDelivery = (host) => DELIVERY_HOSTS.some((d) => host === d || host.endsWith(`.${d}`));
 
 /** Delivery store pages clearly in another country (as _delivery_wrong_country). */
@@ -115,16 +118,28 @@ function classify(item, t, suburb) {
   try { path = new URL(item.url).pathname.toLowerCase(); } catch { return null; }
   if (isDelivery(host)) {
     if (wrongCountry(host, path)) return null;
+    // One store's page, not a list of restaurants in an area.
+    if (!/\/store\/|\/restaurants-|\/menu\//.test(path)) return null;
     // Delivery sites hold thousands of venues and branches: keep a page only
     // when it names this venue and this suburb.
     const text = compactOf(`${item.title} ${item.url} ${item.snippet}`);
-    const venue = (t.compact && text.includes(t.compact)) || t.distinctive.some((w) => text.includes(w));
+    const words = t.distinctive.filter((w) => text.includes(w)).length;
+    const venue = (t.compact && text.includes(t.compact)) || words >= Math.min(2, t.distinctive.length);
     const place = !suburb || text.includes(compactOf(suburb));
     return venue && place ? 'delivery' : null;
   }
   if (labelMatchesVenue(mainLabel(host), t)) {
     const hay = `${path} ${String(item.title || '').toLowerCase()}`;
     if (MENU_SIGNALS.some((s) => hay.includes(s))) return 'own';
+  }
+  // The venue's page on an online ordering service (hungryhungry, Mr Yum and
+  // the like): its full name is in the address, and the page is a menu or
+  // ordering page. Review and listing sites are left out. A chain's branch is
+  // told apart by its suburb, as for delivery sites.
+  if (t.compact.length >= 8 && !LISTING_SITES.test(host) && compactOf(host + path).includes(t.compact)
+    && MENU_SIGNALS.some((s) => path.includes(s))) {
+    const text = compactOf(`${item.title} ${item.url} ${item.snippet}`);
+    if (!suburb || text.includes(compactOf(suburb))) return 'own';
   }
   return null;
 }
@@ -354,7 +369,7 @@ async function menu(url, env, ctx) {
   const website = (url.searchParams.get('website') || '').trim().slice(0, 300);
   if (!name) return json({ error: 'Bad request' }, 400);
   const cache = caches.default;
-  const key = new Request(`https://cache.mapinabox/menu/v5/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(suburb.toLowerCase())}`);
+  const key = new Request(`https://cache.mapinabox/menu/v8/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(suburb.toLowerCase())}`);
   const hit = await cache.match(key);
   if (hit) return hit;
 
@@ -363,6 +378,18 @@ async function menu(url, env, ctx) {
   try {
     raw = await search(env, `"${name}"${suburb ? ` ${suburb}` : ''} menu Australia`);
   } catch { /* still probe the website below */ }
+  // No delivery page in the top results: search again for them.
+  const isDel = (item) => isDelivery(hostOf(item.url));
+  const found = new Set(raw.filter((item) => isDel(item) && classify(item, t, suburb)).map((item) => mainLabel(hostOf(item.url))));
+  if (!(found.has('ubereats') && found.has('doordash'))) {
+    try {
+      // Loosely worded: delivery sites spell names their own way ("Pizza and
+      // Pasta" for "Pizza & Pasta"), so an exact-name search misses them.
+      const loose = name.replace(/&/g, ' and ').replace(/\s+/g, ' ').trim();
+      const more = await search(env, `${loose}${suburb ? ` ${suburb}` : ''} ubereats doordash menulog`);
+      raw = raw.concat(more);
+    } catch { /* the first search is enough */ }
+  }
   const seen = new Set();
   let results = [];
   for (const item of raw) {
