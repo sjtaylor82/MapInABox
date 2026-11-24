@@ -74,6 +74,15 @@ export function unlock() {
     });
   }
   if (ctx.state === 'suspended') ctx.resume();
+  // Start the iPhone's audio now, inside the tap, with a moment of silence.
+  // Otherwise it starts with the first real sound, a moment later, and that
+  // cut VoiceOver off as it began reading the place ("Ormi…").
+  try {
+    const silence = ctx.createBufferSource();
+    silence.buffer = ctx.createBuffer(1, 1, 22050);
+    silence.connect(ctx.destination);
+    silence.start(0);
+  } catch { /* nothing to prime */ }
   sleepSoon();
 }
 

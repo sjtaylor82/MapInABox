@@ -69,9 +69,11 @@ async function boot() {
     if (state.mode === 'world' && state.info && state.info.country) {
       audio.playPlace(state.info.onLand && state.info.country !== 'Open Water' ? state.info.country : 'ocean', state.info.continent);
     }
-    for (const t of ['pointerdown', 'keydown', 'touchend']) document.removeEventListener(t, unlockOnce, true);
+    for (const t of UNLOCK_EVENTS) document.removeEventListener(t, unlockOnce, true);
   };
-  for (const t of ['pointerdown', 'keydown', 'touchend']) document.addEventListener(t, unlockOnce, true);
+  // A VoiceOver double tap may arrive only as a click.
+  const UNLOCK_EVENTS = ['pointerdown', 'keydown', 'touchend', 'click'];
+  for (const t of UNLOCK_EVENTS) document.addEventListener(t, unlockOnce, true);
   try {
     await loadWorld((msg) => { $('load-status').textContent = `${msg}…`; });
     audio.configureAudio(data.sounds, data.tables);
