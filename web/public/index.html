@@ -25,9 +25,6 @@
 
   <div id="app" hidden>
     <div id="toolbar">
-      <div id="level-bar">
-        <label class="switch"><input type="checkbox" role="switch" id="set-expert"> Expert mode</label>
-      </div>
       <span class="brand" aria-hidden="true">Map in a Box</span>
       <button id="btn-jump" type="button">Jump <span class="key" aria-hidden="true">(J)</span></button>
       <button id="btn-position" type="button">Map position <span class="key" aria-hidden="true">(F2)</span></button>
@@ -191,6 +188,7 @@
 
       <h2 class="expander-heading"><button type="button" class="expander" id="settings-title" aria-expanded="false" aria-controls="settings-section">Settings</button></h2>
       <div id="settings-section" hidden>
+        <label class="switch"><input type="checkbox" role="switch" id="set-expert"> Expert mode</label>
         <div data-steer-only hidden>
           <label for="tilt-move" class="picker-label">Each tilt moves</label>
           <input id="tilt-move" type="range" class="picker">
