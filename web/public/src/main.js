@@ -134,7 +134,7 @@ async function moved({ tone = true, prefix = '' } = {}) {
   // A sea can stretch for thousands of kilometres. Repeating just its name
   // sounds like not moving, so say where the nearest land is as well.
   if (sameSea || (prefix && !info.onLand)) text = `${info.label}. ${landHint(state.lat, state.lon)}`;
-  say(prefix ? `${prefix} ${text}` : text);
+  say(prefix ? `${prefix} ${text}` : text, { now: true });
   schedulePostcode(seq);
   updateMapView(state.lat, state.lon, info.label, info.country);
   if (countryChanged) {
@@ -164,7 +164,7 @@ function step(bearing, km) {
   const p = offsetKm(state.lat, state.lon, km, bearing);
   if ((bearing === 0 && before >= 90) || (bearing === 180 && before <= -90)) {
     audio.edgeTone();
-    say(bearing === 0 ? 'North Pole.' : 'South Pole.');
+    say(bearing === 0 ? 'North Pole.' : 'South Pole.', { now: true });
     return;
   }
   state.lat = p.lat;
@@ -409,7 +409,7 @@ async function movedStreet({ tone = true, prefix = '', note = '', suffix = '', k
   state.streetLabel = label;
   const near = street.nearestStreet(lat, lon, 25, state.streetName);
   state.streetName = near ? near.name : '';
-  say([prefix, note, label.endsWith('.') ? label : `${label}.`, suffix].filter(Boolean).join(' '));
+  say([prefix, note, label.endsWith('.') ? label : `${label}.`, suffix].filter(Boolean).join(' '), { now: true });
   schedulePostcode(seq);
   updateMapView(lat, lon, label, null);
   // Keep the country and region up to date for C, R and the other keys.

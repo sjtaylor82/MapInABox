@@ -1,38 +1,39 @@
 // Speech output.
 //
-// Screen reader: text goes into one of two assertive live regions. Alternating
-// between them makes a repeated identical message speak again, and clearing
-// the idle one stops a stale message being re-read.
+// Screen reader: text goes into a live region, cleared a second later so it
+// isn't found as text when swiping. Most messages are polite: they wait for
+// VoiceOver to finish what it's reading (a button's name, say). Moving on the
+// map is assertive ({ now: true }), so the newest place is heard at once.
+// Each kind has two regions used in turn, so a repeated message speaks again.
 // Built-in voice: the browser's speechSynthesis, for people without a
 // screen reader (or both at once, for a sighted helper).
 
 import { settings } from './settings.js';
 
-let regions = [];
+let assertive = [];
+let polite = [];
 let turn = 0;
 let last = '';
 const listeners = new Set();
 
 export function initSpeech() {
-  regions = [document.getElementById('live-a'), document.getElementById('live-b')];
+  assertive = [document.getElementById('live-a'), document.getElementById('live-b')];
+  polite = [document.getElementById('live-c'), document.getElementById('live-d')];
 }
 
-/** Speak text, interrupting what was speaking before. */
-export function say(text) {
+/** Speak text. { now: true } interrupts whatever VoiceOver is saying. */
+export function say(text, { now = false } = {}) {
   text = String(text || '').trim();
   if (!text) return;
   last = text;
   const mode = settings.get('speech');
   if (mode !== 'voice') {
-    const now = regions[turn];
-    const other = regions[1 - turn];
-    other.textContent = '';
-    now.textContent = text;
+    const regions = now ? assertive : polite;
+    const region = regions[turn];
+    for (const r of [...assertive, ...polite]) if (r !== region) r.textContent = '';
+    region.textContent = text;
     turn = 1 - turn;
-    // Empty it once it has been spoken, so VoiceOver doesn't find the old
-    // message sitting at the top of the page when you swipe.
-    const wait = Math.min(20000, 4000 + text.length * 80);
-    setTimeout(() => { if (now.textContent === text) now.textContent = ''; }, wait);
+    setTimeout(() => { if (region.textContent === text) region.textContent = ''; }, 1000);
   }
   if (mode === 'voice' || mode === 'both') speakVoice(text);
   for (const fn of listeners) fn(text);

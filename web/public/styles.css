@@ -393,3 +393,9 @@ input[type="text"] { background: var(--bg); color: var(--fg); border: 2px solid 
 .radios legend { font-weight: 600; padding: 0; margin-bottom: 0.25rem; }
 .radio { display: flex; align-items: center; gap: 0.5rem; min-height: 44px; cursor: pointer; }
 .radio input { width: 1.4rem; height: 1.4rem; margin: 0; accent-color: var(--accent); }
+
+/* Starter on a phone or tablet: big compass buttons, easy to find and tap. */
+@media (pointer: coarse) {
+  :root[data-level="starter"] #panel .move { gap: 0.5rem; }
+  :root[data-level="starter"] #panel .move button { min-height: 22vw; max-height: 8rem; font-size: 1.4rem; font-weight: 700; }
+}
