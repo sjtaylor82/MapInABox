@@ -228,6 +228,34 @@ function segmentsNear(lat, lon, radiusM) {
 }
 
 /**
+ * The nearest named street within maxM metres that runs the way you are
+ * heading (within 35 degrees, either direction along it): { name, kind, dist,
+ * bearing }, or null. At a corner this is the street you're going along, not
+ * the one you're crossing. A street called `prefer` wins over one up to 8
+ * metres nearer.
+ */
+export function streetAlong(lat, lon, heading, maxM = 25, prefer = '') {
+  let best = null;
+  let bestScore = Infinity;
+  for (const [wi, si] of segmentsNear(lat, lon, maxM)) {
+    const way = ways[wi];
+    if (!way.name) continue;
+    const [a, b] = [way.pts[si], way.pts[si + 1]];
+    const bearing = bearingDeg(a[0], a[1], b[0], b[1]);
+    const diff = Math.abs(((bearing - heading + 540) % 360) - 180);
+    if (Math.min(diff, 180 - diff) > 35) continue;
+    const p = project(wi, si, lat, lon);
+    if (p.dist > maxM) continue;
+    const score = p.dist - (prefer && way.name === prefer ? 8 : 0);
+    if (score < bestScore) {
+      bestScore = score;
+      best = { name: way.name, kind: way.kind, dist: p.dist, bearing };
+    }
+  }
+  return best;
+}
+
+/**
  * The nearest street within maxM metres: { name, kind, dist, lat, lon, wi, si, t },
  * or null. A street called `prefer` wins over one up to 8 metres nearer.
  */

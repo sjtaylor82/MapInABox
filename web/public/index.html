@@ -23,19 +23,25 @@
 
   <div id="app" hidden>
     <header id="toolbar">
+      <div id="level-bar">
+        <label for="set-level" class="picker-label">Mode</label>
+        <input id="set-level" type="range" class="picker">
+        <p id="set-level-value" class="picker-value" aria-hidden="true"></p>
+      </div>
       <span class="brand" aria-hidden="true">Map in a Box</span>
       <button id="btn-position" type="button">Map position (F2)</button>
       <button id="btn-journey" type="button">Route</button>
       <button id="btn-street" type="button" aria-pressed="false">Street mode (F11)</button>
       <button id="btn-where" type="button">Where am I (Y)</button>
+      <button id="btn-gps" type="button" aria-pressed="false" data-expert>GPS monitor: off</button>
       <button id="btn-more" type="button" aria-expanded="false" aria-controls="toolbar-more">More</button>
       <div id="toolbar-more" hidden>
         <button id="btn-menus" type="button">Menus nearby</button>
         <button id="btn-help" type="button">Help (F1)</button>
-        <button id="btn-jump" type="button">Jump (J)</button>
+        <button id="btn-jump" type="button" data-expert>Jump (J)</button>
         <button id="btn-settings" type="button">Settings (Ctrl+,)</button>
         <button id="btn-steer" type="button" aria-pressed="false" hidden>Steering: off</button>
-        <button id="btn-street-steer" type="button" hidden>Steering: pick turns</button>
+        <button id="btn-street-steer" type="button" hidden data-expert>Steering: pick turns</button>
         <button id="btn-world" type="button">World map</button>
       </div>
     </header>
@@ -153,20 +159,20 @@
       <summary><h2>Information</h2></summary>
       <div class="grid">
         <button type="button" data-key="a" data-street-only hidden>Address</button>
-        <button type="button" data-key="q">Air quality</button>
+        <button type="button" data-key="q" data-expert>Air quality</button>
         <button type="button" data-key="Shift+F1">Capital</button>
         <button type="button" data-key="F5">Continent</button>
         <button type="button" data-key="c">Country</button>
         <button type="button" data-key="i">Country facts</button>
         <button type="button" data-key="$">Currency</button>
         <button type="button" data-key="Shift+l">Languages</button>
-        <button type="button" data-key="l">Latitude and longitude</button>
+        <button type="button" data-key="l" data-expert>Latitude and longitude</button>
         <button type="button" data-key="t">Local time</button>
-        <button type="button" data-key="g">Nearby features</button>
+        <button type="button" data-key="g" data-expert>Nearby features</button>
         <button type="button" data-key="n">Nearest city</button>
         <button type="button" data-key="Shift+p">Postcode</button>
         <button type="button" data-key="r">Region or state</button>
-        <button type="button" data-key="s">Sunrise and sunset</button>
+        <button type="button" data-key="s" data-expert>Sunrise and sunset</button>
         <button type="button" data-key="w">Weather</button>
         <button type="button" data-key="Shift+i">Wikipedia</button>
       </div>
@@ -186,6 +192,10 @@
         <label for="set-text" class="picker-label">Text size</label>
         <input id="set-text" type="range" class="picker">
         <p id="set-text-value" class="picker-value" aria-hidden="true"></p>
+        <div data-expert>
+        <label for="set-gps" class="picker-label">GPS monitor says</label>
+        <input id="set-gps" type="range" class="picker">
+        <p id="set-gps-value" class="picker-value" aria-hidden="true"></p>
         <label for="step-size" class="picker-label">Step size</label>
         <input id="step-size" type="range" min="0" max="4" step="1" value="2" class="picker">
         <p id="step-value" class="picker-value" aria-hidden="true">5 kilometres</p>
@@ -201,10 +211,11 @@
         <label for="set-street-steer" class="picker-label">Steering in street mode</label>
         <input id="set-street-steer" type="range" class="picker">
         <p id="set-street-steer-value" class="picker-value" aria-hidden="true"></p>
+        </div>
         <label class="check"><input type="checkbox" id="set-venue"> Offer the menu when I open the app at a café or restaurant</label>
         <label class="check"><input type="checkbox" id="set-postcode"> Say the postcode when I stop</label>
         <label class="check"><input type="checkbox" id="set-sounds"> Country sounds and tones</label>
-        <label class="check"><input type="checkbox" id="set-geo"> Name geographic features (GeoFeatures)</label>
+        <label class="check" data-expert><input type="checkbox" id="set-geo"> Name geographic features (GeoFeatures)</label>
         <label class="check"><input type="checkbox" id="set-visual"> Visual Assist (show the map)</label>
       </details>
     </aside>

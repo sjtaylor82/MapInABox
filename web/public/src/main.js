@@ -18,6 +18,7 @@ import { makePicker } from './picker.js';
 import { postcodeAt } from './postcode.js';
 import { showMenu } from './menu.js';
 import { checkVenue, openMenusNearby } from './venues.js';
+import { startMonitor, stopMonitor, monitorActive, setMonitorLevel } from './gpsmonitor.js';
 import { speakableHours } from './placedetails.js';
 import { initJourney, openJourney } from './journey.js';
 
@@ -45,6 +46,7 @@ async function boot() {
   initSpeech();
   initMapView($('map-canvas'), $('map-caption'));
   applyLook();
+  applyLevel();
   applyVisualAssist();
   // More: the toolbar buttons used less often.
   $('btn-more').addEventListener('click', () => {
@@ -1131,6 +1133,36 @@ function cycleToneScope() {
   say(`Spatial tones: ${next}.`);
 }
 
+/** Starter (the default) or Expert. */
+const level = () => (settings.get('level') === 'expert' ? 'expert' : 'starter');
+
+/** Show or hide what only Expert has. */
+function applyLevel() {
+  document.documentElement.dataset.level = level();
+  if (level() !== 'expert' && monitorActive()) stopMonitor();
+}
+
+/** GPS monitor on or off (Expert). */
+function toggleMonitor() {
+  if (monitorActive()) return stopMonitor();
+  const btn = $('btn-gps');
+  btn.setAttribute('aria-pressed', 'true');
+  btn.textContent = 'GPS monitor: on';
+  startMonitor({
+    // Keep the map on where you are, quietly.
+    follow: (p) => {
+      state.lat = p.lat;
+      state.lon = p.lon;
+      updateMapView(p.lat, p.lon, null, null);
+      settings.set('position', { lat: p.lat, lon: p.lon });
+    },
+    stopped: () => {
+      btn.setAttribute('aria-pressed', 'false');
+      btn.textContent = 'GPS monitor: off';
+    },
+  }, settings.get('gpsLevel') || 'suburbs');
+}
+
 /** Colours and text size from Settings. */
 function applyLook() {
   const theme = settings.get('theme') || 'auto';
@@ -1274,6 +1306,29 @@ function setUpPickers() {
     get: () => state.jumpIdx || 0,
     set: (i) => { state.jumpIdx = i; },
   });
+  pickers.push(makePicker($('set-level'), {
+    shown: $('set-level-value'),
+    items: () => [
+      { value: 'starter', label: 'Starter' },
+      { value: 'expert', label: 'Expert: GPS monitor and more settings' },
+    ],
+    get: () => level(),
+    set: (v) => {
+      settings.set('level', v);
+      applyLevel();
+      say(v === 'expert' ? 'Expert. GPS monitor, Jump and more settings are shown.' : 'Starter. Fewer buttons and settings.');
+    },
+  }));
+  pickers.push(makePicker($('set-gps'), {
+    shown: $('set-gps-value'),
+    items: () => [
+      { value: 'suburbs', label: 'New streets, cross streets and suburbs' },
+      { value: 'cross', label: 'New streets and cross streets' },
+      { value: 'streets', label: 'New streets only' },
+    ],
+    get: () => settings.get('gpsLevel') || 'suburbs',
+    set: (v) => { settings.set('gpsLevel', v); setMonitorLevel(v); },
+  }));
   pickers.push(makePicker($('set-theme'), {
     shown: $('set-theme-value'),
     items: () => [
@@ -1389,6 +1444,7 @@ for (const btn of document.querySelectorAll('[data-close]')) {
   btn.addEventListener('click', () => btn.closest('dialog').close());
 }
 $('btn-jump').addEventListener('click', () => openJump());
+$('btn-gps').addEventListener('click', toggleMonitor);
 $('btn-menus').addEventListener('click', () => { if (state.started) openMenusNearby(state.lat, state.lon); });
 $('btn-help').addEventListener('click', openHelp);
 $('btn-settings').addEventListener('click', openSettings);
