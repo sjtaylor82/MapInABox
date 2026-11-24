@@ -359,3 +359,8 @@ input[type="text"] { background: var(--bg); color: var(--fg); border: 2px solid 
 .menu-text h5 { margin: 0.8rem 0 0.2rem; font-size: 1rem; }
 .menu-dishes { margin: 0; padding-left: 1.2rem; }
 .menu-dishes li { margin: 0.15rem 0; }
+
+/* Menus where you are, and Menus nearby. */
+#venue-choices { display: flex; flex-direction: column; align-items: stretch; gap: 0.5rem; margin-top: 1rem; }
+#venue-choices .result-list { margin: 0; }
+#venue-menu h3 { margin-bottom: 0.4rem; }

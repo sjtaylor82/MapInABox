@@ -30,6 +30,7 @@
       <button id="btn-where" type="button">Where am I (Y)</button>
       <button id="btn-more" type="button" aria-expanded="false" aria-controls="toolbar-more">More</button>
       <div id="toolbar-more" hidden>
+        <button id="btn-menus" type="button">Menus nearby</button>
         <button id="btn-help" type="button">Help (F1)</button>
         <button id="btn-jump" type="button">Jump (J)</button>
         <button id="btn-settings" type="button">Settings (Ctrl+,)</button>
@@ -200,6 +201,7 @@
         <label for="set-street-steer" class="picker-label">Steering in street mode</label>
         <input id="set-street-steer" type="range" class="picker">
         <p id="set-street-steer-value" class="picker-value" aria-hidden="true"></p>
+        <label class="check"><input type="checkbox" id="set-venue"> Offer the menu when I open the app at a café or restaurant</label>
         <label class="check"><input type="checkbox" id="set-postcode"> Say the postcode when I stop</label>
         <label class="check"><input type="checkbox" id="set-sounds"> Country sounds and tones</label>
         <label class="check"><input type="checkbox" id="set-geo"> Name geographic features (GeoFeatures)</label>
@@ -215,6 +217,15 @@
       <button type="button" id="start-last">Where I left off</button>
       <button type="button" id="start-here">My current location</button>
       <button type="button" id="start-choose">A place I choose</button>
+    </div>
+  </dialog>
+
+  <dialog id="venue-dialog" aria-labelledby="venue-title">
+    <h2 id="venue-title" tabindex="-1"></h2>
+    <div id="venue-choices"></div>
+    <div id="venue-menu" class="menu-box" hidden></div>
+    <div class="buttons">
+      <button type="button" data-close>Close</button>
     </div>
   </dialog>
 

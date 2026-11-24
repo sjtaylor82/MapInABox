@@ -17,6 +17,7 @@ import * as street from './street.js';
 import { makePicker } from './picker.js';
 import { postcodeAt } from './postcode.js';
 import { showMenu } from './menu.js';
+import { checkVenue, openMenusNearby } from './venues.js';
 import { speakableHours } from './placedetails.js';
 import { initJourney, openJourney } from './journey.js';
 
@@ -92,6 +93,8 @@ async function boot() {
   }
   goToMyLocation({
     quiet: true,
+    // At a café or restaurant? Offer its menu.
+    onFound: (fix) => { checkVenue(fix).catch(() => {}); },
     onFail: () => (hasSaved ? moved({ tone: false })
       : openJump('Where would you like to start? Type a city, country or coordinates, then press Enter.')),
   });
@@ -265,7 +268,7 @@ function devicePosition() {
 }
 
 /** Move the map to where the device is. quiet: no "Finding your location" first. */
-async function goToMyLocation({ quiet = false, onFail = () => {} } = {}) {
+async function goToMyLocation({ quiet = false, onFail = () => {}, onFound = () => {} } = {}) {
   if (locating) return;
   locating = true;
   if (!quiet) say('Finding your location…');
@@ -274,6 +277,7 @@ async function goToMyLocation({ quiet = false, onFail = () => {} } = {}) {
     if (document.querySelector('dialog[open]')) document.querySelector('dialog[open]').close();
     const near = accuracy <= 1000 ? '' : ' Only roughly, perhaps from your internet connection.';
     jumpTo(lat, lon, `You are here.${near}`);
+    onFound({ lat, lon, accuracy });
   } catch (err) {
     if (!quiet) say(err.message);
     onFail();
@@ -1329,6 +1333,8 @@ function setUpPickers() {
   $('set-sounds').checked = settings.get('sounds');
   $('set-geo').checked = settings.get('geoFeatures');
   $('set-visual').checked = settings.get('visualAssist');
+  $('set-venue').checked = settings.get('venueAsk') !== false;
+  $('set-venue').addEventListener('change', (e) => settings.set('venueAsk', e.target.checked));
   $('set-postcode').checked = settings.get('autoPostcode') !== false;
   $('set-postcode').addEventListener('change', (e) => settings.set('autoPostcode', e.target.checked));
   $('set-sounds').addEventListener('change', (e) => audio.setSoundsEnabled(e.target.checked));
@@ -1376,13 +1382,14 @@ $('places-menu').addEventListener('click', () => {
   if (p) showMenu($('place-menu'), { name: p.name, lat: p.lat, lon: p.lon, website: p.details && p.details.website });
 });
 $('places-find').addEventListener('click', () => { if (state.started) openPlaces(); });
-for (const id of ['jump-dialog', 'help-dialog']) {
+for (const id of ['jump-dialog', 'help-dialog', 'venue-dialog']) {
   $(id).addEventListener('close', () => { if (state.started) $('map').focus(); });
 }
 for (const btn of document.querySelectorAll('[data-close]')) {
   btn.addEventListener('click', () => btn.closest('dialog').close());
 }
 $('btn-jump').addEventListener('click', () => openJump());
+$('btn-menus').addEventListener('click', () => { if (state.started) openMenusNearby(state.lat, state.lon); });
 $('btn-help').addEventListener('click', openHelp);
 $('btn-settings').addEventListener('click', openSettings);
 $('btn-steer').addEventListener('click', toggleSteering);
