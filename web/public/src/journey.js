@@ -18,6 +18,7 @@ import { postcodeAt } from './postcode.js';
 import { showMenu } from './menu.js';
 import { onSlowClick } from './busy.js';
 import { addressAt } from './online.js';
+import { describeLocation } from './placeinfo.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -265,6 +266,18 @@ function chooseStation(s) {
   $('journey-station-maps').href = `https://maps.apple.com/?saddr=${from.lat.toFixed(6)},${from.lon.toFixed(6)}&daddr=${s.lat.toFixed(6)},${s.lon.toFixed(6)}&dirflg=w`;
   $('journey-station-actions').hidden = false;
   $('journey-station-walk').focus();
+}
+
+/** A walk from where you are (or the map position) to a place, as from Jump's Walk there. */
+export async function walkTo(place) {
+  const here = hooks.getHere();
+  const me = await nearYou(here);
+  $('journey-to').value = place.label;
+  $('journey-title').scrollIntoView({ block: 'start' });
+  return planWalk('', place.label, {
+    a: { lat: me.lat, lon: me.lon, label: me === here ? (here.label || 'the map position') : 'your location' },
+    b: { lat: place.lat, lon: place.lon, label: place.label },
+  });
 }
 
 function walkToStation() {
@@ -1512,9 +1525,13 @@ function showFoodList() {
       showFoodLinks();
       $('journey-food-chosen').textContent = `${p.name}. Finding the address…`;
       $('journey-food-go').focus();
-      foodAddress(p).then((addr) => {
+      foodAddress(p).then(async (addr) => {
         if (st.foodIdx !== i) return; // another place chosen meanwhile
-        $('journey-food-chosen').textContent = addr ? `${p.name}. Address: ${addr}.` : `${p.name}. No address found.`;
+        const streetName = (addr.match(/^\s*[\dA-Za-z/-]*\d[\dA-Za-z/-]*\s+([^,]+)/) || [])[1] || '';
+        const where = await describeLocation(p.lat, p.lon, streetName).catch(() => '');
+        if (st.foodIdx !== i) return;
+        const whereText = where ? ` ${where[0].toUpperCase()}${where.slice(1)}.` : '';
+        $('journey-food-chosen').textContent = addr ? `${p.name}. Address: ${addr}.${whereText}` : `${p.name}.${whereText || ' No address found.'}`;
       });
     });
     li.append(b);

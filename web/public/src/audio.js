@@ -235,6 +235,11 @@ export function spatialTone(lat, lon, bounds) {
   beep(freq, pan);
 }
 
+/** A very short high tick while something is loading, every 2 seconds, as the desktop does when fetching streets. */
+export function workingTick() {
+  beep(1660, 0, 0.035, 0.18, 'sine');
+}
+
 /** Short low tone for "can't go further" (poles, no result). */
 export function edgeTone() {
   beep(180, 0, 0.12, 0.3, 'triangle');

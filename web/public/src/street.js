@@ -256,6 +256,30 @@ export function streetAlong(lat, lon, heading, maxM = 25, prefer = '') {
 }
 
 /**
+ * The nearest named road within maxM metres (not a footpath or cycleway):
+ * { name, kind, dist, lat, lon, bearing }, or null. A street called `prefer`
+ * wins over one up to 8 metres nearer.
+ */
+export function nearestNamedStreet(lat, lon, maxM = 60, prefer = '') {
+  let best = null;
+  let bestScore = Infinity;
+  for (const [wi, si] of segmentsNear(lat, lon, maxM)) {
+    const way = ways[wi];
+    if (!isRoad(way)) continue;
+    const p = project(wi, si, lat, lon);
+    if (p.dist > maxM) continue;
+    // The street from its address wins outright; back lanes and service roads only if nothing else.
+    const score = (prefer && way.name === prefer ? -1000 : 0) + p.dist + (way.kind === 'service' ? 40 : 0);
+    if (score < bestScore) {
+      bestScore = score;
+      const [a, b] = [way.pts[si], way.pts[si + 1]];
+      best = { name: way.name, kind: way.kind, dist: p.dist, lat: p.lat, lon: p.lon, bearing: bearingDeg(a[0], a[1], b[0], b[1]) };
+    }
+  }
+  return best;
+}
+
+/**
  * The nearest street within maxM metres: { name, kind, dist, lat, lon, wi, si, t },
  * or null. A street called `prefer` wins over one up to 8 metres nearer.
  */
@@ -349,6 +373,21 @@ export function streetSide(corner, name, heading) {
   }
   if (sides.size === 2) return 'both';
   return sides.size ? [...sides][0] : '';
+}
+
+/** A named street people can be on: a road or a pedestrian mall, not a footpath, cycleway or tunnel. */
+function isRoad(way) {
+  return !!way.name && (way.kind === 'pedestrian' || !PATHS.has(way.kind)) && !/tunnel/i.test(way.name);
+}
+
+/** The roads meeting at a corner (not footpaths, cycleways or service lanes). */
+export function roadNamesAt(ix) {
+  const names = new Set();
+  for (const [wi] of ix.refs || []) {
+    const way = ways[wi];
+    if (way && isRoad(way) && way.kind !== 'service') names.add(way.name);
+  }
+  return names;
 }
 
 /** Every corner within maxM metres, nearest first. */

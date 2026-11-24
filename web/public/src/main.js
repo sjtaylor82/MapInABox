@@ -18,10 +18,11 @@ import { makePicker } from './picker.js';
 import { postcodeAt } from './postcode.js';
 import { showMenu } from './menu.js';
 import { checkVenue, openMenusNearby } from './venues.js';
-import { onSlowClick } from './busy.js';
+import { onSlowClick, working } from './busy.js';
+import { describeLocation } from './placeinfo.js';
 import { startMonitor, stopMonitor, monitorActive, setMonitorLevel, monitorStatus } from './gpsmonitor.js';
 import { speakableHours } from './placedetails.js';
-import { initJourney } from './journey.js';
+import { initJourney, walkTo } from './journey.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -409,7 +410,8 @@ async function movedStreet({ tone = true, prefix = '', note = '', suffix = '', k
   updateMapView(lat, lon, null, null);
   if (!street.areaReady(lat, lon)) {
     say('Loading streets…');
-    const result = await waitForArea(lat, lon, seq);
+    const doneLoading = working(null, 'Loading streets', { speak: false });
+    const result = await waitForArea(lat, lon, seq).finally(doneLoading);
     if (seq !== state.seq) return;
     if (!result.ok) {
       say(`Could not load the streets here. ${result.error}`);
@@ -648,15 +650,22 @@ async function placeDetails() {
   if (d && d.phone) parts.push(`Phone ${d.phone}`);
   if (d && d.hours) parts.push(`Hours: ${speakableHours(d.hours)}`);
   else if (d && d.hoursText) parts.push(`Hours: ${d.hoursText}`);
+  let addressStreet = '';
   if (d && d.address) {
     parts.push(`Address: ${d.address}`);
+    addressStreet = (d.address.match(/^\s*[\dA-Za-z/-]*\d[\dA-Za-z/-]*\s+([^,]+)/) || [])[1] || '';
   } else {
     // No address in OpenStreetMap: give the nearest house number and street, and the postcode.
     const ad = street.nearestAddress(p.lat, p.lon, 60);
     const near = ad && ad.street ? `${ad.num} ${ad.street}` : street.streetLabel(p.lat, p.lon);
+    if (ad && ad.street) addressStreet = ad.street;
     const pc = await postcodeAt(p.lat, p.lon).catch(() => null);
     parts.push(`Near ${near}${pc ? `, ${pc.place ? `${pc.place} ` : ''}${pc.postcode}` : ''}`);
   }
+  // Where exactly: "Corner of George Street and Bathurst Street", or its street and the cross streets either side.
+  const where = await describeLocation(p.lat, p.lon, addressStreet).catch(() => '');
+  if (placeResults[state.placeIdx || 0] !== p) return;
+  if (where) parts.push(`${where[0].toUpperCase()}${where.slice(1)}`);
   if (d && d.cuisine) parts.push(`Cuisine: ${d.cuisine}`);
   if (d && d.website) parts.push('Has a website');
   if (d && d.wheelchair) parts.push(`Wheelchair access: ${d.wheelchair}`);
@@ -1317,7 +1326,58 @@ function setJumpResults(results) {
   state.jumpIdx = 0;
   $('jump-pick').hidden = !results.length;
   $('jump-go').hidden = !results.length;
+  $('jump-details').hidden = !results.length;
+  $('jump-details-box').hidden = true;
   jumpPicker.refresh();
+}
+
+/**
+ * Jump's Details: everything known about the result you're on, without
+ * moving the map: its address, where exactly it is (corner, or the cross
+ * streets either side), and its phone, hours and website when it's a place.
+ */
+async function jumpDetails() {
+  const r = jumpResults[state.jumpIdx || 0];
+  if (!r || r.online || !Number.isFinite(r.lat)) return say('Choose a result first.');
+  const name = String(r.label).split(', ')[0];
+  const parts = [];
+  let d = null;
+  // A named place (not just an address or a town): look up its phone, hours and website.
+  if (!/^\d/.test(name)) d = await online.placeDetails(name, r.lat, r.lon).catch(() => null);
+  if (jumpResults[state.jumpIdx || 0] !== r) return;
+  let addressStreet = '';
+  if (d && d.address) {
+    parts.push(`Address: ${d.address}`);
+    addressStreet = (d.address.match(/^\s*[\dA-Za-z/-]*\d[\dA-Za-z/-]*\s+([^,]+)/) || [])[1] || '';
+  } else {
+    const ad = await online.addressAt(r.lat, r.lon).catch(() => null);
+    if (ad && ad.street) {
+      parts.push(`Address: ${[ad.number ? `${ad.number} ${ad.street}` : ad.street, ad.place, ad.postcode].filter(Boolean).join(', ')}`);
+      addressStreet = ad.street;
+    }
+  }
+  const where = await describeLocation(r.lat, r.lon, addressStreet).catch(() => '');
+  if (jumpResults[state.jumpIdx || 0] !== r) return;
+  if (where) parts.push(`${where[0].toUpperCase()}${where.slice(1)}`);
+  if (d && d.phone) parts.push(`Phone ${d.phone}`);
+  if (d && d.hours) parts.push(`Hours: ${speakableHours(d.hours)}`);
+  else if (d && d.hoursText) parts.push(`Hours: ${d.hoursText}`);
+  if (d && d.cuisine) parts.push(`Cuisine: ${d.cuisine}`);
+  const text = `${name}. ${parts.length ? `${parts.join('. ')}.` : 'Nothing more is known about it.'}`;
+  $('jump-details-text').textContent = text;
+  $('jump-call').hidden = !(d && d.phone);
+  if (d && d.phone) {
+    $('jump-call').href = `tel:${d.phone.split(';')[0].replace(/[^+\d]/g, '')}`;
+    $('jump-call').textContent = `Call ${name}`;
+  }
+  $('jump-web').hidden = !(d && d.website);
+  if (d && d.website) {
+    $('jump-web').href = d.website.split(';')[0];
+    $('jump-web').textContent = `${name} website`;
+  }
+  $('jump-details-box').hidden = false;
+  $('jump-details-text').tabIndex = -1;
+  $('jump-details-text').focus();
 }
 
 async function runJumpSearch() {
@@ -1337,7 +1397,8 @@ async function runJumpSearch() {
     }
   }
   if (!results.length) return say(`${text} not found.`);
-  if (results.length === 1) return chooseJump(results[0]);
+  // One match goes straight there; in Expert it's listed, so Details can be asked first.
+  if (results.length === 1 && level() !== 'expert') return chooseJump(results[0]);
   const count = results.length;
   if (local && text.length >= 4) results.push({ label: 'Search online', online: true });
   setJumpResults(results);
@@ -1516,6 +1577,13 @@ function chooseSelected() {
   if (r) chooseJump(r);
 }
 $('jump-go').addEventListener('click', chooseSelected);
+onSlowClick($('jump-details'), 'Looking it up', jumpDetails);
+$('jump-walk').addEventListener('click', () => {
+  const r = jumpResults[state.jumpIdx || 0];
+  if (!r || !Number.isFinite(r.lat)) return;
+  $('jump-dialog').close();
+  walkTo({ lat: r.lat, lon: r.lon, label: String(r.label).split(', ').slice(0, 2).join(', ') });
+});
 $('places-list').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); choosePlace(); }
 });

@@ -11,8 +11,10 @@
 // near you" is spoken, so a long wait doesn't sound like a hang.
 
 import { say } from './speech.js';
+import { workingTick } from './audio.js';
 
 const REMIND_MS = 10000;
+const TICK_MS = 2000;
 
 /** Is this button in the middle of its search? */
 export const isWorking = (button) => !!button && button.getAttribute('aria-disabled') === 'true';
@@ -36,11 +38,14 @@ export function working(button, message, { slow = false, speak = true } = {}) {
   if (speak) say(text);
   const still = `Still ${message.charAt(0).toLowerCase()}${message.slice(1)}.`;
   const timer = setInterval(() => say(still), REMIND_MS);
+  // A short tick every 2 seconds while working.
+  const ticks = setInterval(workingTick, TICK_MS);
   let finished = false;
   return function done() {
     if (finished) return;
     finished = true;
     clearInterval(timer);
+    clearInterval(ticks);
     if (button) {
       button.removeAttribute('aria-disabled');
       button.classList.remove('is-working');

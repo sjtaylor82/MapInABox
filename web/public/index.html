@@ -270,8 +270,17 @@
       <input id="jump-results" type="range" class="picker">
       <p id="jump-results-value" class="picker-value" aria-hidden="true"></p>
     </div>
+    <div id="jump-details-box" hidden>
+      <p id="jump-details-text"></p>
+      <p class="place-links">
+        <a id="jump-call" hidden>Call</a>
+        <a id="jump-web" target="_blank" rel="noopener" hidden>Website</a>
+      </p>
+      <button type="button" id="jump-walk" data-expert>Walk there</button>
+    </div>
     <div class="buttons">
       <button type="button" id="jump-go" hidden>Go</button>
+      <button type="button" id="jump-details" hidden>Details</button>
       <button type="button" id="jump-here">Use my location</button>
       <button type="button" data-close>Cancel</button>
     </div>
