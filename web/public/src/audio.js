@@ -22,10 +22,12 @@ export function configureAudio(soundList, tables) {
 }
 
 // iPhone shows "Now Playing" on the lock screen while a page's audio is
-// running, even in silence. So the audio is only awake while something is
-// sounding, and goes to sleep a few seconds after the last sound.
+// running, even in silence. So the audio sleeps when the page is hidden and
+// after 30 seconds without a sound. Not sooner: waking it as you move cut
+// VoiceOver off mid-word. The audio session type is set once and left alone,
+// since switching it also interrupted VoiceOver.
 let idleTimer = 0;
-const IDLE_MS = 4000;
+const IDLE_MS = 30000;
 
 function setSession(type) {
   try { if (navigator.audioSession) navigator.audioSession.type = type; } catch { /* older Safari */ }
@@ -35,9 +37,6 @@ function setSession(type) {
 function wake() {
   if (!ctx) return false;
   clearTimeout(idleTimer);
-  // iPhone: play through the silent switch, like a media app, rather than
-  // being muted along with ringtones (Safari 16.4 and later).
-  setSession('playback');
   if (ctx.state !== 'running') ctx.resume().catch(() => {});
   return true;
 }
@@ -49,11 +48,12 @@ function sleepSoon(ms = IDLE_MS) {
   idleTimer = setTimeout(() => {
     if (ambient) return;
     ctx.suspend().catch(() => {});
-    setSession('auto');
   }, ms);
 }
 
 export function unlock() {
+  // iPhone: play through the silent switch, like a media app, rather than
+  // being muted along with ringtones (Safari 16.4 and later).
   setSession('playback');
   if (!ctx) {
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -68,7 +68,6 @@ export function unlock() {
       if (document.visibilityState === 'hidden') {
         clearTimeout(idleTimer);
         ctx.suspend().catch(() => {});
-        setSession('auto');
       } else if (ambient) {
         wake();
       }
