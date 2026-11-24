@@ -70,7 +70,7 @@ export async function showMenu(box, place) {
     a.textContent = r.kind === 'delivery'
       ? `${place.name} on ${site}`
       : r.kind === 'photo'
-        ? `Customer photo of the menu on ${site}`
+        ? `Photos of the menu on ${site}`
         : `${r.pdf ? `${r.title && !/\.pdf$/i.test(r.title) ? r.title : 'Menu'} (PDF)` : r.title || 'Menu'} on ${site}`;
     li.append(a);
     // A menu on the venue's own site that can be read here: a page with prices, or a PDF.
@@ -84,7 +84,7 @@ export async function showMenu(box, place) {
     if (r.kind === 'photo') {
       const b = document.createElement('button');
       b.type = 'button';
-      b.textContent = 'Get the photo';
+      b.textContent = 'Get the photos';
       b.addEventListener('click', () => getPhoto(r.url, text, place.name));
       li.append(' ', b);
     }
@@ -98,7 +98,7 @@ export async function showMenu(box, place) {
   const parts = [
     readable && `${plural(readable, 'menu')} you can read here`,
     own - readable && `${plural(own - readable, 'other menu page')}`,
-    photos && 'a customer photo of the menu',
+    photos && 'photos of the menu',
     delivery && `${plural(delivery, 'delivery page')}`,
   ].filter(Boolean);
   say(`${place.name}: ${parts.join(', ')}.`);
@@ -140,52 +140,78 @@ async function readPdf(url, box, name) {
   showLines(box, name, text.replace(/^## /gm, '').replace(/^--- Page \d+ ---$/gm, ''));
 }
 
-/**
- * A customer's photo of the menu (RestaurantGuru): shared straight to a
- * reading app such as Seeing AI (the share sheet, on a phone), or opened.
- */
-async function getPhoto(pageUrl, box, name) {
-  const done = working(null, `Getting the photo of the menu for ${name}`);
-  let photo = '';
-  let file = null;
-  try {
-    const list = await fetch(`api/menuphotos?url=${encodeURIComponent(pageUrl)}`, { signal: AbortSignal.timeout(20000) })
-      .then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
-    photo = (list.images || [])[0] || '';
-    if (photo) {
-      const r = await fetch(`api/menuimage?u=${encodeURIComponent(photo)}`, { signal: AbortSignal.timeout(20000) }).catch(() => null);
-      if (r && r.ok) {
-        const blob = await r.blob();
-        const safe = name.replace(/[^\w' -]+/g, '').trim() || 'Menu';
-        file = new File([blob], `${safe} menu.jpg`, { type: blob.type || 'image/jpeg' });
-      }
-    }
-  } finally {
-    done();
-  }
-  if (!photo || !file) return showProblem(box, 'The photo of the menu could not be found. Open the link instead.');
-  box.replaceChildren();
-  const h = document.createElement('h4');
-  h.tabIndex = -1;
-  h.textContent = `Photo of the ${name} menu`;
-  const note = document.createElement('p');
-  note.textContent = 'Taken by a customer, so it may be old. Share it to a reading app such as Seeing AI to hear it.';
-  box.append(h, note);
+/** "Muzzas Pies menu 2.jpg" */
+function photoFile(blob, name, n) {
+  const safe = name.replace(/[^\w' -]+/g, '').trim() || 'Menu';
+  return new File([blob], `${safe} menu${n ? ` ${n}` : ''}.jpg`, { type: blob.type || 'image/jpeg' });
+}
+
+/** A list item for one photo: "Page 1 of 3", Share the photo (on a phone), Open the photo. */
+function photoItem(file, label) {
+  const li = document.createElement('li');
+  li.append(`${label} `);
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     const share = document.createElement('button');
     share.type = 'button';
-    share.textContent = 'Share the photo';
-    share.addEventListener('click', () => navigator.share({ files: [file], title: `${name} menu` }).catch(() => {}));
-    box.append(share, ' ');
+    share.textContent = 'Share';
+    share.setAttribute('aria-label', `Share ${label.toLowerCase()}`);
+    share.addEventListener('click', () => navigator.share({ files: [file] }).catch(() => {}));
+    li.append(share, ' ');
   }
   const open = document.createElement('a');
   open.href = URL.createObjectURL(file);
   open.target = '_blank';
   open.rel = 'noopener';
   open.download = file.name;
-  open.textContent = 'Open the photo';
-  box.append(open);
-  say(`Photo of the ${name} menu.`);
+  open.textContent = 'Open';
+  open.setAttribute('aria-label', `Open ${label.toLowerCase()}`);
+  li.append(open);
+  return li;
+}
+
+/**
+ * Photos of the menu (RestaurantGuru): the newest menu first, then older
+ * ones with how old they are. Each can be shared straight to a reading app
+ * such as Seeing AI (the share sheet, on a phone), or opened. The photos are
+ * fetched first, so Share works the moment it's pressed.
+ */
+async function getPhoto(pageUrl, box, name) {
+  const done = working(null, `Getting the photos of the menu for ${name}`);
+  const versions = [];
+  try {
+    const list = await fetch(`api/menuphotos?url=${encodeURIComponent(pageUrl)}`, { signal: AbortSignal.timeout(25000) })
+      .then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
+    let n = 0;
+    for (const v of (list.versions || []).slice(0, 4)) {
+      const files = [];
+      for (const u of v.images.slice(0, 4)) {
+        const r = await fetch(`api/menuimage?u=${encodeURIComponent(u)}`, { signal: AbortSignal.timeout(20000) }).catch(() => null);
+        if (r && r.ok) files.push(photoFile(await r.blob(), name, ++n));
+      }
+      if (files.length) versions.push({ ...v, files });
+    }
+  } finally {
+    done();
+  }
+  if (!versions.length) return showProblem(box, 'The photos of the menu could not be found. Open the link instead.');
+  box.replaceChildren();
+  const h = document.createElement('h4');
+  h.tabIndex = -1;
+  h.textContent = `Photos of the ${name} menu`;
+  const note = document.createElement('p');
+  note.textContent = 'Share a photo to a reading app such as Seeing AI to hear it.';
+  box.append(h, note);
+  const describe = (v) => `${v.who === 'owner' ? 'From the owner' : 'From a customer'}${v.age ? `, ${v.age}` : ''}`;
+  versions.forEach((v, i) => {
+    const sub = document.createElement('h5');
+    sub.textContent = i === 0 ? `Newest menu: ${describe(v)}` : `Older menu: ${describe(v)}`;
+    const ul = document.createElement('ul');
+    ul.className = 'result-list';
+    v.files.forEach((f, j) => ul.append(photoItem(f, v.files.length > 1 ? `Page ${j + 1} of ${v.files.length}` : 'Photo')));
+    box.append(sub, ul);
+  });
+  const photos = versions.reduce((n, v) => n + v.files.length, 0);
+  say(`${photos === 1 ? 'One photo' : `${photos} photos`} of the ${name} menu. Newest: ${describe(versions[0]).toLowerCase()}.`);
   h.focus();
 }
 

@@ -371,7 +371,7 @@ async function menu(url, env, ctx) {
   const website = (url.searchParams.get('website') || '').trim().slice(0, 300);
   if (!name) return json({ error: 'Bad request' }, 400);
   const cache = caches.default;
-  const key = new Request(`https://cache.mapinabox/menu/v9/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(suburb.toLowerCase())}`);
+  const key = new Request(`https://cache.mapinabox/menu/v10/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(suburb.toLowerCase())}`);
   const hit = await cache.match(key);
   if (hit) return hit;
 
@@ -425,8 +425,9 @@ async function menu(url, env, ctx) {
       }
     }
   }
-  // No menu to read: customers' photos of the menu on RestaurantGuru.
-  if (!results.some((r) => r.kind === 'own')) {
+  // No menu online at all (its own site, an ordering page, Uber Eats...):
+  // photos of the menu on RestaurantGuru, as a last resort.
+  if (!results.length) {
     const photo = await restaurantGuru(env, name, suburb, t);
     if (photo) results.push(photo);
   }
@@ -486,7 +487,8 @@ async function menuPdf(url, ctx) {
 // through, so it can be shared to a reading app such as Seeing AI.
 
 const RG_PAGE = /^([a-z]{2}\.)?restaurantguru\.com$/;
-const RG_IMAGE = /^(menu\d*|img\d*)\.restaurantguru\.com$/;
+// Menu photos: RestaurantGuru's own, and Zomato's (older menus came from there).
+const RG_IMAGE = /^((menu\d*|img\d*)\.restaurantguru\.com|b\.zmtcdn\.com)$/;
 
 /** The venue's RestaurantGuru menu page, as a 'photo' result, or null. */
 async function restaurantGuru(env, name, suburb, t) {
@@ -512,23 +514,53 @@ async function restaurantGuru(env, name, suburb, t) {
   return null;
 }
 
-/** GET /api/menuphotos?url=  The menu photos on a RestaurantGuru menu page, newest first. */
+/**
+ * Menu versions in a RestaurantGuru page's HTML, in page order (newest first):
+ * [{ who: 'customer' | 'owner', age: '4 years ago', images: [url] }]
+ */
+function menuVersions(html) {
+  const out = [];
+  for (const chunk of String(html).split(/class="menu_section"/).slice(1)) {
+    const title = (chunk.match(/class="h2_text">([^<]*)</) || [])[1] || '';
+    const age = ((chunk.match(/class="menu_date">([^<]*)</) || [])[1] || '').trim();
+    const images = [];
+    for (const m of chunk.matchAll(/data-src="(https:\/\/[^"]+\.(?:jpe?g|png|webp))"/gi)) {
+      let host = '';
+      try { host = new URL(m[1]).hostname; } catch { continue; }
+      if (RG_IMAGE.test(host) && !images.includes(m[1])) images.push(m[1]);
+    }
+    if (images.length) out.push({ who: /owner|restaurant/i.test(title) ? 'owner' : 'customer', age, images: images.slice(0, 6) });
+  }
+  return out;
+}
+
+/**
+ * GET /api/menuphotos?url=  The menu photos on a RestaurantGuru menu page:
+ * { versions: [{ who, age, images }] }, newest first. The current menu is on
+ * the page; older ones come from its /legacy part.
+ */
 async function menuPhotos(url, ctx) {
   let u;
   try { u = new URL(url.searchParams.get('url') || ''); } catch { return json({ error: 'Bad request' }, 400); }
   if (u.protocol !== 'https:' || !RG_PAGE.test(hostOf(u.href))) return json({ error: 'Bad request' }, 400);
   const cache = caches.default;
-  const key = new Request(`https://cache.mapinabox/menuphotos/v1/${encodeURIComponent(u.href)}`);
+  const key = new Request(`https://cache.mapinabox/menuphotos/v2/${encodeURIComponent(u.href)}`);
   const hit = await cache.match(key);
   if (hit) return hit;
   const page = await fetchPage(u.href);
   if (!page.ok || !page.html) return json({ error: 'Not readable' }, 502);
-  const images = [];
-  for (const m of page.html.matchAll(/data-(?:src|href)="(https:\/\/menu\d*\.restaurantguru\.com\/[^"]+\.(?:jpe?g|png|webp))"/gi)) {
-    if (!images.includes(m[1])) images.push(m[1]);
+  const versions = menuVersions(page.html);
+  if (page.html.includes('show_old_menu__button')) {
+    try {
+      const res = await fetch(`${u.href.replace(/\/$/, '')}/legacy`, {
+        headers: { 'User-Agent': BROWSER_UA, Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest', Referer: u.href },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (res.ok) versions.push(...menuVersions((await res.json()).html || ''));
+    } catch { /* the current menu is enough */ }
   }
-  const out = json({ images: images.slice(0, 6) }, 200, 7 * 24 * 3600);
-  if (images.length) ctx.waitUntil(cache.put(key, out.clone()));
+  const out = json({ versions: versions.slice(0, 5) }, 200, 7 * 24 * 3600);
+  if (versions.length) ctx.waitUntil(cache.put(key, out.clone()));
   return out;
 }
 
