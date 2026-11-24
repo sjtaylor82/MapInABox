@@ -115,7 +115,7 @@ export async function openMenusNearby(lat, lon) {
   $('venue-choices').replaceChildren();
   if (!near.length) {
     const p = document.createElement('p');
-    p.textContent = `No cafés, restaurants or pubs found within ${NEARBY_M} metres.`;
+    p.textContent = `No cafés, restaurants, takeaways or pubs found within ${NEARBY_M} metres.`;
     $('venue-choices').append(p);
     say(p.textContent);
     return;

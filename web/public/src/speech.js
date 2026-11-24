@@ -29,6 +29,10 @@ export function say(text) {
     other.textContent = '';
     now.textContent = text;
     turn = 1 - turn;
+    // Empty it once it has been spoken, so VoiceOver doesn't find the old
+    // message sitting at the top of the page when you swipe.
+    const wait = Math.min(20000, 4000 + text.length * 80);
+    setTimeout(() => { if (now.textContent === text) now.textContent = ''; }, wait);
   }
   if (mode === 'voice' || mode === 'both') speakVoice(text);
   for (const fn of listeners) fn(text);
