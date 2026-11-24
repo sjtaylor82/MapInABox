@@ -29,10 +29,9 @@
       <label class="switch" data-expert><input type="checkbox" role="switch" id="set-map"> Map</label>
       <button id="btn-jump" type="button">Jump <span class="key" aria-hidden="true">(J)</span></button>
       <button id="btn-position" type="button">Map position <span class="key" aria-hidden="true">(F2)</span></button>
-      <button id="btn-journey" type="button" data-expert>Route</button>
+      <button id="btn-journey" type="button" data-expert>Navigation</button>
       <button id="btn-street" type="button" aria-pressed="false">Street mode <span class="key" aria-hidden="true">(F11)</span></button>
       <button id="btn-where" type="button">Where am I <span class="key" aria-hidden="true">(Y)</span></button>
-      <button id="btn-gps" type="button" aria-pressed="false" aria-controls="gps-panel" data-expert>GPS monitor</button>
       <a id="link-desktop" class="toolbar-link" href="https://github.com/sjtaylor82/mapinabox/releases/latest" target="_blank" rel="noopener" hidden>Get the Desktop App</a>
       <button id="btn-more" type="button" aria-expanded="false" aria-controls="toolbar-more">More</button>
       <div id="toolbar-more" hidden>
@@ -42,8 +41,18 @@
         <button id="btn-steer" type="button" aria-pressed="false" hidden>Steering</button>
         <button id="btn-street-steer" type="button" hidden data-expert>Steering: pick turns</button>
       </div>
-      <div class="panel-section" id="gps-panel" hidden>
-        <h2 id="gps-title" tabindex="-1">GPS monitor</h2>
+    </div>
+    <div id="map" tabindex="0" role="application" aria-label="World map" aria-describedby="map-hint">
+      <span id="map-hint" class="sr-only">Arrow keys move. F11 street mode. F1 help.</span>
+      <canvas id="map-canvas" aria-hidden="true"></canvas>
+      <p id="map-caption" aria-hidden="true"></p>
+    </div>
+    <div id="panel">
+      <div class="panel-section" id="journey-section" data-expert>
+        <h2 id="journey-title" tabindex="-1">Navigation</h2>
+        <button type="button" id="btn-gps" aria-pressed="false" aria-controls="gps-panel">GPS monitor</button>
+        <div class="panel-section" id="gps-panel" hidden>
+        <h3 id="gps-title" tabindex="-1">GPS monitor</h3>
         <ul id="gps-status">
           <li>Street: <span id="gps-street">not known yet</span></li>
           <li>Suburb: <span id="gps-suburb">not known yet</span></li>
@@ -54,15 +63,20 @@
         <button type="button" id="gps-repeat">Say where I am</button>
         <button type="button" id="gps-stop">Stop GPS monitor</button>
       </div>
-    </div>
-    <div id="map" tabindex="0" role="application" aria-label="World map" aria-describedby="map-hint">
-      <span id="map-hint" class="sr-only">Arrow keys move. F11 street mode. F1 help.</span>
-      <canvas id="map-canvas" aria-hidden="true"></canvas>
-      <p id="map-caption" aria-hidden="true"></p>
-    </div>
-    <div id="panel">
-      <div class="panel-section" id="journey-section" data-expert>
-        <h2 id="journey-title" tabindex="-1">Route</h2>
+        <button type="button" id="journey-stations-find">Nearest stations</button>
+        <div id="journey-stations" hidden>
+          <h3 id="journey-stations-title" tabindex="-1">Nearest stations</h3>
+          <ul id="journey-stations-list" class="result-list"></ul>
+          <div id="journey-station-actions" hidden>
+            <p id="journey-station-chosen"></p>
+            <button type="button" id="journey-station-walk">Walk there</button>
+            <p class="place-links">
+              <a id="journey-station-uber" target="_blank" rel="noopener">Book an Uber there</a>
+              <a id="journey-station-maps" target="_blank" rel="noopener">Open in Apple Maps</a>
+            </p>
+          </div>
+        </div>
+        <h3>Plan a route</h3>
         <label for="journey-from">From (leave empty to start where you are on the map)</label>
         <input id="journey-from" type="text" autocomplete="off" spellcheck="false">
         <button type="button" id="journey-from-here">Use my location</button>

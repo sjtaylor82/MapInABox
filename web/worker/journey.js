@@ -10,6 +10,9 @@
 //                                for finding food along a journey leg
 //   POST /api/food {line, radius} Named food places within radius metres of an
 //                                encoded polyline (OpenStreetMap, via Overpass)
+//   GET /api/stations?lat=&lon=  Train, metro and light rail stations within
+//                                15 km, nearest first (OpenStreetMap, via
+//                                Overpass), cached for a day
 
 import { parseSearch, parseFlights, decodePolyline } from '../public/src/rome2rio.js';
 
@@ -30,6 +33,7 @@ export function journeyRoute(request, url, env, ctx) {
     case '/api/road': return request.method === 'GET' ? road(url, ctx) : null;
     case '/api/walk': return request.method === 'GET' ? walk(url, ctx) : null;
     case '/api/food': return request.method === 'POST' ? food(request) : null;
+    case '/api/stations': return request.method === 'GET' ? stations(url, ctx) : null;
     default: return null;
   }
 }
@@ -241,6 +245,67 @@ async function food(request) {
       return json({ places });
     } catch (err) {
       if (err && err.name === 'TimeoutError') last = 'The food search took too long.';
+    }
+  }
+  return json({ error: last }, 502);
+}
+
+
+const STATION_KIND = { subway: 'metro station', light_rail: 'light rail station', monorail: 'monorail station', funicular: 'funicular station' };
+
+function metresBetween(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const r = Math.PI / 180;
+  const a = Math.sin(((lat2 - lat1) * r) / 2) ** 2
+    + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(((lon2 - lon1) * r) / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+/** Stations near a point: { stations: [{ name, kind, lat, lon, dist }] }, nearest first. */
+async function stations(url, ctx) {
+  const lat = Number(url.searchParams.get('lat'));
+  const lon = Number(url.searchParams.get('lon'));
+  if (!(Math.abs(lat) <= 90 && Math.abs(lon) <= 180)) return json({ error: 'Bad station search.' }, 400);
+  const cache = caches.default;
+  const key = new Request(`https://cache.mapinabox/stations/v2/${lat.toFixed(3)},${lon.toFixed(3)}`);
+  const hit = await cache.match(key);
+  if (hit) return hit;
+  const around = `(around:15000,${lat.toFixed(5)},${lon.toFixed(5)})`;
+  const query = `[out:json][timeout:25];nwr["railway"="station"]["name"]${around};out center tags 300;`;
+  let last = 'The station search service could not be reached.';
+  for (const endpoint of FOOD_OVERPASS) {
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'User-Agent': USER_AGENT, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ data: query }),
+        signal: AbortSignal.timeout(45000),
+      });
+      if (!res.ok) { last = `The station search service answered ${res.status}.`; continue; }
+      const data = await res.json();
+      // A search that ran out of time comes back "fine" but empty, with a remark.
+      if (data.remark && !(data.elements || []).length) { last = 'The station search took too long.'; continue; }
+      const byName = new Map();
+      for (const el of data.elements || []) {
+        const t = el.tags || {};
+        const sLat = el.lat ?? el.center?.lat;
+        const sLon = el.lon ?? el.center?.lon;
+        if (!t.name || !Number.isFinite(sLat) || !Number.isFinite(sLon)) continue;
+        if (t.railway && t.railway !== 'station') continue;
+        const dist = metresBetween(lat, lon, sLat, sLon);
+        const kind = STATION_KIND[t.station] || 'train station';
+        const k = t.name.toLowerCase();
+        const old = byName.get(k);
+        if (!old || dist < old.dist) byName.set(k, { name: t.name, kind, lat: sLat, lon: sLon, dist: Math.round(dist) });
+      }
+      const list = [...byName.values()].sort((a, b) => a.dist - b.dist).slice(0, 20);
+      const out = new Response(JSON.stringify({ stations: list }), {
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=86400' },
+      });
+      if (list.length) ctx.waitUntil(cache.put(key, out.clone()));
+      return out;
+    } catch (err) {
+      if (err && err.name === 'TimeoutError') last = 'The station search took too long.';
     }
   }
   return json({ error: last }, 502);

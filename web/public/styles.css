@@ -381,8 +381,8 @@ input[type="text"] { background: var(--bg); color: var(--fg); border: 2px solid 
 @media (pointer: coarse) { .key { display: none; } }
 
 /* GPS monitor status, in the top bar while the monitor is on. */
-#gps-panel { flex-basis: 100%; border: 2px solid var(--fg); border-radius: 8px; padding: 0.5rem 0.75rem; }
-#gps-panel h2 { margin: 0 0 0.25rem; font-size: 1.1rem; }
+#gps-panel { border: 2px solid var(--fg); border-radius: 8px; padding: 0.5rem 0.75rem; margin: 0.5rem 0; }
+#gps-panel h3 { margin: 0 0 0.25rem; font-size: 1.1rem; }
 #gps-status { margin: 0 0 0.5rem; padding-left: 1.2rem; }
 #gps-panel[hidden] { display: none; }
 
@@ -410,4 +410,5 @@ input[type="text"] { background: var(--bg); color: var(--fg); border: 2px solid 
 .browse[hidden], .radios-list[hidden] { display: none; }
 
 /* Map switched off (Expert). */
-body.map-off #map, body.map-off #move-title, body.map-off #panel .move { display: none !important; }
+body.map-off #map, body.map-off #move-title, body.map-off #panel .move,
+body.map-off #btn-street, body.map-off #btn-position { display: none !important; }

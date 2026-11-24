@@ -166,7 +166,83 @@ function setPrompt(text) {
 }
 
 function showOnly(...ids) {
-  for (const id of ['journey-options', 'journey-legs', 'journey-food', 'journey-walk', 'journey-drive', 'journey-choices']) $(id).hidden = !ids.includes(id);
+  for (const id of ['journey-options', 'journey-legs', 'journey-food', 'journey-walk', 'journey-drive', 'journey-choices', 'journey-stations']) $(id).hidden = !ids.includes(id);
+}
+
+// ── Nearest stations ──────────────────────────────────────────────────────
+//
+// The train, metro and light rail stations nearest to you, nearest first.
+// Choose one to walk there, book an Uber to it, or open it in Apple Maps.
+
+async function nearestStations() {
+  showOnly();
+  say('Finding stations near you…');
+  // From where you really are; the map position if the device can't say.
+  let from;
+  try {
+    from = await hooks.myLocation();
+  } catch {
+    const here = hooks.getHere();
+    from = { lat: here.lat, lon: here.lon, label: here.label || 'the map position' };
+  }
+  let list = [];
+  try {
+    list = (await api(`api/stations?lat=${from.lat.toFixed(5)}&lon=${from.lon.toFixed(5)}`, {}, 50000)).stations || [];
+  } catch (err) {
+    setPrompt(err.message);
+    return say(err.message);
+  }
+  st.stationFrom = from;
+  st.stations = list;
+  $('journey-station-actions').hidden = true;
+  if (!list.length) {
+    setPrompt('No stations found within 15 kilometres.');
+    return say('No stations found within 15 kilometres.');
+  }
+  setPrompt('');
+  $('journey-stations-list').replaceChildren(...list.map((s) => {
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.type = 'button';
+    const dir = compassName(bearingDeg(from.lat, from.lon, s.lat, s.lon));
+    b.textContent = `${s.name}, ${s.kind}, ${formatDistance(s.dist)} ${dir}`;
+    b.addEventListener('click', () => chooseStation(s));
+    li.append(b);
+    return li;
+  }));
+  showOnly('journey-stations');
+  $('journey-stations-title').textContent = `Nearest stations: ${list.length}`;
+  $('journey-stations-title').focus();
+}
+
+function chooseStation(s) {
+  const from = st.stationFrom;
+  st.station = s;
+  $('journey-station-chosen').textContent = `${s.name}, ${formatDistance(s.dist)} away.`;
+  // Uber's universal link: the Uber app if it's installed, else Uber's website.
+  const q = new URLSearchParams({
+    action: 'setPickup',
+    'pickup[latitude]': from.lat.toFixed(6),
+    'pickup[longitude]': from.lon.toFixed(6),
+    'pickup[nickname]': from.label || 'My location',
+    'dropoff[latitude]': s.lat.toFixed(6),
+    'dropoff[longitude]': s.lon.toFixed(6),
+    'dropoff[nickname]': s.name,
+  });
+  $('journey-station-uber').href = `https://m.uber.com/ul/?${q}`;
+  $('journey-station-maps').href = `https://maps.apple.com/?saddr=${from.lat.toFixed(6)},${from.lon.toFixed(6)}&daddr=${s.lat.toFixed(6)},${s.lon.toFixed(6)}&dirflg=w`;
+  $('journey-station-actions').hidden = false;
+  $('journey-station-walk').focus();
+}
+
+function walkToStation() {
+  const s = st.station;
+  const from = st.stationFrom;
+  if (!s || !from) return;
+  planWalk(from.label || '', s.name, {
+    a: { lat: from.lat, lon: from.lon, label: from.label || 'where you are' },
+    b: { lat: s.lat, lon: s.lon, label: s.name },
+  });
 }
 
 // ── Walking route ─────────────────────────────────────────────────────────
@@ -495,16 +571,16 @@ function markStep(i) {
   }
 }
 
-async function planWalk(from, to) {
+async function planWalk(from, to, known = null) {
   stopGuiding(false);
   const here = hooks.getHere();
   const seq = ++st.seq;
   showOnly();
   say(`Finding a walking route to ${to}…`);
   setPrompt('');
-  let a = null;
-  let b = null;
-  try {
+  let a = known ? known.a : null;
+  let b = known ? known.b : null;
+  if (!known) try {
     // From can be anywhere, so a walk can be looked up for a place you are not.
     if (st.fromHere && from === st.fromHere.label) a = st.fromHere; // Use my location: the exact spot
     else a = from ? await locate(from, here, false) : { lat: here.lat, lon: here.lon, label: here.label || 'where you are' };
@@ -1313,6 +1389,8 @@ export function initJourney(h) {
   enter('journey-to', walkClick);
   enter('journey-option-list', chooseOption);
   $('journey-plan').addEventListener('click', plan);
+  $('journey-stations-find').addEventListener('click', nearestStations);
+  $('journey-station-walk').addEventListener('click', walkToStation);
   $('journey-walk-plan').addEventListener('click', walkClick);
   $('journey-drive-plan').addEventListener('click', planDrive);
   $('journey-drive-food').addEventListener('click', driveFood);
