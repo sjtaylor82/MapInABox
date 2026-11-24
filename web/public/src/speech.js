@@ -1,6 +1,6 @@
 // Speech output.
 //
-// Screen reader: text goes into a live region, cleared a second later so it
+// Screen reader: text goes into a live region, cleared a few seconds later so it
 // isn't found as text when swiping. Most messages are polite: they wait for
 // VoiceOver to finish what it's reading (a button's name, say). Moving on the
 // map is assertive ({ now: true }), so the newest place is heard at once.
@@ -30,10 +30,13 @@ export function say(text, { now = false } = {}) {
   if (mode !== 'voice') {
     const regions = now ? assertive : polite;
     const region = regions[turn];
-    for (const r of [...assertive, ...polite]) if (r !== region) r.textContent = '';
+    regions[1 - turn].textContent = '';
     region.textContent = text;
     turn = 1 - turn;
-    setTimeout(() => { if (region.textContent === text) region.textContent = ''; }, 1000);
+    // Clear it once it has surely been read: removing it sooner cut
+    // VoiceOver off mid-word on iPhone ("Ormi…").
+    const wait = Math.min(8000, 2000 + text.length * 90);
+    setTimeout(() => { if (region.textContent === text) region.textContent = ''; }, wait);
   }
   if (mode === 'voice' || mode === 'both') speakVoice(text);
   for (const fn of listeners) fn(text);
