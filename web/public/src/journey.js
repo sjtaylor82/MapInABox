@@ -438,6 +438,19 @@ function streetOf(s) {
   return s.name || (s.nearDist <= 15 && !s.crossing ? s.near : '');
 }
 
+/**
+ * "Arrive at Factory 51, on your right", or "…, on the other side of the
+ * road, on your right" when it's across the street from your footpath.
+ */
+function arriveText(s) {
+  const name = st.walk && st.walk.toLabel ? st.walk.toLabel.split(', ')[0] : 'your destination';
+  const side = s.modifier === 'left' || s.modifier === 'right' ? s.modifier : s.modifier === 'straight' ? 'ahead' : '';
+  if (!side) return `Arrive at ${name}`;
+  if (side === 'ahead') return `Arrive at ${name}, straight ahead`;
+  const across = s.foot && s.foot !== side ? ', on the other side of the road' : '';
+  return `Arrive at ${name}${across}, on your ${side}`;
+}
+
 function stepAction(s) {
   // Footpaths often have no name: a footpath beside a street is that street;
   // otherwise say which street the turn is by.
@@ -456,7 +469,7 @@ function stepAction(s) {
   }
   switch (s.type) {
     case 'depart': return `Start${along}, heading ${compassName(s.bearing || 0).replace('-', ' ')}`;
-    case 'arrive': return 'Arrive at your destination';
+    case 'arrive': return arriveText(s);
     case 'roundabout': case 'rotary': return `At the roundabout, take exit ${s.exit || 1}${onto}`;
     case 'end of road': return `At the end of the road, ${turn}${onto}`;
     case 'fork': return `At the fork, ${turn}${onto}`;
@@ -628,6 +641,11 @@ async function addCrossStreets(res) {
       }
     }
     if (s.corner.length > 3) s.corner = s.corner.slice(0, 3);
+    if (s.type === 'arrive' && at[i] > 15) {
+      const [fl, fo] = pointAlong(line, cum, at[i] - 12);
+      const [g1, g2] = [pointAlong(line, cum, at[i] - 18), pointAlong(line, cum, at[i] - 6)];
+      s.foot = footSide(fl, fo, bearingDeg(g1[0], g1[1], g2[0], g2[1]), prevStreet || mine);
+    }
     // Cross streets between this step and the next, in order, not the corners at either end.
     s.crossings = [];
     if (s.type === 'arrive' || i + 1 >= res.steps.length) return;
@@ -898,7 +916,7 @@ function onGuidePosition(pos) {
   const steps = w.steps;
   const last = steps[steps.length - 1];
   if (haversineM(lat, lon, last.lat, last.lon) <= ARRIVE_M + Math.min(accuracy, 30)) {
-    say(`You have arrived at ${w.toLabel}.`);
+    say(`${arriveText(last).replace(/^Arrive at/, 'You have arrived at')}.`);
     stopGuiding(false);
     return;
   }
