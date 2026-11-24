@@ -21,7 +21,7 @@ import { checkVenue, openMenusNearby } from './venues.js';
 import { onSlowClick } from './busy.js';
 import { startMonitor, stopMonitor, monitorActive, setMonitorLevel, monitorStatus } from './gpsmonitor.js';
 import { speakableHours } from './placedetails.js';
-import { initJourney, openJourney } from './journey.js';
+import { initJourney } from './journey.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -1581,7 +1581,6 @@ for (const btn of document.querySelectorAll('#panel [data-move]')) {
 }
 $('btn-where').addEventListener('click', whereAmI);
 $('btn-position').addEventListener('click', () => { if (state.started) repeatLocation(); });
-$('btn-journey').addEventListener('click', openJourney);
 initJourney({
   getHere: () => ({ lat: state.lat, lon: state.lon, label: state.streetLabel || state.info.label || state.info.city }),
   // Where the device really is, with a short street address for the From box.
