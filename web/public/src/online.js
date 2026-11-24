@@ -146,7 +146,9 @@ export async function searchOnline(query, near) {
     const street = p.housenumber && p.street ? `${p.housenumber} ${p.street}` : p.street;
     const parts = [p.name, street, townOf(p), p.state, p.country];
     const label = parts.filter((x, i) => x && parts.indexOf(x) === i).join(', ');
-    return { label, lat, lon };
+    // Food places can show their menu in Jump's Details.
+    const food = p.osm_key === 'amenity' && /^(restaurant|cafe|fast_food|food_court|ice_cream|pub|bar|biergarten)$/.test(p.osm_value || '');
+    return { label, lat, lon, food };
   }).filter((r) => r.label && !seen.has(r.label) && seen.add(r.label));
 }
 

@@ -1326,9 +1326,16 @@ function setJumpResults(results) {
   state.jumpIdx = 0;
   $('jump-pick').hidden = !results.length;
   $('jump-go').hidden = !results.length;
-  $('jump-details').hidden = !results.length;
-  $('jump-details-box').hidden = true;
   jumpPicker.refresh();
+  closeJumpDetails();
+}
+
+/** Back to the list: Details shows again for whichever result you move to. */
+function closeJumpDetails() {
+  $('jump-details').hidden = !jumpResults.length;
+  $('jump-details-box').hidden = true;
+  $('jump-menu-box').hidden = true;
+  $('jump-menu-box').replaceChildren();
 }
 
 /**
@@ -1385,6 +1392,10 @@ async function jumpDetails() {
     'dropoff[nickname]': label,
   })}`;
   $('jump-uber').textContent = `Book an Uber to ${name}`;
+  // Food places: their menu, as in Places nearby.
+  $('jump-menu').hidden = !(r.food || (d && d.cuisine));
+  $('jump-menu').textContent = `Menu for ${name}`;
+  $('jump-details').hidden = true; // you're in Details now
   $('jump-details-box').hidden = false;
   $('jump-details-text').tabIndex = -1;
   $('jump-details-text').focus();
@@ -1503,7 +1514,7 @@ function setUpPickers() {
     shown: $('jump-results-value'),
     items: () => jumpResults.map((r, i) => ({ value: i, label: `${r.label}. ${i + 1} of ${jumpResults.length}` })),
     get: () => state.jumpIdx || 0,
-    set: (i) => { state.jumpIdx = i; },
+    set: (i) => { state.jumpIdx = i; closeJumpDetails(); },
   });
   pickers.push(makePicker($('set-gps'), {
     shown: $('set-gps-value'),
@@ -1597,6 +1608,12 @@ function chooseSelected() {
 }
 $('jump-go').addEventListener('click', chooseSelected);
 onSlowClick($('jump-details'), 'Looking it up', jumpDetails);
+$('jump-menu').addEventListener('click', () => {
+  const r = jumpResults[state.jumpIdx || 0];
+  if (!r) return;
+  const website = $('jump-web').hidden ? '' : $('jump-web').href;
+  showMenu($('jump-menu-box'), { name: String(r.label).split(', ')[0], lat: r.lat, lon: r.lon, website });
+});
 // Walk there / Drive there: the Navigation section takes over from Details.
 for (const [id, go] of [['jump-walk', walkTo], ['jump-drive', driveTo]]) {
   $(id).addEventListener('click', () => {
