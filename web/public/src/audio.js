@@ -21,10 +21,40 @@ export function configureAudio(soundList, tables) {
   aliases = tables.countryAliases || {};
 }
 
-export function unlock() {
+// iPhone shows "Now Playing" on the lock screen while a page's audio is
+// running, even in silence. So the audio is only awake while something is
+// sounding, and goes to sleep a few seconds after the last sound.
+let idleTimer = 0;
+const IDLE_MS = 4000;
+
+function setSession(type) {
+  try { if (navigator.audioSession) navigator.audioSession.type = type; } catch { /* older Safari */ }
+}
+
+/** Wake the audio before a sound. */
+function wake() {
+  if (!ctx) return false;
+  clearTimeout(idleTimer);
   // iPhone: play through the silent switch, like a media app, rather than
   // being muted along with ringtones (Safari 16.4 and later).
-  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch { /* older Safari */ }
+  setSession('playback');
+  if (ctx.state !== 'running') ctx.resume().catch(() => {});
+  return true;
+}
+
+/** Put the audio to sleep once nothing has sounded for a while (an ambience loop keeps it awake). */
+function sleepSoon(ms = IDLE_MS) {
+  if (!ctx) return;
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    if (ambient) return;
+    ctx.suspend().catch(() => {});
+    setSession('auto');
+  }, ms);
+}
+
+export function unlock() {
+  setSession('playback');
   if (!ctx) {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
@@ -32,12 +62,20 @@ export function unlock() {
     master = ctx.createGain();
     master.gain.value = settings.get('volume');
     master.connect(ctx.destination);
-    // Phones suspend audio when the page is hidden; pick it up again on return.
+    // Hidden (phone locked, or another app): sleep, so nothing shows as
+    // playing. Back on screen: wake only if a country's ambience was playing.
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && ctx.state !== 'running') ctx.resume().catch(() => {});
+      if (document.visibilityState === 'hidden') {
+        clearTimeout(idleTimer);
+        ctx.suspend().catch(() => {});
+        setSession('auto');
+      } else if (ambient) {
+        wake();
+      }
     });
   }
   if (ctx.state === 'suspended') ctx.resume();
+  sleepSoon();
 }
 
 export function setVolume(v) {
@@ -103,7 +141,8 @@ export function playPlace(place, continent) {
   const old = ambient;
   ambient = null;
   if (old) fadeOutAndStop(old);
-  if (!path) return;
+  if (!path) return sleepSoon();
+  wake();
   const mine = { path, src: null, gain: ctx.createGain() };
   mine.gain.gain.value = 0;
   mine.gain.connect(master);
@@ -127,6 +166,7 @@ function fadeOutAndStop(a) {
       try { a.src?.stop(); } catch { /* not started */ }
       a.src?.disconnect();
       a.gain.disconnect();
+      sleepSoon();
     }, 1500);
   } catch { /* already gone */ }
 }
@@ -156,6 +196,8 @@ export function toneParameters(lat, lon, bounds) {
 
 function beep(freq, pan, duration = 0.15, level = 0.35, type = 'sine') {
   if (!ctx || !settings.get('sounds')) return;
+  wake();
+  sleepSoon();
   const t = ctx.currentTime;
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();
