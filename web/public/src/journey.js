@@ -1320,14 +1320,31 @@ async function addSuburbs(list) {
   }
 }
 
-/** A food place's text with its suburb, unless it already says it ("near Burwood"). */
-function withSuburb(p) {
-  // "Ruse Bar and Brasserie, restaurant, Parramatta, in 13 kilometres, right"
-  if (p.base) {
-    if (p.near) return `${p.base}, near ${p.near}`;
-    const d = p.distance < 100 ? Math.round(p.distance / 5) * 5 : p.distance < 1000 ? Math.round(p.distance / 10) * 10 : p.distance;
-    return [p.base, p.suburb, p.distance != null ? `in ${formatDistance(d)}` : '', p.side].filter(Boolean).join(', ');
+/**
+ * A food place's address when it's known without a lookup: its own from
+ * OpenStreetMap, or the nearest house number in the street map (loaded along
+ * a walk). "4 Parramatta Square, Parramatta", or '' if neither.
+ */
+function knownAddress(p) {
+  if (p.addr) return p.addr.includes(',') || !p.suburb ? p.addr : `${p.addr}, ${p.suburb}`;
+  if (street.areaReady(p.lat, p.lon)) {
+    const a = street.nearestAddress(p.lat, p.lon, 30);
+    if (a && a.street) return [`${a.num} ${a.street}`, p.suburb].filter(Boolean).join(', ');
   }
+  return '';
+}
+
+/** A food place's text with its address (or suburb), unless it already says where ("near Burwood"). */
+function withSuburb(p) {
+  // "Ruse Bar and Brasserie, restaurant, 4 Parramatta Square, Parramatta, in 13 kilometres, right"
+  const where = knownAddress(p) || p.suburb;
+  if (p.base) {
+    if (p.near) return [p.base, knownAddress(p), `near ${p.near}`].filter(Boolean).join(', ');
+    const d = p.distance < 100 ? Math.round(p.distance / 5) * 5 : p.distance < 1000 ? Math.round(p.distance / 10) * 10 : p.distance;
+    return [p.base, where, p.distance != null ? `in ${formatDistance(d)}` : '', p.side].filter(Boolean).join(', ');
+  }
+  const addr = knownAddress(p);
+  if (addr) return `${p.text}, ${addr}`;
   if (!p.suburb || p.text.includes(p.suburb)) return p.text;
   return `${p.text}, in ${p.suburb}`;
 }
