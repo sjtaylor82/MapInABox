@@ -625,6 +625,14 @@ function addLandmarks(res) {
       if (seen.has(key)) continue;
       const at = alongLine(line, cum, p.lat, p.lon);
       if (at.cross > (bus ? 20 : 15)) continue;
+      // Not the destination itself, nor anything across the road from your footpath.
+      if (cum[cum.length - 1] - at.along < 40 && haversineM(p.lat, p.lon, line[line.length - 1][0], line[line.length - 1][1]) < 60) continue;
+      const [fl, fo] = pointAlong(line, cum, at.along);
+      const [h1, h2] = [pointAlong(line, cum, Math.max(0, at.along - 6)), pointAlong(line, cum, at.along + 6)];
+      const heading = bearingDeg(h1[0], h1[1], h2[0], h2[1]);
+      const road = street.nearestStreet(fl, fo, 25);
+      const foot = road ? footSide(fl, fo, heading, road.name) : '';
+      if (foot && foot !== at.side) continue;
       seen.add(key);
       passes.push({ name: p.name, along: at.along, side: at.side, bus });
     }
