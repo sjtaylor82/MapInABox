@@ -181,9 +181,12 @@ button[aria-pressed="true"] {
 #app {
   height: 100%;
   display: grid;
-  grid-template-rows: auto minmax(55vh, 1fr) auto;
+  grid-template-rows: auto minmax(55vh, 1fr) auto auto;
   overflow-y: auto;
 }
+
+/* The Map on/off switch, at the very bottom right (Expert). */
+#app-foot { display: flex; justify-content: flex-end; padding: 0.25rem 16px; background: var(--panel); }
 
 #panel {
   padding: 0.5rem 16px 1.5rem;
@@ -213,10 +216,10 @@ button[aria-pressed="true"] {
 @media (min-width: 900px) {
   #app {
     grid-template-columns: 1fr 20rem;
-    grid-template-rows: auto 1fr;
+    grid-template-rows: auto 1fr auto;
     overflow: hidden;
   }
-  #toolbar { grid-column: 1 / -1; }
+  #toolbar, #app-foot { grid-column: 1 / -1; }
   #panel { overflow-y: auto; }
 }
 

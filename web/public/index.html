@@ -29,7 +29,6 @@
   <div id="app" hidden>
     <div id="toolbar">
       <span class="brand" aria-hidden="true">Map in a Box</span>
-      <label class="switch" data-expert><input type="checkbox" role="switch" id="set-map"> Map</label>
       <button id="btn-jump" type="button">Jump <span class="key" aria-hidden="true">(J)</span></button>
       <button id="btn-position" type="button">Map position <span class="key" aria-hidden="true">(F2)</span></button>
       <button id="btn-street" type="button" aria-pressed="false">Street mode <span class="key" aria-hidden="true">(F11)</span></button>
@@ -251,6 +250,9 @@
         <label class="check" data-expert><input type="checkbox" id="set-geo"> Name geographic features (GeoFeatures)</label>
         <label class="check"><input type="checkbox" id="set-visual"> Visual Assist (show the map)</label>
       </div>
+    </div>
+    <div id="app-foot" data-expert>
+      <label class="switch"><input type="checkbox" role="switch" id="set-map"> Map</label>
     </div>
   </div>
 
