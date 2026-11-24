@@ -398,7 +398,9 @@ input[type="text"] { background: var(--bg); color: var(--fg); border: 2px solid 
 /* Starter on a phone or tablet: big compass buttons, easy to find and tap. */
 @media (pointer: coarse) {
   :root[data-level="starter"] #panel .move { gap: 0.5rem; }
-  :root[data-level="starter"] #panel .move button { min-height: 22vw; max-height: 8rem; font-size: 1.4rem; font-weight: 700; }
+  /* Tall enough to find easily, but all four fit on screen: an iPad on its side
+     has a narrow panel and short screen, so 22vw alone made tall thin towers. */
+  :root[data-level="starter"] #panel .move button { min-height: min(22vw, 8rem, 16vh); font-size: 1.4rem; font-weight: 700; }
 }
 
 /* Get the Desktop App: a link that looks like the toolbar buttons. */
