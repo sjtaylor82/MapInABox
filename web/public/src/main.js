@@ -1296,10 +1296,19 @@ function openHelp() {
 
 /** Ctrl+Comma or the Settings button: go to the Settings section. */
 function openSettings() {
-  $('settings-section').open = true;
+  setExpanded($('settings-title'), true);
   const h = $('settings-title');
   h.scrollIntoView({ block: 'start' });
   h.focus();
+}
+
+/** Information and Settings: a button that shows or hides its section; focus stays on the button. */
+function setExpanded(btn, open) {
+  btn.setAttribute('aria-expanded', String(open));
+  $(btn.getAttribute('aria-controls')).hidden = !open;
+}
+for (const btn of document.querySelectorAll('.expander')) {
+  btn.addEventListener('click', () => setExpanded(btn, btn.getAttribute('aria-expanded') !== 'true'));
 }
 
 const pickers = [];

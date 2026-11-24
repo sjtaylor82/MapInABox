@@ -165,8 +165,8 @@
         <button type="button" data-move="180">South</button>
       </div>
 
-      <details>
-      <summary><h2>Information</h2></summary>
+      <h2 class="expander-heading"><button type="button" class="expander" id="info-toggle" aria-expanded="false" aria-controls="info-section">Information</button></h2>
+      <div id="info-section" hidden>
       <div class="grid">
         <button type="button" data-key="a" data-street-only hidden>Address</button>
         <button type="button" data-key="q" data-expert>Air quality</button>
@@ -186,10 +186,10 @@
         <button type="button" data-key="w">Weather</button>
         <button type="button" data-key="Shift+i">Wikipedia</button>
       </div>
-      </details>
+      </div>
 
-      <details id="settings-section">
-        <summary><h2 id="settings-title" tabindex="-1">Settings</h2></summary>
+      <h2 class="expander-heading"><button type="button" class="expander" id="settings-title" aria-expanded="false" aria-controls="settings-section">Settings</button></h2>
+      <div id="settings-section" hidden>
         <div data-steer-only hidden>
           <label for="tilt-move" class="picker-label">Each tilt moves</label>
           <input id="tilt-move" type="range" class="picker">
@@ -231,7 +231,7 @@
         <label class="check"><input type="checkbox" id="set-sounds"> Country sounds and tones</label>
         <label class="check" data-expert><input type="checkbox" id="set-geo"> Name geographic features (GeoFeatures)</label>
         <label class="check"><input type="checkbox" id="set-visual"> Visual Assist (show the map)</label>
-      </details>
+      </div>
     </div>
   </div>
 
