@@ -60,7 +60,6 @@ export function makePicker(input, { items, get, set, shown, browse = false }) {
     current.className = 'browse-current';
     current.tabIndex = -1;
     current.setAttribute('aria-live', 'polite');
-    if (label) current.setAttribute('aria-describedby', label.id);
     box.append(current, prev, next);
     const move = (d) => {
       if (!list.length) return;

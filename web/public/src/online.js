@@ -104,13 +104,22 @@ export async function addressAt(lat, lon) {
     street: p.street || '',
     number: p.housenumber || '',
     name: p.name || '',
-    place: p.city || p.locality || p.district || '',
+    place: townOf(p),
     state: p.state || '',
     postcode: p.postcode || '',
   };
 }
 
 /** Place search (Photon). Returns [{ label, lat, lon }]. */
+/**
+ * The town part of a Photon address. In Australia addresses use the suburb
+ * (373 Old Cleveland Road, Coorparoo), not the city it's part of (Brisbane).
+ */
+function townOf(p) {
+  if (p.countrycode === 'AU') return p.district || p.locality || p.city || '';
+  return p.city || p.locality || p.district || '';
+}
+
 export async function searchOnline(query, near) {
   const params = new URLSearchParams({ q: query.slice(0, 200), limit: '10', lang: 'en' });
   const direct = 'https://photon.komoot.io/api/';
@@ -135,7 +144,7 @@ export async function searchOnline(query, near) {
     const p = f.properties || {};
     const [lon, lat] = f.geometry.coordinates;
     const street = p.housenumber && p.street ? `${p.housenumber} ${p.street}` : p.street;
-    const parts = [p.name, street, p.city || p.locality || p.district, p.state, p.country];
+    const parts = [p.name, street, townOf(p), p.state, p.country];
     const label = parts.filter((x, i) => x && parts.indexOf(x) === i).join(', ');
     return { label, lat, lon };
   }).filter((r) => r.label && !seen.has(r.label) && seen.add(r.label));
