@@ -26,6 +26,7 @@
   <div id="app" hidden>
     <div id="toolbar">
       <span class="brand" aria-hidden="true">Map in a Box</span>
+      <label class="switch" data-expert><input type="checkbox" role="switch" id="set-map"> Map</label>
       <button id="btn-jump" type="button">Jump <span class="key" aria-hidden="true">(J)</span></button>
       <button id="btn-position" type="button">Map position <span class="key" aria-hidden="true">(F2)</span></button>
       <button id="btn-journey" type="button" data-expert>Route</button>
@@ -156,7 +157,7 @@
       </div>
 
 
-      <h2>Move</h2>
+      <h2 id="move-title">Move</h2>
       <div class="grid move">
         <button type="button" data-move="0">North</button>
         <button type="button" data-move="270">West</button>
@@ -215,7 +216,7 @@
         <input id="set-gps" type="range" class="picker">
         <p id="set-gps-value" class="picker-value" aria-hidden="true"></p>
         <label for="step-size" class="picker-label">Step size</label>
-        <input id="step-size" type="range" min="0" max="4" step="1" value="2" class="picker">
+        <input id="step-size" type="range" class="picker">
         <p id="step-value" class="picker-value" aria-hidden="true">5 kilometres</p>
         <label class="switch"><input type="checkbox" role="switch" id="set-units"> Feet and miles</label>
         <label for="set-speech" class="picker-label">Speech</label>

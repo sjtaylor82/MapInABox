@@ -1266,6 +1266,7 @@ export function initJourney(h) {
   $('journey-from-here').addEventListener('click', fromMyLocation);
   st.date = travelDays()[1].value;
   datePicker = makePicker($('journey-date'), {
+    browse: true,
     shown: $('journey-date-value'),
     items: travelDays,
     get: () => st.date,
@@ -1278,12 +1279,14 @@ export function initJourney(h) {
     },
   });
   optionPicker = makePicker($('journey-option-list'), {
+    browse: true,
     shown: $('journey-option-value'),
     items: () => st.options.map((o, i) => ({ value: i, label: optionText(o, i, st.options.length) })),
     get: () => st.optIdx,
     set: (v) => { st.optIdx = v; },
   });
   legPicker = makePicker($('journey-leg-list'), {
+    browse: true,
     shown: $('journey-leg-value'),
     items: () => (st.option ? st.option.legs.map((_, i) => legItem(i)) : []),
     get: () => st.legIdx,
@@ -1293,6 +1296,7 @@ export function initJourney(h) {
     },
   });
   flightPicker = makePicker($('journey-flight-list'), {
+    browse: true,
     shown: $('journey-flight-value'),
     items: () => st.flights.map((f, i) => ({ value: i, label: flightText(f, i, st.flights.length) })),
     get: () => st.flightIdx,

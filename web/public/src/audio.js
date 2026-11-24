@@ -142,8 +142,15 @@ function loadBuffer(path) {
  * Sounds are decoded and played through the already-unlocked AudioContext:
  * iPhone will not start a new <audio> element without a fresh tap.
  */
+// Map switched off (Expert): no sounds or tones until it's back on.
+let paused = false;
+export function setPaused(on) {
+  paused = !!on;
+  if (paused) stopAmbient();
+}
+
 export function playPlace(place, continent) {
-  if (!ctx || !settings.get('sounds')) return false;
+  if (!ctx || !settings.get('sounds') || paused) return false;
   const path = soundPathFor(place, continent);
   if (ambient && ambient.path === path) return true; // neighbours sharing a regional loop
   const old = ambient;
@@ -204,7 +211,7 @@ export function toneParameters(lat, lon, bounds) {
 }
 
 function beep(freq, pan, duration = 0.15, level = 0.35, type = 'sine') {
-  if (!ctx || !settings.get('sounds')) return;
+  if (!ctx || !settings.get('sounds') || paused) return;
   wake();
   sleepSoon();
   const t = ctx.currentTime;

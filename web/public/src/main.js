@@ -866,12 +866,29 @@ function streetStepText(m) {
   return settings.get('units') === 'imperial' ? formatDistance(m) : `${m} metres`;
 }
 
+let stepPicker = null;
+let stepPickerMode = '';
+
 function showStep() {
-  const slider = $('step-size');
   const inStreet = state.mode === 'street';
   const text = inStreet ? streetStepText(streetStepM()) : stepText(stepKm());
-  slider.value = String(inStreet ? STREET_STEPS.indexOf(streetStepM()) : STEP_SIZES.indexOf(stepKm()));
-  slider.setAttribute('aria-valuetext', `Steps of ${text}`); // not starting with a number: VoiceOver plays only tones for those
+  // Step size: radio buttons, rebuilt only when the sizes change (world or street).
+  if (!stepPicker) {
+    stepPicker = makePicker($('step-size'), {
+      shown: $('step-value'),
+      items: () => (state.mode === 'street'
+        ? STREET_STEPS.map((m, i) => ({ value: i, label: streetStepText(m) }))
+        : STEP_SIZES.map((km, i) => ({ value: i, label: stepText(km) }))),
+      get: () => stepIndex(),
+      set: (i) => setStepIndex(i, false),
+    });
+    stepPickerMode = state.mode;
+  } else if (stepPickerMode !== state.mode) {
+    stepPickerMode = state.mode;
+    stepPicker.refresh();
+  } else {
+    stepPicker.sync();
+  }
   $('step-value').textContent = text;
   showTiltMove(); // its "One step" label shows the size
 }
@@ -1025,7 +1042,7 @@ function repeatLocation() {
 const ARROWS = { ArrowUp: [0, 'north'], ArrowDown: [180, 'south'], ArrowRight: [90, 'east'], ArrowLeft: [270, 'west'] };
 
 function onMapKey(e) {
-  if (!state.started || document.querySelector('dialog[open]')) return;
+  if (!state.started || document.querySelector('dialog[open]') || !mapOn()) return;
   const { key, shiftKey: shift, ctrlKey, metaKey, altKey: alt } = e;
   const ctrl = ctrlKey || metaKey;
   const handled = () => { e.preventDefault(); e.stopPropagation(); };
@@ -1187,9 +1204,21 @@ function focusMap() {
 /** Starter (the default) or Expert. */
 const level = () => (settings.get('level') === 'expert' ? 'expert' : 'starter');
 
+/** Map on or off (Expert): off hides the map and Move, and silences its sounds. Starter always has it on. */
+const mapOn = () => level() !== 'expert' || settings.get('mapOn') !== false;
+
+function applyMapOn() {
+  const on = mapOn();
+  document.body.classList.toggle('map-off', !on);
+  $('set-map').checked = on;
+  audio.setPaused(!on);
+  if (!on) state.soundWaiting = true; // the country's sound comes back with the next move
+}
+
 /** Show or hide what only Expert has. */
 function applyLevel() {
   document.documentElement.dataset.level = level();
+  if ($('set-map')) applyMapOn();
   if (level() !== 'expert' && monitorActive()) stopMonitor();
 }
 
@@ -1375,12 +1404,14 @@ function setUpPickers() {
     },
   });
   placesPicker = makePicker($('places-list'), {
+    browse: true,
     shown: $('places-value'),
     items: () => placeResults.map((p, i) => ({ value: i, label: `${street.placeText(p)}. ${i + 1} of ${placeResults.length}` })),
     get: () => state.placeIdx || 0,
     set: (i) => { state.placeIdx = i; showPlaceLinks(); },
   });
   jumpPicker = makePicker($('jump-results'), {
+    browse: true,
     shown: $('jump-results-value'),
     items: () => jumpResults.map((r, i) => ({ value: i, label: `${r.label}. ${i + 1} of ${jumpResults.length}` })),
     get: () => state.jumpIdx || 0,
@@ -1495,6 +1526,12 @@ for (const btn of document.querySelectorAll('[data-close]')) {
 }
 $('btn-jump').addEventListener('click', () => openJump());
 $('btn-gps').addEventListener('click', toggleMonitor);
+$('set-map').addEventListener('change', (e) => {
+  settings.set('mapOn', e.target.checked);
+  applyMapOn();
+  say(e.target.checked ? 'Map on.' : 'Map off. Its sounds are off until you turn it back on.');
+});
+applyMapOn();
 $('gps-stop').addEventListener('click', () => { stopMonitor(); $('btn-gps').focus(); });
 $('gps-repeat').addEventListener('click', () => {
   const s = monitorStatus();
@@ -1518,7 +1555,6 @@ $('btn-street').addEventListener('click', () => { if (state.started) toggleStree
 showStep();
 showTiltMove();
 // The slider reports its own new value (aria-valuetext), so it doesn't speak as well.
-$('step-size').addEventListener('input', (e) => setStepIndex(Number(e.target.value), false));
 for (const btn of document.querySelectorAll('#panel [data-key]')) {
   btn.addEventListener('click', () => { if (state.started) KEYS[btn.dataset.key]?.(); });
 }

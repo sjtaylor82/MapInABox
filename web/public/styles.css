@@ -402,3 +402,12 @@ input[type="text"] { background: var(--bg); color: var(--fg); border: 2px solid 
 #toolbar .toolbar-link { display: inline-flex; align-items: center; min-height: 44px; padding: 0.35rem 0.8rem; background: var(--accent); color: var(--bg); border: 2px solid var(--accent); border-radius: 6px; font-size: 1rem; text-decoration: none; }
 #toolbar .toolbar-link:hover { text-decoration: underline; }
 #toolbar .toolbar-link[hidden] { display: none; }
+
+/* Pickers: radio buttons for settings, Previous / Next for results. */
+.radios-list { margin: 0.25rem 0 0.5rem; }
+.browse { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0.25rem 0 0.5rem; }
+.browse-current { flex-basis: 100%; margin: 0; padding: 0.5rem 0.75rem; border: 2px solid var(--muted); border-radius: 6px; font-weight: 600; }
+.browse[hidden], .radios-list[hidden] { display: none; }
+
+/* Map switched off (Expert). */
+body.map-off #map, body.map-off #move-title, body.map-off #panel .move { display: none !important; }
