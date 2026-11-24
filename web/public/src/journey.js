@@ -493,16 +493,30 @@ function pointAlong(line, cum, along) {
  * Corners and cross streets from the street map: the streets meeting where
  * each step happens, and the cross streets passed on the way to the next.
  */
-async function addCrossStreets(res) {
+/**
+ * The street map along the whole walk, so its unnamed footpaths can be named
+ * by the streets beside them and cross streets found. A part of the map seen
+ * for the first time can take 10 to 20 seconds; wait up to 30. Returns
+ * whether it all arrived.
+ */
+async function loadStreetsAlong(res) {
   const line = decodePolyline(res.line);
   const cum = cumulative(line);
-  // The street map along the whole walk first.
   const loads = [];
   for (let a = 0; a <= cum[cum.length - 1]; a += 400) {
     const [la, lo] = pointAlong(line, cum, a);
-    loads.push(street.ensureArea(la, lo));
+    loads.push(street.ensureArea(la, lo).then(() => true, () => false));
   }
-  await Promise.race([Promise.all(loads), new Promise((r) => setTimeout(r, 12000))]);
+  const [endLat, endLon] = line[line.length - 1];
+  loads.push(street.ensureArea(endLat, endLon).then(() => true, () => false));
+  const all = await Promise.race([Promise.all(loads), new Promise((r) => setTimeout(() => r(null), 30000))]);
+  return !!all && all.every(Boolean);
+}
+
+async function addCrossStreets(res) {
+  const line = decodePolyline(res.line);
+  const cum = cumulative(line);
+  await loadStreetsAlong(res); // already loaded by planWalk: returns at once
   const at = res.steps.map((s) => alongLine(line, cum, s.lat, s.lon).along);
   res.steps.forEach((s, i) => { s.along = at[i]; s.nextAlong = at[i + 1]; });
   // Unnamed footpaths: name them by the street they run beside a little way
@@ -647,6 +661,11 @@ async function planWalk(from, to, known = null) {
     steps.push(step);
   }
   res.steps = steps;
+  // The streets along the walk first: unnamed footpaths are named by them.
+  setPrompt('Loading the streets along the way…');
+  const streetsOk = await loadStreetsAlong(res);
+  if (seq !== st.seq) return;
+  if (!streetsOk) say('Some street names could not be loaded, so a few steps may only say turn left or right.');
   for (const step of res.steps) {
     if (!step.name && step.lat != null) {
       const n = street.nearestStreet(step.lat, step.lon, 30);

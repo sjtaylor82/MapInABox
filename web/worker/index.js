@@ -24,13 +24,15 @@ const SEARCH_TTL = 7 * 24 * 3600;
 // expert address, so these can't be reached from a student's device.
 const EXPERT_APIS = new Set(['/api/menu', '/api/menutext', '/api/menupdf', '/api/stations', '/api/journey',
   '/api/flights', '/api/walk', '/api/road', '/api/food']);
-const isExpertHost = (url) => /^expert\./.test(url.hostname) || ['localhost', '127.0.0.1'].includes(url.hostname);
+// wrangler dev presents requests as the first custom domain, so testing the
+// Expert features on this computer needs `--var DEV_EXPERT:1`.
+const isExpertHost = (url, env) => /^expert\./.test(url.hostname) || !!(env && env.DEV_EXPERT);
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
-    if (EXPERT_APIS.has(url.pathname) && !isExpertHost(url)) {
+    if (EXPERT_APIS.has(url.pathname) && !isExpertHost(url, env)) {
       return json({ error: 'This is part of Expert mode, at expert.mapinabox.org.' }, 403);
     }
     const menuAnswer = menuRoute(request, url, env, ctx);
