@@ -36,7 +36,8 @@ export async function showMenu(box, place) {
   box.replaceChildren(wait);
   const done = working(null, `Looking for the menu for ${place.name}`, { slow: true });
   const pc = await postcodeAt(place.lat, place.lon).catch(() => null);
-  const params = new URLSearchParams({ name: place.name, suburb: (pc && pc.place) || '' });
+  // v: bumped when the answer's shape changes, so browsers don't keep an old copy for a week.
+  const params = new URLSearchParams({ name: place.name, suburb: (pc && pc.place) || '', v: '2' });
   if (place.website) params.set('website', place.website);
   let results = [];
   try {
@@ -62,6 +63,16 @@ export async function showMenu(box, place) {
   text.className = 'menu-text';
   for (const r of results) {
     const li = document.createElement('li');
+    // Menu photos: fetched and listed here, not RestaurantGuru's own page (with its adverts and other restaurants).
+    if (r.kind === 'photo') {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = `Photos of the menu, newest ${r.age || 'of unknown date'}`;
+      b.addEventListener('click', () => getPhoto(r.url, text, place.name));
+      li.append(b);
+      ul.append(li);
+      continue;
+    }
     const a = document.createElement('a');
     a.href = r.url;
     a.target = '_blank';
@@ -69,8 +80,8 @@ export async function showMenu(box, place) {
     const site = where(r.url);
     a.textContent = r.kind === 'delivery'
       ? `${place.name} on ${site}`
-      : r.kind === 'photo'
-        ? `Photos of the menu${r.age ? `, newest ${r.age}` : ''}, on ${site}`
+      : r.kind === 'facebook'
+        ? `${place.name} on Facebook (menu photos may be in its posts)`
         : `${r.pdf ? `${r.title && !/\.pdf$/i.test(r.title) ? r.title : 'Menu'} (PDF)` : r.title || 'Menu'} on ${site}`;
     li.append(a);
     // A menu on the venue's own site that can be read here: a page with prices, or a PDF.
@@ -81,25 +92,20 @@ export async function showMenu(box, place) {
       b.addEventListener('click', () => (r.pdf ? readPdf(r.url, text, place.name) : readMenu(r.url, text, place.name)));
       li.append(' ', b);
     }
-    if (r.kind === 'photo') {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = 'Get the photos';
-      b.addEventListener('click', () => getPhoto(r.url, text, place.name));
-      li.append(' ', b);
-    }
     ul.append(li);
   }
   box.append(ul, text);
   const readable = results.filter((r) => r.kind === 'own' && (r.readable || r.pdf)).length;
   const own = results.filter((r) => r.kind === 'own').length;
   const photos = results.filter((r) => r.kind === 'photo').length;
-  const delivery = results.length - own - photos;
+  const facebook = results.filter((r) => r.kind === 'facebook').length;
+  const delivery = results.length - own - photos - facebook;
   const parts = [
     readable && `${plural(readable, 'menu')} you can read here`,
     own - readable && `${plural(own - readable, 'other menu page')}`,
     photos && 'photos of the menu',
     delivery && `${plural(delivery, 'delivery page')}`,
+    facebook && 'its Facebook page',
   ].filter(Boolean);
   say(`${place.name}: ${parts.join(', ')}.`);
   h.focus();

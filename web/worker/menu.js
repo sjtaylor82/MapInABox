@@ -371,7 +371,7 @@ async function menu(url, env, ctx) {
   const website = (url.searchParams.get('website') || '').trim().slice(0, 300);
   if (!name) return json({ error: 'Bad request' }, 400);
   const cache = caches.default;
-  const key = new Request(`https://cache.mapinabox/menu/v12/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(suburb.toLowerCase())}`);
+  const key = new Request(`https://cache.mapinabox/menu/v13/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(suburb.toLowerCase())}`);
   const hit = await cache.match(key);
   if (hit) return hit;
 
@@ -430,10 +430,13 @@ async function menu(url, env, ctx) {
   // Photos of the menu: always when nothing else was found; alongside other
   // menus when the newest is from the last year (a delivery menu may not
   // have everything).
-  const photo = await photoLookup;
-  if (photo && (!results.length || ageDays(photo.age) < 365)) results.push(photo);
+  // Its Facebook page too, when there's no other menu (menus there are photos in its posts).
+  const rg = (await photoLookup) || {};
+  const nothingElse = !results.length;
+  if (rg.photo && (nothingElse || ageDays(rg.photo.age) < 365)) results.push(rg.photo);
+  if (rg.facebook && nothingElse) results.push(rg.facebook);
   // Menus that can be read here first (web pages, then PDFs), then other menu pages, then delivery, then photos.
-  const rank = (r) => (r.kind === 'photo' ? 4 : r.kind !== 'own' ? 3 : r.readable && !r.pdf ? 0 : r.pdf ? 1 : 2);
+  const rank = (r) => (r.kind === 'facebook' ? 5 : r.kind === 'photo' ? 4 : r.kind !== 'own' ? 3 : r.readable && !r.pdf ? 0 : r.pdf ? 1 : 2);
   results.sort((a, b) => rank(a) - rank(b));
   const out = json({ results: results.slice(0, 8), searched: raw.length }, 200, results.length ? 7 * 24 * 3600 : 0);
   if (results.length) ctx.waitUntil(cache.put(key, out.clone())); // an empty answer may be a passing failure
@@ -491,7 +494,12 @@ const RG_PAGE = /^([a-z]{2}\.)?restaurantguru\.com$/;
 // Menu photos: RestaurantGuru's own, and Zomato's (older menus came from there).
 const RG_IMAGE = /^((menu\d*|img\d*)\.restaurantguru\.com|b\.zmtcdn\.com)$/;
 
-/** The venue's RestaurantGuru menu page, as a 'photo' result, or null. */
+/**
+ * The venue on RestaurantGuru: { photo, facebook } results (either may be
+ * null), or null. photo: its menu photos; facebook: the Facebook page
+ * RestaurantGuru links to for the menu (Meta removed Facebook's menu tab, so
+ * it's the page, where menus are posted as photos).
+ */
 async function restaurantGuru(env, name, suburb, t) {
   let raw = [];
   try {
@@ -511,12 +519,28 @@ async function restaurantGuru(env, name, suburb, t) {
     if (!((t.compact && title.includes(t.compact)) || words >= Math.min(2, t.distinctive.length))) continue;
     if (suburb && !title.includes(compactOf(suburb))) continue;
     const page = `https://restaurantguru.com/${parts[0]}/menu`;
-    const versions = await photoVersions(page);
-    if (!versions.length) return null;
-    const newest = versions.reduce((a, b) => (ageDays(b.age) < ageDays(a.age) ? b : a));
-    return { kind: 'photo', title: 'Photos of the menu', url: page, age: newest.age, pdf: false, readable: true };
+    const { versions, facebook } = await rgPage(page);
+    const newest = versions.length ? versions.reduce((a, b) => (ageDays(b.age) < ageDays(a.age) ? b : a)) : null;
+    return {
+      photo: newest && { kind: 'photo', title: 'Photos of the menu', url: page, age: newest.age, pdf: false, readable: true },
+      facebook: facebook && { kind: 'facebook', title: 'Facebook page', url: facebook, pdf: false, readable: false },
+    };
   }
   return null;
+}
+
+/** Where a RestaurantGuru "View menu on www.facebook.com" link goes: the Facebook page, or ''. */
+async function rgFacebook(html) {
+  const m = String(html).match(/href="(https:\/\/restaurantguru\.com\/link\/[\w-]+)"[^>]*>\s*View menu on (?:www\.|m\.)?facebook\.com/i);
+  if (!m) return '';
+  try {
+    const res = await fetch(m[1], { headers: { 'User-Agent': BROWSER_UA }, redirect: 'manual', signal: AbortSignal.timeout(6000) });
+    const to = new URL(res.headers.get('Location') || '', m[1]);
+    if (!/(^|\.)facebook\.com$/.test(to.hostname)) return '';
+    return `https://www.facebook.com${to.pathname}`;
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -549,10 +573,10 @@ async function menuPhotos(url, ctx) {
   try { u = new URL(url.searchParams.get('url') || ''); } catch { return json({ error: 'Bad request' }, 400); }
   if (u.protocol !== 'https:' || !RG_PAGE.test(hostOf(u.href))) return json({ error: 'Bad request' }, 400);
   const cache = caches.default;
-  const key = new Request(`https://cache.mapinabox/menuphotos/v3/${encodeURIComponent(u.href)}`);
+  const key = new Request(`https://cache.mapinabox/menuphotos/v4/${encodeURIComponent(u.href)}`);
   const hit = await cache.match(key);
   if (hit) return hit;
-  const versions = await photoVersions(u.href);
+  const { versions } = await rgPage(u.href);
   if (!versions.length) return json({ error: 'Not readable' }, 502);
   // Newest first.
   versions.sort((a, b) => ageDays(a.age) - ageDays(b.age));
@@ -572,10 +596,14 @@ function ageDays(age) {
   return n * { day: 1, week: 7, month: 30, year: 365 }[m[2]];
 }
 
-/** All the menu versions on a RestaurantGuru menu page (the current one and older ones). */
-async function photoVersions(pageUrl) {
+/**
+ * A RestaurantGuru menu page: all its menu versions (the current one and
+ * older ones) and the Facebook page it links to. { versions, facebook }
+ */
+async function rgPage(pageUrl) {
   const page = await fetchPage(pageUrl);
-  if (!page.ok || !page.html) return [];
+  if (!page.ok || !page.html) return { versions: [], facebook: '' };
+  const facebookLookup = rgFacebook(page.html);
   const u = new URL(pageUrl);
   const versions = menuVersions(page.html);
   if (page.html.includes('show_old_menu__button')) {
@@ -587,7 +615,7 @@ async function photoVersions(pageUrl) {
       if (res.ok) versions.push(...menuVersions((await res.json()).html || ''));
     } catch { /* the current menu is enough */ }
   }
-  return versions;
+  return { versions, facebook: await facebookLookup };
 }
 
 /** GET /api/menuimage?u=  A menu photo, passed through so it can be shared from the browser. */
