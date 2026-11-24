@@ -385,3 +385,9 @@ input[type="text"] { background: var(--bg); color: var(--fg); border: 2px solid 
 #gps-panel h2 { margin: 0 0 0.25rem; font-size: 1.1rem; }
 #gps-status { margin: 0 0 0.5rem; padding-left: 1.2rem; }
 #gps-panel[hidden] { display: none; }
+
+/* Colours and Text size: radio buttons. */
+.radios { border: 0; margin: 0.75rem 0 0; padding: 0; }
+.radios legend { font-weight: 600; padding: 0; margin-bottom: 0.25rem; }
+.radio { display: flex; align-items: center; gap: 0.5rem; min-height: 44px; cursor: pointer; }
+.radio input { width: 1.4rem; height: 1.4rem; margin: 0; accent-color: var(--accent); }

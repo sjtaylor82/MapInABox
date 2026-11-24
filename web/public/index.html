@@ -196,12 +196,20 @@
           <p id="tilt-move-value" class="picker-value" aria-hidden="true"></p>
           <button type="button" id="btn-practice">Practise steering</button>
         </div>
-        <label for="set-theme" class="picker-label">Colours</label>
-        <input id="set-theme" type="range" class="picker">
-        <p id="set-theme-value" class="picker-value" aria-hidden="true"></p>
-        <label for="set-text" class="picker-label">Text size</label>
-        <input id="set-text" type="range" class="picker">
-        <p id="set-text-value" class="picker-value" aria-hidden="true"></p>
+        <fieldset id="set-theme" class="radios">
+          <legend>Colours</legend>
+          <label class="radio"><input type="radio" name="theme" value="auto"> Follow my device</label>
+          <label class="radio"><input type="radio" name="theme" value="light"> Light</label>
+          <label class="radio"><input type="radio" name="theme" value="dark"> Dark</label>
+          <label class="radio"><input type="radio" name="theme" value="yellow"> High contrast: yellow on black</label>
+          <label class="radio"><input type="radio" name="theme" value="white"> High contrast: white on black</label>
+        </fieldset>
+        <fieldset id="set-text" class="radios">
+          <legend>Text size</legend>
+          <label class="radio"><input type="radio" name="textsize" value="normal"> Normal</label>
+          <label class="radio"><input type="radio" name="textsize" value="large"> Large</label>
+          <label class="radio"><input type="radio" name="textsize" value="xl"> Extra large</label>
+        </fieldset>
         <div data-expert>
         <label for="set-gps" class="picker-label">GPS monitor says</label>
         <input id="set-gps" type="range" class="picker">

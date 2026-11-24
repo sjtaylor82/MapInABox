@@ -860,8 +860,7 @@ function showStep() {
   const inStreet = state.mode === 'street';
   const text = inStreet ? streetStepText(streetStepM()) : stepText(stepKm());
   slider.value = String(inStreet ? STREET_STEPS.indexOf(streetStepM()) : STEP_SIZES.indexOf(stepKm()));
-  const sizes = inStreet ? STREET_STEPS : STEP_SIZES;
-  slider.setAttribute('aria-valuetext', `Steps of ${text}, ${Number(slider.value) + 1} of ${sizes.length}`);
+  slider.setAttribute('aria-valuetext', `Steps of ${text}`); // not starting with a number: VoiceOver plays only tones for those
   $('step-value').textContent = text;
   showTiltMove(); // its "One step" label shows the size
 }
@@ -1185,14 +1184,12 @@ function toggleMonitor() {
   }, settings.get('gpsLevel') || 'suburbs');
 }
 
-/**
- * Colours and text size, once the picker has settled: changing them restyles
- * the whole page, which made VoiceOver lose its place mid-swipe.
- */
-let lookTimer = 0;
-function applyLookSoon() {
-  clearTimeout(lookTimer);
-  lookTimer = setTimeout(applyLook, 1500);
+/** Tick the chosen colours and text size. */
+function showLookChoices() {
+  const theme = settings.get('theme') || 'auto';
+  const size = settings.get('textSize') || 'normal';
+  for (const r of document.querySelectorAll('input[name="theme"]')) r.checked = r.value === theme;
+  for (const r of document.querySelectorAll('input[name="textsize"]')) r.checked = r.value === size;
 }
 
 /** Colours and text size from Settings. */
@@ -1348,28 +1345,15 @@ function setUpPickers() {
     get: () => settings.get('gpsLevel') || 'suburbs',
     set: (v) => { settings.set('gpsLevel', v); setMonitorLevel(v); },
   }));
-  pickers.push(makePicker($('set-theme'), {
-    shown: $('set-theme-value'),
-    items: () => [
-      { value: 'auto', label: 'Follow my device' },
-      { value: 'light', label: 'Light' },
-      { value: 'dark', label: 'Dark' },
-      { value: 'yellow', label: 'High contrast: yellow on black' },
-      { value: 'white', label: 'High contrast: white on black' },
-    ],
-    get: () => settings.get('theme') || 'auto',
-    set: (v) => { settings.set('theme', v); applyLookSoon(); },
-  }));
-  pickers.push(makePicker($('set-text'), {
-    shown: $('set-text-value'),
-    items: () => [
-      { value: 'normal', label: 'Normal' },
-      { value: 'large', label: 'Large' },
-      { value: 'xl', label: 'Extra large' },
-    ],
-    get: () => settings.get('textSize') || 'normal',
-    set: (v) => { settings.set('textSize', v); applyLookSoon(); },
-  }));
+  // Colours and text size restyle the whole page, so they're radio buttons:
+  // on a slider VoiceOver lost its place when the page changed under it.
+  for (const r of document.querySelectorAll('input[name="theme"]')) {
+    r.addEventListener('change', () => { settings.set('theme', r.value); applyLook(); });
+  }
+  for (const r of document.querySelectorAll('input[name="textsize"]')) {
+    r.addEventListener('change', () => { settings.set('textSize', r.value); applyLook(); });
+  }
+  showLookChoices();
   pickers.push(makePicker($('set-speech'), {
     shown: $('set-speech-value'),
     items: () => [
@@ -1415,6 +1399,7 @@ function setUpPickers() {
 /** Keep the Settings section in step when a key or button changes a setting. */
 function refreshSettings() {
   for (const pk of pickers) pk.refresh();
+  showLookChoices();
   $('set-units').checked = settings.get('units') === 'imperial';
   $('set-street-steer').checked = streetSteerMode() === 'free';
   $('set-sounds').checked = settings.get('sounds');
