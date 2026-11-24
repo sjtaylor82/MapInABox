@@ -626,11 +626,12 @@ function addLandmarks(res) {
       const at = alongLine(line, cum, p.lat, p.lon);
       if (at.cross > (bus ? 20 : 15)) continue;
       // Not the destination itself, nor anything across the road from your footpath.
-      if (cum[cum.length - 1] - at.along < 40 && haversineM(p.lat, p.lon, line[line.length - 1][0], line[line.length - 1][1]) < 60) continue;
+      const dest = res.toName ? res.toName.toLowerCase() : '';
+      if ((dest && p.name.toLowerCase() === dest) || haversineM(p.lat, p.lon, line[line.length - 1][0], line[line.length - 1][1]) < 40) continue;
       const [fl, fo] = pointAlong(line, cum, at.along);
       const [h1, h2] = [pointAlong(line, cum, Math.max(0, at.along - 6)), pointAlong(line, cum, at.along + 6)];
       const heading = bearingDeg(h1[0], h1[1], h2[0], h2[1]);
-      const road = street.nearestStreet(fl, fo, 25);
+      const road = street.streetAlong(fl, fo, heading, 25); // the named street you walk beside, not the footpath
       const foot = road ? footSide(fl, fo, heading, road.name) : '';
       if (foot && foot !== at.side) continue;
       seen.add(key);
@@ -835,6 +836,7 @@ async function planWalk(from, to, known = null) {
   setPrompt('Finding the cross streets…');
   await addCrossStreets(res);
   await addTrafficControls(res);
+  res.toName = String(b.label || '').split(', ')[0];
   addLandmarks(res);
   if (seq !== st.seq) return;
   st.walk = res;
