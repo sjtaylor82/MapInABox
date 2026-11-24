@@ -19,7 +19,10 @@ export function makePicker(input, { items, get, set, shown }) {
 
   function show(i) {
     const label = list[i] ? list[i].label : '';
-    input.setAttribute('aria-valuetext', label);
+    // VoiceOver reads the value, then where it is in the list ("Large, 2 of 3"),
+    // unless the label already says so.
+    const spoken = !label || /\d+ of \d+\.?$/.test(label) ? label : `${label}, ${i + 1} of ${list.length}`;
+    input.setAttribute('aria-valuetext', spoken);
     if (shown) shown.textContent = label;
   }
 

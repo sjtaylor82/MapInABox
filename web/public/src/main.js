@@ -860,7 +860,8 @@ function showStep() {
   const inStreet = state.mode === 'street';
   const text = inStreet ? streetStepText(streetStepM()) : stepText(stepKm());
   slider.value = String(inStreet ? STREET_STEPS.indexOf(streetStepM()) : STEP_SIZES.indexOf(stepKm()));
-  slider.setAttribute('aria-valuetext', text);
+  const sizes = inStreet ? STREET_STEPS : STEP_SIZES;
+  slider.setAttribute('aria-valuetext', `Steps of ${text}, ${Number(slider.value) + 1} of ${sizes.length}`);
   $('step-value').textContent = text;
   showTiltMove(); // its "One step" label shows the size
 }
@@ -882,6 +883,7 @@ function showStreetSteer() {
   const btn = $('btn-street-steer');
   btn.hidden = state.mode !== 'street' || $('btn-steer').hidden;
   btn.textContent = streetSteerLabel();
+  $('set-street-steer').checked = streetSteerMode() === 'free';
 }
 
 function streetSteerLabel() {
@@ -1183,6 +1185,16 @@ function toggleMonitor() {
   }, settings.get('gpsLevel') || 'suburbs');
 }
 
+/**
+ * Colours and text size, once the picker has settled: changing them restyles
+ * the whole page, which made VoiceOver lose its place mid-swipe.
+ */
+let lookTimer = 0;
+function applyLookSoon() {
+  clearTimeout(lookTimer);
+  lookTimer = setTimeout(applyLook, 1500);
+}
+
 /** Colours and text size from Settings. */
 function applyLook() {
   const theme = settings.get('theme') || 'auto';
@@ -1346,7 +1358,7 @@ function setUpPickers() {
       { value: 'white', label: 'High contrast: white on black' },
     ],
     get: () => settings.get('theme') || 'auto',
-    set: (v) => { settings.set('theme', v); applyLook(); },
+    set: (v) => { settings.set('theme', v); applyLookSoon(); },
   }));
   pickers.push(makePicker($('set-text'), {
     shown: $('set-text-value'),
@@ -1356,13 +1368,7 @@ function setUpPickers() {
       { value: 'xl', label: 'Extra large' },
     ],
     get: () => settings.get('textSize') || 'normal',
-    set: (v) => { settings.set('textSize', v); applyLook(); },
-  }));
-  pickers.push(makePicker($('set-units'), {
-    shown: $('set-units-value'),
-    items: () => [{ value: 'metric', label: 'Metres and kilometres' }, { value: 'imperial', label: 'Feet and miles' }],
-    get: () => settings.get('units'),
-    set: (v) => { settings.set('units', v); showStep(); },
+    set: (v) => { settings.set('textSize', v); applyLookSoon(); },
   }));
   pickers.push(makePicker($('set-speech'), {
     shown: $('set-speech-value'),
@@ -1383,15 +1389,14 @@ function setUpPickers() {
     get: () => settings.get('walkCallouts') || 'food',
     set: (v) => settings.set('walkCallouts', v),
   }));
-  pickers.push(makePicker($('set-street-steer'), {
-    shown: $('set-street-steer-value'),
-    items: () => [
-      { value: 'pick', label: 'Pick turns: follow the street and stop at each corner' },
-      { value: 'free', label: 'Free: go straight the way I tilt, across blocks too' },
-    ],
-    get: streetSteerMode,
-    set: (v) => { settings.set('streetSteer', v); state.corner = null; showStreetSteer(); },
-  }));
+  // Two-way choices are switches: VoiceOver adjusts a two-step slider unreliably.
+  $('set-units').addEventListener('change', (e) => { settings.set('units', e.target.checked ? 'imperial' : 'metric'); showStep(); });
+  $('set-street-steer').addEventListener('change', (e) => {
+    settings.set('streetSteer', e.target.checked ? 'free' : 'pick');
+    state.corner = null;
+    showStreetSteer();
+  });
+  $('set-units').checked = settings.get('units') === 'imperial';
   $('set-sounds').checked = settings.get('sounds');
   $('set-geo').checked = settings.get('geoFeatures');
   $('set-visual').checked = settings.get('visualAssist');
@@ -1410,6 +1415,8 @@ function setUpPickers() {
 /** Keep the Settings section in step when a key or button changes a setting. */
 function refreshSettings() {
   for (const pk of pickers) pk.refresh();
+  $('set-units').checked = settings.get('units') === 'imperial';
+  $('set-street-steer').checked = streetSteerMode() === 'free';
   $('set-sounds').checked = settings.get('sounds');
   $('set-geo').checked = settings.get('geoFeatures');
   $('set-visual').checked = settings.get('visualAssist');
