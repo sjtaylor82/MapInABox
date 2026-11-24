@@ -60,14 +60,6 @@ async function boot() {
   if (steering.isTouchDevice()) $('map-hint').textContent = '';
   const saved = settings.get('position');
   const hasSaved = !!(saved && Number.isFinite(saved.lat));
-  $('start-last').hidden = !hasSaved;
-  $('start-last').addEventListener('click', () => goStart('last'));
-  $('start-here').addEventListener('click', () => goStart('here'));
-  $('start-choose').addEventListener('click', () => goStart('choose'));
-  $('btn-world').addEventListener('click', () => {
-    $('start-dialog').showModal();
-    $('start-dialog').querySelector('button:not([hidden])').focus();
-  });
   // iPhone lets a page play sound and speak only after a tap or key press.
   const unlockOnce = () => {
     audio.unlock();
@@ -100,20 +92,6 @@ async function boot() {
     onFail: () => (hasSaved ? moved({ tone: false })
       : openJump('Where would you like to start? Type a city, country or coordinates, then press Enter.')),
   });
-}
-
-/** The World map button's choices: where you left off, where you are, or a place you choose. */
-function goStart(where) {
-  if ($('start-dialog').open) $('start-dialog').close();
-  $('map').focus();
-  const saved = settings.get('position');
-  if (where === 'here') return goToMyLocation();
-  if (where === 'last' && saved && Number.isFinite(saved.lat)) {
-    state.lat = saved.lat;
-    state.lon = saved.lon;
-    return moved({ tone: false });
-  }
-  return openJump('Where would you like to go? Type a city, country or coordinates, then press Enter.');
 }
 
 // ── Moving and announcing ─────────────────────────────────────────────────

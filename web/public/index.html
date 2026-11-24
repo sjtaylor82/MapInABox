@@ -29,6 +29,7 @@
         <label class="switch"><input type="checkbox" role="switch" id="set-expert"> Expert mode</label>
       </div>
       <span class="brand" aria-hidden="true">Map in a Box</span>
+      <button id="btn-jump" type="button">Jump <span class="key" aria-hidden="true">(J)</span></button>
       <button id="btn-position" type="button">Map position <span class="key" aria-hidden="true">(F2)</span></button>
       <button id="btn-journey" type="button" data-expert>Route</button>
       <button id="btn-street" type="button" aria-pressed="false">Street mode <span class="key" aria-hidden="true">(F11)</span></button>
@@ -38,11 +39,9 @@
       <div id="toolbar-more" hidden>
         <button id="btn-menus" type="button" data-expert>Menus nearby</button>
         <button id="btn-help" type="button">Help <span class="key" aria-hidden="true">(F1)</span></button>
-        <button id="btn-jump" type="button" data-expert>Jump <span class="key" aria-hidden="true">(J)</span></button>
         <button id="btn-settings" type="button">Settings <span class="key" aria-hidden="true">(Ctrl+,)</span></button>
         <button id="btn-steer" type="button" aria-pressed="false" hidden>Steering</button>
         <button id="btn-street-steer" type="button" hidden data-expert>Steering: pick turns</button>
-        <button id="btn-world" type="button">World map</button>
       </div>
       <div class="panel-section" id="gps-panel" hidden>
         <h2 id="gps-title" tabindex="-1">GPS monitor</h2>
@@ -237,16 +236,6 @@
     </div>
   </div>
 
-  <dialog id="start-dialog" role="alertdialog" aria-labelledby="start-title" aria-describedby="start-desc">
-    <h2 id="start-title">World map: where to?</h2>
-    <p id="start-desc" class="sr-only">Choose where the map goes.</p>
-    <div class="buttons stack">
-      <button type="button" id="start-last">Where I left off</button>
-      <button type="button" id="start-here">My current location</button>
-      <button type="button" id="start-choose">A place I choose</button>
-    </div>
-  </dialog>
-
   <dialog id="venue-dialog" aria-labelledby="venue-title">
     <h2 id="venue-title" tabindex="-1"></h2>
     <div id="venue-choices"></div>
@@ -290,7 +279,7 @@
         <tr><td>Alt+Arrows</td><td>Jump to the next country in that direction</td></tr>
         <tr><td>J</td><td>Jump to a place</td></tr>
         <tr><td>Ctrl+H</td><td>Recent jumps</td></tr>
-        <tr><td>Y</td><td>Where am I: your street address, from your real location (the browser asks first). The map stays put; World map, then My current location, moves it there</td></tr>
+        <tr><td>Y</td><td>Where am I: your street address, from your real location (the browser asks first). The map stays put; Jump, then Use my location, moves it there</td></tr>
         <tr><td>F2</td><td>Repeat location. Twice to spell it, three times to copy it</td></tr>
         <tr><td>F3, F4</td><td>Latitude, longitude</td></tr>
         <tr><td>L</td><td>Latitude and longitude</td></tr>
