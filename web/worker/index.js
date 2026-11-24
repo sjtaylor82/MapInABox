@@ -163,10 +163,12 @@ async function search(url, ctx) {
   if (['en', 'de', 'fr', 'default'].includes(lang)) params.set('lang', lang);
   const lat = Number(url.searchParams.get('lat'));
   const lon = Number(url.searchParams.get('lon'));
-  if (Number.isFinite(lat) && Number.isFinite(lon)) {
+  if (url.searchParams.has('lat') && Number.isFinite(lat) && Number.isFinite(lon)) {
     // Rounded, so nearby searches share the cache and the exact spot is not sent.
     params.set('lat', lat.toFixed(1));
     params.set('lon', lon.toFixed(1));
+    // Nearer first among similar matches, but famous places still win (Paris is in France).
+    params.set('location_bias_scale', '0.9');
   }
 
   const upstream = `${PHOTON}?${params}`;

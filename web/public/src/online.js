@@ -121,14 +121,15 @@ export async function searchOnline(query, near) {
     }
     return getJson(`${direct}?${params}`);
   };
-  let json = await ask();
-  let features = json.features || [];
-  if (!features.length && near) {
+  // Nearer matches first (Vision Australia in your city, not another state's),
+  // while famous places far away still come up. Rounded to about a kilometre.
+  if (near) {
     params.set('lat', near.lat.toFixed(2));
     params.set('lon', near.lon.toFixed(2));
-    json = await ask();
-    features = json.features || [];
+    params.set('location_bias_scale', '0.9'); // famous places still win: Paris is in France
   }
+  const json = await ask();
+  const features = json.features || [];
   const seen = new Set();
   return features.map((f) => {
     const p = f.properties || {};

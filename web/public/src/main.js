@@ -1380,6 +1380,15 @@ async function jumpDetails() {
   $('jump-details-text').focus();
 }
 
+/** Where to rank online matches from: where you are in Expert, else the map. */
+async function jumpNear() {
+  if (level() === 'expert') {
+    const p = await Promise.race([devicePosition().catch(() => null), new Promise((r) => setTimeout(() => r(null), 2500))]);
+    if (p) return p;
+  }
+  return state;
+}
+
 async function runJumpSearch() {
   const text = $('jump-input').value.trim();
   if (!text) return;
@@ -1391,7 +1400,7 @@ async function runJumpSearch() {
     say('No local match. Searching online…');
     local = false;
     try {
-      results = await online.searchOnline(text, state);
+      results = await online.searchOnline(text, await jumpNear());
     } catch {
       return say('Online search failed. Check the internet connection and try again.');
     }
@@ -1410,7 +1419,7 @@ async function chooseJump(r) {
   if (r.online) {
     say('Searching online…');
     try {
-      const more = await online.searchOnline($('jump-input').value.trim(), state);
+      const more = await online.searchOnline($('jump-input').value.trim(), await jumpNear());
       if (!more.length) return say('Nothing found online.');
       setJumpResults(more);
       $('jump-results').focus();
