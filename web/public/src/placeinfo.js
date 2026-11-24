@@ -6,7 +6,14 @@
 import * as street from './street.js';
 import { bearingDeg, offsetKm, compassName } from './geo.js';
 
-const CORNER_M = 25;    // this close to a corner: "corner of ..."
+// A corner place: within CORNER_M of where the streets' centre lines cross (a
+// big corner building's pin can be 30-40 m from that point on wide roads) AND
+// close to both streets. Within ON_M of both: "corner of". Within NEAR_M of
+// both: "near the corner of" (a big building whose pin is in its middle, or a
+// shop a few doors along: we can't tell which, so don't claim the corner).
+const CORNER_M = 55;
+const ON_M = 22;
+const NEAR_M = 38;
 const SEARCH_M = 400;   // how far along its street to look for the cross streets either side
 const STEP_M = 10;
 
@@ -44,8 +51,21 @@ export async function describeLocation(lat, lon, addressStreet = '') {
   await Promise.race([street.ensureArea(lat, lon), new Promise((r) => setTimeout(r, 8000))]);
   if (!street.areaReady(lat, lon)) return '';
   // On a corner.
-  const corner = street.intersectionsNear(lat, lon, CORNER_M).map((ix) => street.roadNamesAt(ix)).find((names) => names.size >= 2);
-  if (corner) return `corner of ${listJoin([...corner].slice(0, 3))}`;
+  const streetDist = (name) => {
+    const s = street.nearestNamedStreet(lat, lon, NEAR_M, name);
+    return s?.name === name ? s.dist : Infinity;
+  };
+  // The nearest such corner, but one on the street in its address first (on a
+  // block between two corners, the address says which).
+  const corners = street.intersectionsNear(lat, lon, CORNER_M)
+    .map((ix) => [...street.roadNamesAt(ix)].map((n) => [n, streetDist(n)]).filter(([, d]) => d <= NEAR_M)
+      .sort((x, y) => (y[0] === addressStreet) - (x[0] === addressStreet) || x[1] - y[1]).slice(0, 2))
+    .filter((names) => names.length === 2);
+  const best = corners.find((names) => names.some(([n]) => n === addressStreet)) || corners[0];
+  if (best) {
+    const pair = listJoin(best.map(([n]) => n));
+    return Math.max(best[0][1], best[1][1]) <= ON_M ? `corner of ${pair}` : `near the corner of ${pair}`;
+  }
   // Otherwise: its street (the one in its address when known), which side, and the cross streets either side.
   const near = street.nearestNamedStreet(lat, lon, 60, addressStreet);
   if (!near || !near.name) return '';
