@@ -259,6 +259,55 @@ def build_postcodes() -> None:
     print(f"  {len(out_manifest)} countries")
 
 
+STATION_COUNTRIES = ["AU"]
+STATION_KINDS = {"subway": 1, "light_rail": 2}  # 0: train station
+
+
+def build_stations() -> None:
+    """Train, metro and light rail stations from OpenStreetMap (ODbL), one small
+    JSON file per country, so Nearest stations answers at once instead of
+    waiting on a busy Overpass server. Rows: [name, kind, lat, lon]; kind 0
+    train, 1 metro, 2 light rail. Rebuild now and then: stations rarely change."""
+    import urllib.parse
+    import urllib.request
+    dest = OUT / "stations"
+    dest.mkdir(parents=True, exist_ok=True)
+    manifest = {}
+    for cc in STATION_COUNTRIES:
+        query = (f'[out:json][timeout:180];area["ISO3166-1"="{cc}"][admin_level=2]->.a;'
+                 'nwr["railway"="station"]["name"](area.a);out center tags;')
+        req = urllib.request.Request(
+            "https://overpass.openstreetmap.fr/api/interpreter",
+            data=urllib.parse.urlencode({"data": query}).encode(),
+            headers={"User-Agent": "MapInABoxWeb/0.1 (+https://github.com/sjtaylor82/MapInABox)"})
+        with urllib.request.urlopen(req, timeout=240) as res:
+            elements = json.load(res).get("elements", [])
+        rows, seen = [], set()
+        for el in elements:
+            t = el.get("tags", {})
+            lat = el.get("lat", (el.get("center") or {}).get("lat"))
+            lon = el.get("lon", (el.get("center") or {}).get("lon"))
+            if lat is None or lon is None or not t.get("name"):
+                continue
+            # Heritage and closed lines are not where you catch a train.
+            if (t.get("usage") == "tourism" or t.get("disused") == "yes" or t.get("railway:historic")
+                    or t.get("tourism") or "museum" in t["name"].lower() or t.get("railway:preserved") == "yes"):
+                continue
+            key = (t["name"].lower(), round(lat, 2), round(lon, 2))
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append([t["name"], STATION_KINDS.get(t.get("station"), 0), round(lat, 5), round(lon, 5)])
+        if not rows:
+            continue
+        lats = [r[2] for r in rows]
+        lons = [r[3] for r in rows]
+        (dest / f"{cc}.json").write_text(json.dumps(rows, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
+        manifest[cc] = [min(lats) - 0.5, max(lats) + 0.5, min(lons) - 0.5, max(lons) + 0.5]
+        print(f"  {cc}: {len(rows)} stations")
+    (dest / "manifest.json").write_text(json.dumps(manifest, separators=(",", ":")), encoding="utf-8")
+
+
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     print("Tables"); build_tables()
@@ -266,6 +315,7 @@ def main() -> int:
     print("Cities"); build_cities()
     print("GeoFeatures"); build_features()
     print("Postcodes"); build_postcodes()
+    print("Stations"); build_stations()
     print("Sounds"); copy_sounds()
     return 0
 

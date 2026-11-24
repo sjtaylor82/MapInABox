@@ -175,6 +175,35 @@ function showOnly(...ids) {
 // The train, metro and light rail stations nearest to you, nearest first.
 // Choose one to walk there, book an Uber to it, or open it in Apple Maps.
 
+// Built-in station lists (data/stations/<country>.json, from OpenStreetMap):
+// answers at once. Places outside those countries ask the server instead.
+const STATION_KIND_NAMES = ['train station', 'metro station', 'light rail station'];
+let stationManifest = null;
+const stationFiles = new Map();
+
+async function stationsBuiltIn(lat, lon) {
+  if (!stationManifest) {
+    stationManifest = await fetch('data/stations/manifest.json').then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
+  }
+  const cc = Object.keys(stationManifest).find((k) => {
+    const [la0, la1, lo0, lo1] = stationManifest[k];
+    return lat >= la0 && lat <= la1 && lon >= lo0 && lon <= lo1;
+  });
+  if (!cc) return null;
+  if (!stationFiles.has(cc)) stationFiles.set(cc, fetch(`data/stations/${cc}.json`).then((r) => r.json()));
+  const rows = await stationFiles.get(cc);
+  const byName = new Map();
+  for (const [name, kind, sLat, sLon] of rows) {
+    const dist = haversineM(lat, lon, sLat, sLon);
+    if (dist > 15000) continue;
+    const k = name.toLowerCase();
+    if (!byName.has(k) || dist < byName.get(k).dist) {
+      byName.set(k, { name, kind: STATION_KIND_NAMES[kind] || 'train station', lat: sLat, lon: sLon, dist: Math.round(dist) });
+    }
+  }
+  return [...byName.values()].sort((a, b) => a.dist - b.dist).slice(0, 20);
+}
+
 async function nearestStations() {
   showOnly();
   say('Finding stations near you…');
@@ -188,7 +217,8 @@ async function nearestStations() {
   }
   let list = [];
   try {
-    list = (await api(`api/stations?lat=${from.lat.toFixed(5)}&lon=${from.lon.toFixed(5)}`, {}, 50000)).stations || [];
+    list = await stationsBuiltIn(from.lat, from.lon).catch(() => null)
+      || (await api(`api/stations?lat=${from.lat.toFixed(5)}&lon=${from.lon.toFixed(5)}`, {}, 50000)).stations || [];
   } catch (err) {
     setPrompt(err.message);
     return say(err.message);
@@ -1390,7 +1420,7 @@ export function initJourney(h) {
   enter('journey-to', walkClick);
   enter('journey-option-list', chooseOption);
   onSlowClick($('journey-plan'), 'Finding ways to make the trip', plan, { slow: true });
-  onSlowClick($('journey-stations-find'), 'Finding stations near you', nearestStations, { slow: true });
+  onSlowClick($('journey-stations-find'), 'Finding stations near you', nearestStations);
   onSlowClick($('journey-station-walk'), 'Finding a walking route', walkToStation);
   onSlowClick($('journey-walk-plan'), 'Finding a walking route', walkClick);
   onSlowClick($('journey-drive-plan'), 'Finding the place', planDrive);
