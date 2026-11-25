@@ -82,7 +82,8 @@ export async function showMenu(box, place) {
     if (r.kind === 'photo') {
       const b = document.createElement('button');
       b.type = 'button';
-      b.textContent = `Photos of the menu, newest ${r.age || 'of unknown date'}`;
+      // The menu itself, as customers photographed it: open to read with a reading app.
+      b.textContent = `Customers' photos of the menu, newest ${r.age || 'of unknown date'}. Open them to read with Seeing AI`;
       b.addEventListener('click', () => { opened(b); getPhoto(r.url, text, place.name); });
       li.append(b);
       ul.append(li);
@@ -99,13 +100,16 @@ export async function showMenu(box, place) {
         ? `${place.name} on Facebook (menu photos may be in its posts)`
         // The menu, when it was updated, then the site: "Food Menu (PDF), updated 12 Nov 2026 (ahmets.com)".
         : `${r.pdf ? `${r.title && !/\.pdf$/i.test(r.title) ? r.title : 'Menu'} (PDF)` : r.title || 'Menu'}`
+          + `${!r.pdf && !r.readable && r.pictures ? ` (${plural(r.pictures, 'picture')} of the menu)` : ''}`
           + `${r.updated ? `, ${updatedText(r.updated)}` : ''} (${site})`;
     li.append(a);
     // A menu page whose menu is pictures: list them here, to share to a reading app.
     if (r.kind === 'own' && !r.readable && !r.pdf && r.pictures) {
       const b = document.createElement('button');
       b.type = 'button';
-      b.textContent = r.pictures === 1 ? 'Menu picture' : `Menu pictures (${r.pictures})`;
+      // These pictures are the menu (menu boards, a designed menu), not decoration.
+      b.textContent = r.pictures === 1 ? 'Open the menu picture to read with Seeing AI'
+        : `Open the ${r.pictures} menu pictures to read with Seeing AI`;
       b.addEventListener('click', () => { opened(b); getPhoto(r.url, text, place.name); });
       li.append(' ', b);
     }
