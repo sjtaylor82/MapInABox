@@ -11,6 +11,7 @@ import * as street from './street.js';
 import { settings } from './settings.js';
 import { say } from './speech.js';
 import { showMenu } from './menu.js';
+import { formatDistance } from './geo.js';
 
 // Places that have a menu (not supermarkets or butchers).
 const EATING = new Set(['restaurant', 'cafe', 'café', 'fast food', 'pub', 'bar', 'biergarten', 'ice cream', 'bakery',
@@ -18,15 +19,15 @@ const EATING = new Set(['restaurant', 'cafe', 'café', 'fast food', 'pub', 'bar'
 const GOOD_FIX_M = 25;   // worse than this, and the phone can't tell next door from here
 const AT_M = 20;         // a place this close may be where you are
 const CLOSE_M = 30;      // places this close are listed when there's no clear winner
-const NEARBY_M = 300;    // Menus nearby
-const NEARBY_MAX = 25;
+const NEARBY_M = 2000;   // Menus nearby: places to eat within 2 kilometres
+const NEARBY_MAX = 40;    // the nearest 40 of them
 const QUIET_HOURS = 3;   // after "Not here", don't ask about the same place again for a while
 
 const $ = (id) => document.getElementById(id);
 const isEating = (p) => EATING.has(String(p.kind || '').toLowerCase().replace(/_/g, ' '));
 
 function eatingNear(lat, lon, radius, max) {
-  return street.placesNear(lat, lon, radius, 200, new Set(['food'])).filter(isEating).slice(0, max);
+  return street.placesNear(lat, lon, radius, 2000, new Set(['food'])).filter(isEating).slice(0, max);
 }
 
 /**
@@ -156,7 +157,7 @@ export async function openMenusNearby(lat, lon) {
   $('venue-choices').replaceChildren();
   if (!near.length) {
     const p = document.createElement('p');
-    p.textContent = `No food venues found within ${NEARBY_M} metres.`;
+    p.textContent = `No food venues found within ${NEARBY_M / 1000} kilometres.`;
     $('venue-choices').append(p);
     say(p.textContent);
     return;
@@ -169,6 +170,8 @@ export async function openMenusNearby(lat, lon) {
     ul.append(li);
   }
   $('venue-choices').append(ul);
-  $('venue-title').textContent = `Menus nearby: ${near.length} places to eat`;
+  // Where there are many, the nearest 40 may all be well inside 2 kilometres: say how far the list reaches.
+  const reach = formatDistance(Math.max(100, Math.ceil(near[near.length - 1].dist / 100) * 100));
+  $('venue-title').textContent = `Menus nearby: ${near.length} places to eat, within ${reach}`;
   ul.querySelector('button').focus();
 }
