@@ -7,7 +7,10 @@
 const PDFJS = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs';
 const PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs';
 const MAX_PAGES = 20;
-const PRICE_ONLY_LINE = /^\$?\s?\d{1,3}(?:[.,]\d{1,2})?\s*(?:\(?[a-z]{1,4}\)?|pp)?$/i;
+// One price or several side by side ("$14.9 $59": glass and bottle).
+const PRICE_ONLY_LINE = /^(?:\$?\s?\d{1,3}(?:[.,]\d{1,2})?\s*(?:\(?[a-z]{1,4}\)?|pp)?\s*)+$/i;
+// Headings over a column of prices: "Glass  Bottle", "Small  Large", "150ml".
+const PRICE_HEADING = /^(?:glass|gls|bottle|btl|bot|carafe|half|half bottle|jug|pot|pint|schooner|middy|can|small|sml|medium|med|large|lge|regular|reg|single|double|cup|mug|entree|entrée|main|serve|each|\d{2,4}\s?ml|\d(?:\.\d)?\s?l(?:itre)?)$/i;
 
 let lib = null;
 async function pdfjs() {
@@ -30,11 +33,15 @@ function pageLines(items, height) {
   for (const b of bits) {
     const line = lines.find((l) => Math.abs(l.y - b.y) < l.size * 0.4 && b.x0 >= l.x1 - 1 && b.x0 - l.x1 < l.size * 1.2);
     if (line) {
-      line.text += (b.x0 - line.x1 > line.size * 0.15 ? ' ' : '') + b.text;
+      const apart = b.x0 - line.x1 > line.size * 0.15;
+      line.text += (apart ? ' ' : '') + b.text;
+      // The pieces of a line that stand apart ("$14.9" and "$59"), each with where it is.
+      if (apart) line.parts.push({ x0: b.x0, x1: b.x1, text: b.text });
+      else Object.assign(line.parts[line.parts.length - 1], { x1: b.x1, text: line.parts[line.parts.length - 1].text + b.text });
       line.x1 = Math.max(line.x1, b.x1);
       line.size = Math.max(line.size, b.size);
     } else {
-      lines.push({ ...b });
+      lines.push({ ...b, parts: [{ x0: b.x0, x1: b.x1, text: b.text }] });
     }
   }
   return lines.map((l) => ({ ...l, text: l.text.replace(/\s+/g, ' ').trim() })).filter((l) => {
@@ -53,17 +60,64 @@ function pageText(lines, width) {
   const edges = [starts[0], ...starts.filter((s, i) => i && s - starts[i - 1] > gap)];
   for (const l of lines) l.col = edges.reduce((c, e, i) => (Math.round(l.x0) >= e ? i : c), 0);
 
+  // A "column" whose every line starts inside the width of text to its left isn't one:
+  // a heading centred over the text, or a note beside a dish ("[organic]"). A note on
+  // the same line joins that line; anything else goes in with the text it sits over.
+  const sizes = new Map();
+  for (const l of lines) sizes.set(Math.round(l.size), (sizes.get(Math.round(l.size)) || 0) + 1);
+  const usual = [...sizes].reduce((a, b) => (b[1] > a[1] ? b : a))[0];
+  for (const c of [...new Set(lines.map((l) => l.col))].sort((a, b) => a - b)) {
+    const members = lines.filter((l) => l.col === c && !PRICE_ONLY_LINE.test(l.text));
+    const over = (l) => lines.filter((o) => o.col < c && o.x0 < l.x0 && l.x0 < o.x1);
+    if (!c || !members.length || !members.every((l) => over(l).length)) continue;
+    for (const l of members) {
+      // A note joins the line it is just after; a heading never does.
+      const beside = l.size >= usual * 1.3 ? [] : lines.filter((o) => o.col < c && !o.gone
+        && Math.abs(o.y - l.y) < 4 && o.x1 <= l.x0 + 5 && l.x0 - o.x1 < 3 * l.size);
+      if (beside.length) {
+        beside.reduce((a, b) => (b.x1 > a.x1 ? b : a)).text += ` ${l.text}`;
+        l.gone = true;
+      } else {
+        l.col = Math.max(...over(l).map((o) => o.col));
+      }
+    }
+  }
+  lines = lines.filter((l) => !l.gone);
+
   // A column made mostly of bare prices belongs to the text on its left.
+  // Headings over it ("Glass  Bottle") name each price: "glass $14.9, bottle $59".
+  const isPriceHeading = (l) => l.parts.every((p) => PRICE_HEADING.test(p.text.trim()));
   const cols = [...new Set(lines.map((l) => l.col))].sort((a, b) => a - b);
   for (const c of cols) {
-    const members = lines.filter((l) => l.col === c);
-    if (c && members.filter((l) => PRICE_ONLY_LINE.test(l.text)).length > 0.6 * members.length) {
+    const members = lines.filter((l) => l.col === c).sort((a, b) => a.y - b.y);
+    const prices = members.filter((l) => PRICE_ONLY_LINE.test(l.text)).length;
+    const headings = members.filter(isPriceHeading).length;
+    if (c && prices && prices + headings > 0.6 * members.length) {
+      let heads = [];
+      let headsY = -Infinity;
       for (const l of members) {
-        const left = lines.filter((o) => o.col < c && Math.abs(o.y - l.y) < 4 && !o.gone && o.x1 <= l.x0 + 5);
-        if (left.length) {
-          left.reduce((a, b) => (b.x1 > a.x1 ? b : a)).text += ` ${l.text}`;
+        if (isPriceHeading(l)) {
+          // "Glass" and "Bottle" far apart are two lines at one height: together they are the headings.
+          const these = l.parts.map((p) => ({ mid: (p.x0 + p.x1) / 2, name: p.text.trim().toLowerCase() }));
+          heads = Math.abs(l.y - headsY) < 4 ? heads.concat(these) : these;
+          headsY = l.y;
           l.gone = true;
+          continue;
         }
+        if (!PRICE_ONLY_LINE.test(l.text)) continue;
+        const left = lines.filter((o) => o.col < c && Math.abs(o.y - l.y) < 4 && !o.gone && o.x1 <= l.x0 + 5);
+        if (!left.length) continue;
+        // Each price under its heading, when it is clearly under one.
+        const named = l.parts.map((p) => {
+          const mid = (p.x0 + p.x1) / 2;
+          const h = heads.length ? heads.reduce((a, b) => (Math.abs(b.mid - mid) < Math.abs(a.mid - mid) ? b : a)) : null;
+          return h && Math.abs(h.mid - mid) < 30 ? `${h.name} ${p.text.trim()}` : p.text.trim();
+        });
+        // Named prices are listed: "House White, glass $12, bottle $42". Others join with a
+        // space, as they always did: "VEGGIE STICKS 5.5", "½doz 31.50 1 doz 48.50".
+        const plain = named.every((t, i) => t === l.parts[i].text.trim());
+        left.reduce((a, b) => (b.x1 > a.x1 ? b : a)).text += plain ? ` ${l.text}` : `, ${named.join(', ')}`;
+        l.gone = true;
       }
     }
   }

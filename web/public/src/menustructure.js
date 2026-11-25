@@ -35,6 +35,9 @@ function strip(s, chars) {
 }
 
 const priceOnly = (line) => line.length <= 80 && PRICE_ONLY.test(line);
+// Where a wine is from, on the line after it: "Valdobbiadene, ITALY", "Clare Valley, SA", "Tuscany, Italy".
+// (The place is never all capitals: an all-capitals menu's "…PAPRIKA, SERVED WITH" isn't one.)
+const PLACE_LINE = /^(?=[^,]*[a-z])[A-Z][^,\d$]{1,40},\s*[A-Z][A-Za-z.]*(?:\s[A-Z][A-Za-z.]*)?(?:\s*[[(][a-z ]{2,20}[\])])?$/;
 
 const ENTITIES = { amp: '&', nbsp: ' ', quot: '"', apos: "'", lt: '<', gt: '>', rsquo: '’', lsquo: '‘',
   rdquo: '”', ldquo: '“', ndash: '–', mdash: '—', hellip: '…', eacute: 'é', egrave: 'è',
@@ -154,6 +157,12 @@ function group(lines) {
       } else {
         items.push({ name: name || line, price: strip(line.slice(first), ' ,|'), desc: '' });
       }
+    } else if (last && last.price && !last.desc && !last.heading && PLACE_LINE.test(line)) {
+      last.desc = line; // where a wine is from: "Valdobbiadene, ITALY"
+      last.place = true;
+    } else if (last && last.place && line.length > 30) {
+      last.desc += `. ${line}`; // and then its tasting note
+      delete last.place;
     } else if (last && !last.desc && (line.length > 30 || last.heading)
       && (last.price || last.name.length < 50 || last.heading)) {
       last.desc = line;
@@ -171,6 +180,7 @@ function group(lines) {
     for (const i of s.items) {
       delete i.heading;
       delete i.twice;
+      delete i.place;
       if (!i.name) { i.name = i.desc; i.desc = ''; } // a price heading, then the dish's words
     }
     s.items = s.items.filter((i) => i.name);
