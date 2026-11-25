@@ -428,3 +428,9 @@ button.is-working { opacity: 0.6; cursor: progress; }
 dialog.screen { width: 100vw; height: 100dvh; max-width: none; max-height: none; margin: 0; border: 0; border-radius: 0; padding: 1rem 16px 2rem; box-sizing: border-box; }
 dialog.screen .back { margin-bottom: 0.75rem; }
 dialog.screen button { margin: 0.25rem 0.5rem 0.25rem 0; }
+
+/* A workflow on its own screen (screen.js): everything else hidden. */
+.off-screen { display: none !important; }
+body.screen-on #app { display: block; height: auto; overflow: visible; }
+body.screen-on #panel { overflow: visible; max-width: 48rem; }
+.screen-back { display: block; margin: 0 0 0.75rem; }

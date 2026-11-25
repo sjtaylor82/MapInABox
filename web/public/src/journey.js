@@ -19,6 +19,7 @@ import { showMenu } from './menu.js';
 import { onSlowClick } from './busy.js';
 import { addressAt } from './online.js';
 import { describeLocation } from './placeinfo.js';
+import { openScreen, closeScreen, isScreen } from './screen.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -168,8 +169,74 @@ function setPrompt(text) {
   $('journey-prompt').textContent = text;
 }
 
+// The results (a route's steps, the options, the stations...) take the whole
+// screen, with Back. Back goes to the previous result (the legs back to the
+// options, a walk back to the stations), then out to the button you pressed.
+const RESULT_IDS = ['journey-options', 'journey-legs', 'journey-food', 'journey-walk', 'journey-drive', 'journey-routes', 'journey-choices', 'journey-stations'];
+let shownIds = [];
+let lastTrigger = null; // the Navigation button pressed last
+let lastIds = [];
+const resultHistory = [];
+
 function showOnly(...ids) {
-  for (const id of ['journey-options', 'journey-legs', 'journey-food', 'journey-walk', 'journey-drive', 'journey-routes', 'journey-choices', 'journey-stations']) $(id).hidden = !ids.includes(id);
+  setShown(ids, true);
+}
+
+function setShown(ids, record) {
+  const box = $('journey-results');
+  const open = isScreen(box);
+  // Remember where you were, for Back (not a "Choose destination" you've answered).
+  if (record && open && ids.length && shownIds.length && shownIds.join() !== ids.join()
+    && !(shownIds.length === 1 && shownIds[0] === 'journey-choices')) {
+    resultHistory.push({ ids: shownIds, focus: document.activeElement });
+  }
+  for (const id of RESULT_IDS) $(id).hidden = !ids.includes(id);
+  shownIds = ids;
+  if (ids.length && !open) {
+    $('journey-reopen').hidden = true;
+    // Back returns to the button that started it (Drive, Walking route...), not to something on this screen.
+    const active = document.activeElement;
+    const from = active && active !== document.body && !box.contains(active) ? active : lastTrigger;
+    openScreen(box, { from, back: resultBack, close: resultsClosed });
+  }
+}
+
+function resultBack() {
+  const prev = resultHistory.pop();
+  if (!prev) return false;
+  setShown(prev.ids, false);
+  if (prev.focus && prev.focus.isConnected && prev.focus.offsetParent !== null) prev.focus.focus();
+  else {
+    // Else the start of what's back on screen: its heading, or its first control.
+    const first = prev.ids.map((id) => $(id).querySelector('h3[tabindex], .browse-current, button')).find(Boolean);
+    if (first) first.focus();
+  }
+  return true;
+}
+
+/** Leaving the results: hide them, and offer the way back to them in Navigation. */
+function resultsClosed() {
+  resultHistory.length = 0;
+  if (st.cancelChoice) st.cancelChoice();
+  const ids = shownIds.filter((id) => id !== 'journey-choices');
+  for (const id of RESULT_IDS) $(id).hidden = true;
+  shownIds = [];
+  setPrompt('');
+  if (!ids.length) return;
+  lastIds = ids;
+  const heading = ids.map((id) => $(id).querySelector('h3')).find((x) => x && x.textContent.trim());
+  const what = heading ? heading.textContent.trim() : ids.includes('journey-options') ? 'the public transport options' : 'the last result';
+  $('journey-reopen').textContent = `Back to ${what.charAt(0).toLowerCase() === what.charAt(0) ? what : what.replace(/^(\w)/, (x) => x.toLowerCase())}`;
+  $('journey-reopen').hidden = false;
+}
+
+function reopenResults() {
+  if (!lastIds.length) return;
+  setShown(lastIds, false);
+  const box = $('journey-results');
+  if (!isScreen(box)) openScreen(box, { from: $('journey-reopen'), back: resultBack, close: resultsClosed });
+  const h = lastIds.map((id) => $(id).querySelector('h3[tabindex], label')).find(Boolean);
+  (h || $('journey-results').querySelector('button')).focus();
 }
 
 // ── Nearest stations ──────────────────────────────────────────────────────
@@ -376,13 +443,21 @@ async function choosePlace(text, near, maxM, role = 'destination') {
       b.type = 'button';
       b.textContent = `${r.label}, ${formatDistance(r.d)}`;
       b.addEventListener('click', () => {
-        box.hidden = true;
+        st.cancelChoice = null;
+        showOnly();
+        setPrompt('One moment…');
         resolve(r);
       });
       li.append(b);
       return li;
     }));
-    box.hidden = false;
+    // Back from the choices: stop this search (the caller sees st.seq change and stops quietly).
+    st.cancelChoice = () => {
+      st.cancelChoice = null;
+      st.seq += 1;
+      resolve(null);
+    };
+    showOnly('journey-choices');
     setPrompt('');
     $('journey-choices-title').textContent = question;
     $('journey-choices-title').focus();
@@ -1977,6 +2052,10 @@ export function initJourney(h) {
   onSlowClick($('journey-drive-plan'), 'Finding the place', planDrive);
   onSlowClick($('journey-suburbs-plan'), 'Finding the ways to drive there', listSuburbs);
   $('journey-drive-guide').addEventListener('click', toggleDriveGuide);
+  $('journey-reopen').addEventListener('click', reopenResults);
+  for (const b of $('journey-section').querySelectorAll('button')) {
+    if (!$('journey-results').contains(b)) b.addEventListener('click', () => { lastTrigger = b; });
+  }
   onSlowClick($('journey-drive-food'), 'Finding food along the drive', driveFood, { slow: true });
   onSlowClick($('journey-walk-food'), 'Finding food along the walk', walkFood);
   $('journey-guide').addEventListener('click', toggleGuiding);

@@ -23,6 +23,7 @@ import { describeLocation } from './placeinfo.js';
 import { startMonitor, stopMonitor, monitorActive, setMonitorLevel, monitorStatus } from './gpsmonitor.js';
 import { speakableHours } from './placedetails.js';
 import { initJourney, walkTo, driveTo } from './journey.js';
+import { openScreen, closeScreen, closeAllScreens } from './screen.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -595,7 +596,11 @@ function listPlaces(focusList) {
   const what = category === 'all' ? 'places' : categoryLabel(category).toLowerCase();
   const how = `${found.length} ${what} within ${formatDistance(radius)}`;
   $('places-prompt').hidden = true;
-  if (focusList) $('places-buttons').querySelector('button').focus();
+  $('places-list-title').textContent = `${how[0].toUpperCase()}${how.slice(1)}`;
+  if (focusList) {
+    openScreen($('places-pick'), { from: $('places-find'), close: () => { $('places-pick').hidden = true; } });
+    $('places-buttons').querySelector('button').focus();
+  }
   say(`${how}. ${street.placeText(found[0])}.`);
 }
 
@@ -1244,6 +1249,8 @@ function cycleToneScope() {
  * VoiceOver there kept pulling it away from the button you'd just used.
  */
 function focusMap() {
+  // The map is hidden behind a full-screen workflow: going to the map closes it.
+  closeAllScreens();
   if (!steering.isTouchDevice()) $('map').focus();
 }
 
@@ -1301,10 +1308,15 @@ function showMonitorStatus(s) {
 
 /** GPS monitor on or off (Expert). */
 function toggleMonitor() {
-  if (monitorActive()) return stopMonitor();
   const btn = $('btn-gps');
+  const show = () => {
+    openScreen($('gps-panel'), { from: btn, close: () => { $('gps-panel').hidden = true; } });
+    $('gps-title').focus();
+  };
+  // Running: the button shows it again (Stop GPS monitor is on its screen).
+  if (monitorActive()) return show();
   btn.setAttribute('aria-pressed', 'true');
-  $('gps-panel').hidden = false;
+  show();
   startMonitor({
     // Keep the map on where you are, quietly.
     follow: (p) => {
@@ -1315,6 +1327,7 @@ function toggleMonitor() {
     },
     stopped: () => {
       btn.setAttribute('aria-pressed', 'false');
+      closeScreen($('gps-panel'));
       $('gps-panel').hidden = true;
     },
     status: showMonitorStatus,
@@ -1516,15 +1529,26 @@ function openHelp() {
 /** Ctrl+Comma or the Settings button: go to the Settings section. */
 function openSettings() {
   setExpanded($('settings-title'), true);
-  const h = $('settings-title');
-  h.scrollIntoView({ block: 'start' });
-  h.focus();
 }
 
-/** Information and Settings: a button that shows or hides its section; focus stays on the button. */
+/** Information and Settings: each opens on a screen of its own, with Back. */
 function setExpanded(btn, open) {
+  const section = $(btn.getAttribute('aria-controls'));
   btn.setAttribute('aria-expanded', String(open));
-  $(btn.getAttribute('aria-controls')).hidden = !open;
+  if (!open) {
+    closeScreen(section);
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  openScreen(section, {
+    from: btn,
+    close: () => {
+      btn.setAttribute('aria-expanded', 'false');
+      section.hidden = true;
+    },
+  });
+  section.querySelector('h2').focus();
 }
 for (const btn of document.querySelectorAll('.expander')) {
   btn.addEventListener('click', () => setExpanded(btn, btn.getAttribute('aria-expanded') !== 'true'));

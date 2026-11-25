@@ -64,6 +64,19 @@
         <button type="button" id="gps-stop">Stop GPS monitor</button>
       </div>
         <button type="button" id="journey-stations-find">Nearest stations</button>
+        <h3>Plan a route</h3>
+        <label for="journey-from">From (leave empty to start where you are on the map)</label>
+        <input id="journey-from" type="text" autocomplete="off" spellcheck="false">
+        <button type="button" id="journey-from-here">Use my location</button>
+        <label for="journey-to">To</label>
+        <input id="journey-to" type="text" autocomplete="off" spellcheck="false">
+        <button type="button" id="journey-walk-plan">Walking route</button>
+        <button type="button" id="journey-drive-plan">Drive</button>
+        <button type="button" id="journey-suburbs-plan">List suburbs</button>
+        <button type="button" id="journey-plan">Public transport and flights</button>
+        <button type="button" id="journey-reopen" hidden>Back to the last result</button>
+        <div id="journey-results">
+        <p id="journey-prompt"></p>
         <div id="journey-stations" hidden>
           <h3 id="journey-stations-title" tabindex="-1">Nearest stations</h3>
           <ul id="journey-stations-list" class="result-list"></ul>
@@ -76,17 +89,6 @@
             </p>
           </div>
         </div>
-        <h3>Plan a route</h3>
-        <label for="journey-from">From (leave empty to start where you are on the map)</label>
-        <input id="journey-from" type="text" autocomplete="off" spellcheck="false">
-        <button type="button" id="journey-from-here">Use my location</button>
-        <label for="journey-to">To</label>
-        <input id="journey-to" type="text" autocomplete="off" spellcheck="false">
-        <button type="button" id="journey-walk-plan">Walking route</button>
-        <button type="button" id="journey-drive-plan">Drive</button>
-        <button type="button" id="journey-suburbs-plan">List suburbs</button>
-        <button type="button" id="journey-plan">Public transport and flights</button>
-        <p id="journey-prompt"></p>
         <div id="journey-choices" hidden>
           <h3 id="journey-choices-title" tabindex="-1">Choose a destination</h3>
           <ul id="journey-choice-list" class="result-list"></ul>
@@ -148,6 +150,7 @@
             <a id="journey-food-maps" target="_blank" rel="noopener">Open in Apple Maps</a>
           </p>
         </div>
+        </div>
       </div>
 
 
@@ -160,6 +163,7 @@
         <button type="button" id="places-find">Find places <span class="key" aria-hidden="true">(P)</span></button>
         <button type="button" id="places-menus" data-expert>Menus nearby</button>
         <div id="places-pick" hidden>
+          <h3 id="places-list-title" tabindex="-1">Places nearby</h3>
           <ul id="places-buttons" class="result-list"></ul>
         </div>
       </div>
@@ -175,6 +179,7 @@
 
       <h2 class="expander-heading"><button type="button" class="expander" id="info-toggle" aria-expanded="false" aria-controls="info-section">Information</button></h2>
       <div id="info-section" hidden>
+      <h2 id="info-screen-title" tabindex="-1">Information</h2>
       <div class="grid">
         <button type="button" data-key="a" data-street-only hidden>Address</button>
         <button type="button" data-key="q" data-expert>Air quality</button>
@@ -198,6 +203,7 @@
 
       <h2 class="expander-heading"><button type="button" class="expander" id="settings-title" aria-expanded="false" aria-controls="settings-section">Settings</button></h2>
       <div id="settings-section" hidden>
+        <h2 id="settings-screen-title" tabindex="-1">Settings</h2>
         <label class="switch"><input type="checkbox" role="switch" id="set-expert"> Expert mode</label>
         <div data-steer-only hidden>
           <label for="tilt-move" class="picker-label">Each tilt moves</label>
@@ -247,7 +253,8 @@
     </div>
   </div>
 
-  <dialog id="venue-dialog" aria-labelledby="venue-title">
+  <dialog id="venue-dialog" class="screen" aria-labelledby="venue-title">
+    <button type="button" class="back" data-close>Back</button>
     <h2 id="venue-title" tabindex="-1"></h2>
     <div id="venue-choices"></div>
     <div id="venue-menu" class="menu-box" hidden></div>
@@ -278,7 +285,8 @@
     <div id="place-menu" hidden></div>
   </dialog>
 
-  <dialog id="jump-dialog" aria-labelledby="jump-title">
+  <dialog id="jump-dialog" class="screen" aria-labelledby="jump-title">
+    <button type="button" class="back" data-close>Back</button>
     <h2 id="jump-title">Jump to place</h2>
     <p id="jump-prompt"></p>
     <label for="jump-input">Place, country or coordinates</label>
@@ -312,7 +320,8 @@
 
   
 
-  <dialog id="help-dialog" aria-labelledby="help-title">
+  <dialog id="help-dialog" class="screen" aria-labelledby="help-title">
+    <button type="button" class="back" data-close>Back</button>
     <h2 id="help-title" tabindex="-1">Keys</h2>
     <table>
       <caption class="sr-only">World map keys</caption>
@@ -371,6 +380,8 @@
         <tr><td>J, Y, F2 and the information keys</td><td>Work as on the world map</td></tr>
       </tbody>
     </table>
+    <h3>Screens and Back</h3>
+    <p>Whatever you open (a route, Places nearby, a place, Settings, Information, the GPS monitor, Jump) takes the whole screen, with Back at the top. Back, or Escape on a computer, goes back a step. Going to the map closes it. After leaving a route, Back to the route (in Navigation) brings it back.</p>
     <h3>Journey planner</h3>
     <p>The Journey planner button, or the Journey planner section under the map, plans a trip with Rome2Rio: flights, trains, buses, ferries and driving. Type where you are going, and where from (leave From empty to start where you are on the map), then choose Plan journey. Swipe up or down on Option (or use the arrow keys) to hear each way, with its time and price; choose Show steps to go through its legs one by one, or Read all to hear the whole plan. For a flight, the flights on the travel date are listed, non-stop first. Rome2Rio's times and prices are estimates, not timetables.</p>
     <p>Drive gives turn-by-turn driving directions: each turn or roundabout exit, then how far to drive, with the time (allowing for typical traffic), distance and tolls. The links open the same drive in Apple Maps or Google Maps for live navigation.</p>
