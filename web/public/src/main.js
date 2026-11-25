@@ -1006,7 +1006,7 @@ function setSteering(on, { byShake = false } = {}) {
 
 /** A firm shake turns steering off, or back on. */
 function onShake() {
-  if (!state.started || document.querySelector('dialog[open]')) return;
+  if (!state.started || document.querySelector('dialog[open]') || !mapOn()) return;
   steering.buzz(60);
   setSteering(!steering.steeringActive(), { byShake: true });
 }
@@ -1283,6 +1283,8 @@ function applyMapOn() {
   $('set-map').checked = on;
   audio.setPaused(!on);
   if (!on) state.soundWaiting = true; // the country's sound comes back with the next move
+  // Steering moves the map, so it goes with it (its buttons are hidden too).
+  if (!on && steering.steeringActive()) setSteering(false);
 }
 
 /** Show or hide what only Expert has. */
