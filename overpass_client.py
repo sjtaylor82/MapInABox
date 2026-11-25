@@ -62,6 +62,19 @@ TRANSIENT_FAIL_COOLDOWN_SECS = 30.0
 TIMEOUT_COOLDOWN_SECS = 300.0
 
 
+# The server that last answered, remembered between runs so a new session
+# starts on a server that worked instead of always trying Germany first.
+STATE_FILE_NAME = "overpass_state.json"
+
+
+def _default_state_path() -> str | None:
+    try:
+        from app_paths import CACHE_DIR
+        return os.path.join(CACHE_DIR, STATE_FILE_NAME)
+    except Exception:
+        return None
+
+
 class OverpassRequestCancelled(RuntimeError):
     """Raised before more network work when a caller supersedes a request."""
 
@@ -77,6 +90,7 @@ class OverpassClient:
         self,
         cooldown_secs: float = 2.0,
         mirrors: list[str] | None = None,
+        state_path: str | None = "auto",
     ) -> None:
         # 2, not 1: street-data fetches and the background POI fetch share
         # this one client, and Semaphore(1) forced them to run strictly
@@ -107,6 +121,45 @@ class OverpassClient:
         # cluster's shared rate limit.
         self._in_flight_groups: set[str] = set()
         self._mirror_lock = threading.Lock()
+        self._state_path = _default_state_path() if state_path == "auto" else state_path
+        self._load_state()
+
+    # ------------------------------------------------------------------
+    # Remembered between runs
+    # ------------------------------------------------------------------
+
+    def _load_state(self) -> None:
+        if not self._state_path:
+            return
+        try:
+            with open(self._state_path, encoding="utf-8") as f:
+                state = json.load(f)
+        except (OSError, ValueError):
+            return
+        url = state.get("last_good")
+        if url in self._mirrors:
+            self._last_successful_mirror = self._mirrors.index(url)
+
+    def _save_state(self) -> None:
+        if not self._state_path:
+            return
+        state = {
+            "last_good": self._mirrors[self._last_successful_mirror % len(self._mirrors)],
+            "saved": time.time(),
+        }
+        try:
+            os.makedirs(os.path.dirname(self._state_path), exist_ok=True)
+            tmp = self._state_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(state, f)
+            os.replace(tmp, self._state_path)
+        except OSError:
+            pass
+
+    def _remember_success(self, index: int) -> None:
+        if index != self._last_successful_mirror:
+            self._last_successful_mirror = index
+            self._save_state()
 
     def _mirror_group(self, index: int, mirror_list: list[str]) -> str:
         url = mirror_list[index].lower()
@@ -241,17 +294,17 @@ class OverpassClient:
                         miab_log("errors", f"[Overpass] {label} error remark: {result['remark']}", getattr(self, "settings", None))
                         continue
 
-                    # Success - update rotation tracker
+                    # Success - remember it, for this run and the next
                     if result.get("elements"):
                         miab_log("verbose", f"[Overpass] {label} succeeded", getattr(self, "settings", None))
                         if not custom_mirrors:
-                            self._last_successful_mirror = index
+                            self._remember_success(index)
                         return result
 
                     # Empty but valid
                     miab_log("verbose", f"[Overpass] {label} returned empty result", getattr(self, "settings", None))
                     if not custom_mirrors:
-                        self._last_successful_mirror = index
+                        self._remember_success(index)
                     return result
 
                 except urllib.error.HTTPError as exc:
