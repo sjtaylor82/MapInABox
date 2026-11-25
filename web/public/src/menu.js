@@ -34,7 +34,7 @@ export function updatedText(date) {
 
 /**
  * Find and show the menu for a place in `box` (an empty element).
- * place: { name, lat, lon, website }
+ * place: { name, lat, lon, website, suburb } (suburb when its address says; else the postcode area's)
  */
 export async function showMenu(box, place) {
   box.hidden = false;
@@ -48,7 +48,7 @@ export async function showMenu(box, place) {
   const done = working(null, `Looking for the menu for ${place.name}`, { slow: true });
   const pc = await postcodeAt(place.lat, place.lon).catch(() => null);
   // v: bumped when the answer's shape changes, so browsers don't keep an old copy for a week.
-  const params = new URLSearchParams({ name: place.name, suburb: (pc && pc.place) || '', v: '5' });
+  const params = new URLSearchParams({ name: place.name, suburb: place.suburb || (pc && pc.place) || '', v: '5' });
   if (place.website) params.set('website', place.website);
   let results = [];
   try {

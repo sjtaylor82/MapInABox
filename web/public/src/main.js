@@ -1717,8 +1717,11 @@ onSlowClick($('jump-details'), 'Looking it up', jumpDetails);
 $('jump-menu').addEventListener('click', () => {
   const r = jumpResults[state.jumpIdx || 0];
   if (!r) return;
-  const website = $('jump-web').hidden ? '' : $('jump-web').href;
-  showMenu($('jump-menu-box'), { name: String(r.label).split(', ')[0], lat: r.lat, lon: r.lon, website });
+  const website = (!$('jump-web').hidden && $('jump-web').href) || r.website || '';
+  // The suburb from its address when the result has one ("..., Carina QLD 4152"): the
+  // nearest postcode area can be the next suburb along, and delivery pages name the real one.
+  const m = /,\s*([A-Za-z' -]+?)\s+(?:QLD|NSW|VIC|SA|WA|TAS|NT|ACT)/.exec(String(r.label));
+  showMenu($('jump-menu-box'), { name: String(r.label).split(', ')[0], lat: r.lat, lon: r.lon, website, suburb: m ? m[1].trim() : '' });
 });
 // Walk there / Drive there: the Navigation section takes over from Details.
 for (const [id, go] of [['jump-walk', walkTo], ['jump-drive', driveTo]]) {

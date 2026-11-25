@@ -112,6 +112,18 @@ function wrongCountry(host, path) {
   return FOREIGN_CC.has(cc);
 }
 
+/**
+ * Does a page name this suburb? "Carina North" also takes "Carina": the suburb
+ * comes from the nearest postcode area, which may be the next one along (Sorai
+ * is in Carina; its Uber Eats page says Carina and Brisbane).
+ */
+function namesSuburb(text, suburb) {
+  if (!suburb) return true;
+  if (text.includes(compactOf(suburb))) return true;
+  const first = compactOf(String(suburb).split(/\s+/)[0]);
+  return first.length >= 4 && first !== compactOf(suburb) && text.includes(first);
+}
+
 /** 'delivery', 'own' or null (drop), as _classify_menu_result. */
 function classify(item, t, suburb) {
   const host = hostOf(item.url);
@@ -127,7 +139,7 @@ function classify(item, t, suburb) {
     const text = compactOf(`${item.title} ${item.url} ${item.snippet}`);
     const words = t.distinctive.filter((w) => text.includes(w)).length;
     const venue = (t.compact && text.includes(t.compact)) || words >= Math.min(2, t.distinctive.length);
-    const place = !suburb || text.includes(compactOf(suburb));
+    const place = namesSuburb(text, suburb);
     return venue && place ? 'delivery' : null;
   }
   if (labelMatchesVenue(mainLabel(host), t)) {
@@ -141,7 +153,7 @@ function classify(item, t, suburb) {
   if (t.compact.length >= 8 && !LISTING_SITES.test(host) && compactOf(host + path).includes(t.compact)
     && MENU_SIGNALS.some((s) => path.includes(s))) {
     const text = compactOf(`${item.title} ${item.url} ${item.snippet}`);
-    if (!suburb || text.includes(compactOf(suburb))) return 'own';
+    if (namesSuburb(text, suburb)) return 'own';
   }
   return null;
 }
@@ -508,7 +520,7 @@ async function menu(url, env, ctx) {
   let website = (url.searchParams.get('website') || '').trim().slice(0, 300);
   if (!name) return json({ error: 'Bad request' }, 400);
   const cache = caches.default;
-  const key = new Request(`https://cache.mapinabox/menu/v18/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(suburb.toLowerCase())}`);
+  const key = new Request(`https://cache.mapinabox/menu/v19/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(suburb.toLowerCase())}`);
   const hit = await cache.match(key);
   if (hit) return hit;
 
