@@ -338,10 +338,12 @@ class SettingsDialog(wx.Dialog):
         general_vs.Add(self.cb_climate_zones, 0, wx.LEFT | wx.BOTTOM, 8)
         self.cb_suburb_size = wx.CheckBox(self.general_page, label=_("Announce suburb size when streets load"))
         general_vs.Add(self.cb_suburb_size, 0, wx.LEFT | wx.BOTTOM, 8)
-        self.cb_dotpad = wx.CheckBox(self.general_page, label=_("Show F8 country shapes on a connected Dot Pad"))
+        self.cb_dotpad = wx.CheckBox(self.general_page, label=_("Show F8 country shapes on a connected Dot Pad or Monarch"))
         general_vs.Add(self.cb_dotpad, 0, wx.LEFT | wx.BOTTOM, 8)
-        self.cb_dotpad_follow = wx.CheckBox(self.general_page, label=_("Dot Pad follows the current country as you move"))
+        self.cb_dotpad_follow = wx.CheckBox(self.general_page, label=_("Dot Pad or Monarch follows the current country as you move"))
         general_vs.Add(self.cb_dotpad_follow, 0, wx.LEFT | wx.BOTTOM, 8)
+        self.cb_braille_contracted = wx.CheckBox(self.general_page, label=_("Use contracted braille on the Dot Pad or Monarch"))
+        general_vs.Add(self.cb_braille_contracted, 0, wx.LEFT | wx.BOTTOM, 8)
 
         general_vs.Add(wx.StaticLine(self.general_page), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         general_vs.Add(wx.StaticText(self.general_page, label=_("Spatial tones:")), 0, wx.LEFT, 8)
@@ -718,6 +720,7 @@ class SettingsDialog(wx.Dialog):
         self.cb_suburb_size.SetValue(settings.get("announce_suburb_size", False))
         self.cb_dotpad.SetValue(settings.get("dotpad_enabled", True))
         self.cb_dotpad_follow.SetValue(settings.get("dotpad_follow", True))
+        self.cb_braille_contracted.SetValue(settings.get("braille_contracted", True))
         self.cb_auto_updates.SetValue(settings.get("check_updates_at_startup", True))
         self.cb_clear_favourites_on_exit.SetValue(
             settings.get("clear_favourites_on_exit", EDUCATION_EDITION))
@@ -917,6 +920,7 @@ class SettingsDialog(wx.Dialog):
             "announce_suburb_size":   self.cb_suburb_size.GetValue(),
             "dotpad_enabled":         self.cb_dotpad.GetValue(),
             "dotpad_follow":          self.cb_dotpad_follow.GetValue(),
+            "braille_contracted":     self.cb_braille_contracted.GetValue(),
             "check_updates_at_startup": self.cb_auto_updates.GetValue(),
             "clear_favourites_on_exit": self.cb_clear_favourites_on_exit.GetValue(),
             "spatial_tones_mode":     spatial_mode,

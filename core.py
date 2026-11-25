@@ -276,6 +276,7 @@ DEFAULT_SETTINGS = {
     "dotpad_enabled":         True,    # use a connected Dot Pad for F8 shapes
     "dotpad_follow":          True,    # Dot Pad tracks the current country
     "dotpad_port":            "",      # empty means auto-detect over USB
+    "braille_contracted":     True,    # Dot Pad / Monarch names in UEB grade 2
     "jump_history":           [],      # last 5 J-key destinations [{label,lat,lon}]
     "address_history":        [],      # last 10 S-jump and route-end addresses (Ctrl+A)
     # On in Education builds, off in Pro builds, unless the user overrides it.
@@ -847,7 +848,13 @@ class MapNavigator(
             lambda: self.settings,
             announce=lambda text: wx.CallAfter(self._status_update, text, True),
             on_follow_changed=lambda value: wx.CallAfter(
-                self._on_dotpad_follow_changed, value))
+                self._on_dotpad_follow_changed, value),
+            on_zoom=lambda direction: wx.CallAfter(
+                self._change_visual_zoom, direction))
+        # Zoomed in, the Dot Pad outlines the countries around the current one.
+        self.dotpad.set_world(
+            (c['name'], self._geo_country_rings(c), c['centroid_lon'])
+            for c in _GEO_COUNTRIES)
         self.dotpad.connect()
         # Source-test launcher support: allow diagnostics to be enabled before
         # Settings is usable.  This is intentionally opt-in and does not alter
@@ -6577,6 +6584,9 @@ class MapNavigator(
             self.map_panel._bg_bitmap_view_key = None
             self.map_panel.Refresh()
             self.map_panel.Update()
+        dotpad = getattr(self, "dotpad", None)
+        if dotpad is not None:
+            dotpad.set_zoom(factor)
         self._announce_transient(f"Zoom {factor} X.")
 
     def _change_visual_zoom(self, direction):
@@ -6595,8 +6605,9 @@ class MapNavigator(
         if not country or country == 'Open Water':
             return False
         match = self._geo_country_entry(country)
-        # Dot Pad output is independent of the visual map zoom.  F8 always
-        # renders the current country on a connected tactile display.
+        # F8 always renders the current country on a connected Dot Pad: the
+        # whole country at 1x, or a zoomed window around the cursor, matching
+        # the map's zoom level (the Dot Pad is told of zoom changes directly).
         if match:
             self.dotpad.show_shape(
                 match['name'],

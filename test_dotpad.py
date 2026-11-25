@@ -120,15 +120,48 @@ class MarkerTests(unittest.TestCase):
         self.assertIs(add_marker(grid, fit, 5, 80), grid)
 
 
+class ZoomRenderTests(unittest.TestCase):
+    WEST = [[(0, 0), (10, 0), (10, 10), (0, 10)]]
+    EAST = [[(10, 0), (20, 0), (20, 10), (10, 10)]]
+
+    def _fit(self, scale=2.5):
+        # Centred on the shared border at the equator: 2.5 dots per degree.
+        return dotpad.ViewFit([], 60, 40, 10, 5, scale)
+
+    def test_current_filled_with_gap_before_neighbour_outline(self):
+        grid = dotpad.render_view(self._fit(), self.WEST, [self.EAST])
+        border = 30    # lon 10 at the display centre
+        self.assertTrue(grid[20, 20])                 # inside the current country
+        self.assertTrue(grid[20, border - 1])
+        self.assertFalse(grid[20, border])            # lowered gap at the border
+        self.assertTrue(grid[20, border + 1])         # neighbour's border line
+        self.assertFalse(grid[20, 45])                # neighbour interior is open
+
+    def test_outline_style_has_no_line_along_the_display_edge(self):
+        big = [[(-50, -50), (50, -50), (50, 50), (-50, 50)]]
+        grid = dotpad.render_view(self._fit(), big, [], style="outline")
+        self.assertFalse(grid.any())   # coast is off-screen; edges are not coast
+
+    def test_long_coast_off_screen_is_cheap(self):
+        far = [[(-170, -80), (170, -80), (170, 80), (-170, 80)]]
+        started = time.perf_counter()
+        dotpad.render_view(self._fit(scale=50000), far, [])
+        self.assertLess(time.perf_counter() - started, 1)
+
+
 class BrailleTests(unittest.TestCase):
     def test_capital_and_letters(self):
-        self.assertEqual(text_to_braille("Peru"),
+        self.assertEqual(text_to_braille("Peru", capitals=True),
                          [_dots(6), _dots(1, 2, 3, 4), _dots(1, 5),
                           _dots(1, 2, 3, 5), _dots(1, 3, 6)])
 
     def test_capital_word_indicator(self):
-        self.assertEqual(text_to_braille("USA")[:2], [_dots(6), _dots(6)])
-        self.assertEqual(len(text_to_braille("USA")), 5)
+        self.assertEqual(text_to_braille("USA", capitals=True)[:2], [_dots(6), _dots(6)])
+        self.assertEqual(len(text_to_braille("USA", capitals=True)), 5)
+
+    def test_no_capital_signs_by_default(self):
+        self.assertEqual(text_to_braille("Peru"), text_to_braille("peru"))
+        self.assertEqual(len(text_to_braille("USA")), 3)
 
     def test_numbers_and_accents(self):
         self.assertEqual(text_to_braille("10"),
@@ -138,6 +171,31 @@ class BrailleTests(unittest.TestCase):
     def test_grade1_indicator_after_number(self):
         self.assertEqual(text_to_braille("2a"),
                          [_dots(3, 4, 5, 6), _dots(1, 2), _dots(5, 6), _dots(1)])
+
+
+class ContractedBrailleTests(unittest.TestCase):
+    def setUp(self):
+        import braille
+        if not braille.available():
+            self.skipTest("liblouis is not available")
+
+    def test_grade2_is_shorter(self):
+        self.assertEqual(dotpad.place_name_cells("Perth"),
+                         [_dots(1, 2, 3, 4), _dots(1, 2, 4, 5, 6), _dots(1, 4, 5, 6)])
+        self.assertLess(len(dotpad.place_name_cells("Saint Vincent and the Grenadines")), 32)
+
+    def test_no_capitals_or_accents(self):
+        self.assertEqual(dotpad.place_name_cells("Peru"), dotpad.place_name_cells("peru"))
+        self.assertEqual(dotpad.place_name_cells("Côte d'Ivoire"),
+                         dotpad.place_name_cells("cote d'ivoire"))
+
+    def test_uncontracted_when_switched_off(self):
+        self.assertEqual(dotpad.place_name_cells("Perth", contracted=False),
+                         text_to_braille("Perth"))
+
+    def test_falls_back_without_liblouis(self):
+        with mock.patch("braille.contracted", return_value=None):
+            self.assertEqual(dotpad.place_name_cells("Perth"), text_to_braille("Perth"))
 
 
 class FakeDotPad:
@@ -200,6 +258,9 @@ class ControllerTests(unittest.TestCase):
         patcher = mock.patch.object(dotpad.serial, "Serial", FakeDotPad)
         patcher.start()
         self.addCleanup(patcher.stop)
+        no_hid = mock.patch.object(dotpad.monarch, "candidates", lambda: [])
+        no_hid.start()
+        self.addCleanup(no_hid.stop)
         self.controller = DotPadController(lambda: self.settings, self.spoken.append)
         self.addCleanup(self.controller.shutdown)
 
@@ -220,7 +281,7 @@ class ControllerTests(unittest.TestCase):
         self.assertIn("Dot Pad connected.", self.spoken)
         seq, text = pad.lines[0]
         self.assertEqual(seq, dotpad.SEQ_TEXT)
-        self.assertEqual(list(text[1:6]), text_to_braille("Peru"))
+        self.assertEqual(list(text[1:4]), dotpad.place_name_cells("Peru"))
         self.assertEqual(len(text), 21)
         seq, middle = pad.lines[1 + 5]
         self.assertEqual(middle[0], 0)
@@ -246,7 +307,7 @@ class ControllerTests(unittest.TestCase):
             lambda: FakeDotPad.instance is not None and 0 in FakeDotPad.instance.lines))
         pad = FakeDotPad.instance
         pad.press(dotpad.NTF_KEYS_PERKINS, b"\x00\x02")       # pan right (key 14)
-        expected = text_to_braille(name)[20:40]
+        expected = dotpad.place_name_cells(name)[20:40]
         self.assertTrue(self._wait(
             lambda: list(pad.lines[0][1][1:1 + len(expected)]) == expected))
 
@@ -258,7 +319,7 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(self._wait(lambda: FakeDotPad.instance is not None
                                    and len(FakeDotPad.instance.lines) == 11))
         pad = FakeDotPad.instance
-        expected = text_to_braille("Chile")
+        expected = dotpad.place_name_cells("Chile")
         self.assertEqual(list(pad.lines[0][1][1:1 + len(expected)]), expected)
         # The marker is a gap in the middle of the filled square (cell 15).
         self.assertNotEqual(pad.lines[6][1][16], 0xFF)
@@ -289,6 +350,59 @@ class ControllerTests(unittest.TestCase):
         controller.follow("Peru", [[(0, 0), (1, 0), (1, 1)]], None, (0, 0))
         time.sleep(0.8)
         self.assertIsNone(FakeDotPad.instance)
+
+    def test_zoom_shows_a_window_with_neighbours(self):
+        west = [[(0, 0), (10, 0), (10, 10), (0, 10)]]
+        east = [[(10, 0), (20, 0), (20, 10), (10, 10)]]
+        self.controller.set_world([("West", west, 5), ("East", east, 15)])
+        self.controller.show_shape("West", west, None, (9, 5))
+        self.assertTrue(self._wait(lambda: FakeDotPad.instance is not None
+                                   and len(FakeDotPad.instance.lines) == 11))
+        pad = FakeDotPad.instance
+        whole = {d: data for d, (_s, data) in pad.lines.items()}
+        self.controller.set_zoom(4)
+        self.assertTrue(self._wait(lambda: pad.lines[6][1] != whole[6]))
+        # Centred on lon 9: the right half of the display reaches into East,
+        # whose open interior leaves the far right cells lowered.
+        row = pad.lines[6][1][1:]
+        self.assertEqual(row[5], 0xFF)
+        self.assertEqual(row[29], 0)
+        self.controller.set_zoom(1)
+        self.assertTrue(self._wait(lambda: pad.lines[6][1] == whole[6]))
+
+    def test_zoomed_view_recentres_only_near_the_edge(self):
+        square = [[(0, 0), (10, 0), (10, 10), (0, 10)]]
+        self.controller.show_shape("Peru", square, None, (5, 5))
+        self.assertTrue(self._wait(lambda: FakeDotPad.instance is not None
+                                   and len(FakeDotPad.instance.lines) == 11))
+        self.controller.set_zoom(2)
+        self.assertTrue(self._wait(lambda: self.controller._view_centre == (5, 5)))
+        self.controller.follow("Peru", square, None, (5.5, 5))
+        time.sleep(0.3)
+        self.assertEqual(self.controller._view_centre, (5, 5))
+        self.controller.follow("Peru", square, None, (7.5, 5))
+        self.assertTrue(self._wait(lambda: self.controller._view_centre == (7.5, 5)))
+
+    def test_nav_keys_ask_to_zoom(self):
+        asked = []
+        self.controller._on_zoom = asked.append
+        self.controller.show_shape("Peru", [[(0, 0), (1, 0), (1, 1)]])
+        self.assertTrue(self._wait(lambda: FakeDotPad.instance is not None
+                                   and 0 in FakeDotPad.instance.lines))
+        pad = FakeDotPad.instance
+        pad.press(dotpad.NTF_KEYS_PERKINS, b"\x00\x00\x40")   # nav up (key 17)
+        pad.press(dotpad.NTF_KEYS_PERKINS, b"\x00\x00\x10")   # nav down (key 19)
+        self.assertTrue(self._wait(lambda: asked == [1, -1]))
+
+    def test_port_held_by_screen_reader_is_reported(self):
+        def busy(port, *args, **kwargs):
+            raise dotpad.serial.SerialException(
+                f"could not open port '{port}': PermissionError(13, 'Access is denied.', None, 5)")
+        with mock.patch.object(dotpad.serial, "Serial", busy):
+            self.controller.show_shape("Peru", [[(0, 0), (1, 0), (1, 1)]])
+            self.assertTrue(self._wait(
+                lambda: any("in use by another program" in s for s in self.spoken)))
+        self.assertNotIn("Dot Pad connected.", self.spoken)
 
     def test_disabled_does_nothing(self):
         self.settings["dotpad_enabled"] = False

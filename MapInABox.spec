@@ -89,7 +89,11 @@ a = Analysis(
         ('sounds',               'sounds'),
         ('GeoFeatures',          'GeoFeatures'),
         ('PostalCodes',          'PostalCodes'),
-    ],
+    ] + ([
+        # liblouis 3.39.0 and its UEB tables: contracted braille on the
+        # Dot Pad and Monarch (Windows; on macOS an installed liblouis is used)
+        ('vendor/liblouis',      'vendor/liblouis'),
+    ] if sys.platform == "win32" else []),
     hiddenimports=all_hidden + [
         # pandas internals that aren't always picked up
         'pandas._libs.tslibs.np_datetime',
@@ -103,6 +107,8 @@ a = Analysis(
         'tzfpy',
         # pyserial — Dot Pad tactile display over USB
         'serial.tools.list_ports_windows',
+        # hidapi — Monarch tactile display over HID braille (USB or Bluetooth)
+        'hid',
         # Windows' built-in OCR, used to read labels on traced map pictures
         'winrt.windows.media.ocr', 'winrt.windows.graphics.imaging',
         'winrt.windows.storage', 'winrt.windows.storage.streams',

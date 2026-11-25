@@ -168,13 +168,17 @@
 
 <p>The display also shows coordinates, the map view and zoom level, north, and any destination marker. When you ask for information such as your location or country facts, it appears as a large high-contrast caption for seven seconds. To show people how to get Map in a Box, for example at the end of a presentation, choose <strong>Help, Show Download Link</strong>: the download link and a QR code fill the window, and <code>Escape</code> returns to the map. Visual Assist does not change the keyboard controls or screen-reader announcements.</p>
 
-<h3 id="dot-pad">3.4 Dot Pad tactile display</h3>
+<h3 id="dot-pad">3.4 Dot Pad and Monarch tactile displays</h3>
 
-<p>If a Dot Pad is connected by USB, Map in a Box uses it directly. Press <code>F8</code> and the current country's shape is raised on the Dot Pad's graphics area, scaled to fill it, while the country name appears in uncontracted braille on the braille line. The shape stays up until another country replaces it, so you can take your time exploring it.</p>
+<p>If a Dot Pad is connected by USB, Map in a Box uses it directly. Press <code>F8</code> and the current country's shape is raised on the Dot Pad's graphics area, scaled to fill it, while the country name appears in contracted (UEB grade 2) braille on the braille line, without capital signs or accents to save space. To use uncontracted braille instead, clear <strong>Use contracted braille on the Dot Pad or Monarch</strong> in Settings. The shape stays up until another country replaces it, so you can take your time exploring it.</p>
 
 <p><strong>Follow mode</strong> is on by default. As you move around the map, the Dot Pad shows whichever country you are in, without pressing <code>F8</code>. A new country appears once you have been in it for about half a second, so skimming quickly across several borders does not keep the pins changing. Over open water the last country stays up. A small square marker shows where you are within the country and moves as you do: it is a gap of lowered pins in a filled shape, or a raised square in an outline. Press <code>F2</code> on the Dot Pad to turn follow mode off or on; Map in a Box remembers your choice.</p>
 
-<p>The Dot Pad belongs to Map in a Box, not to your screen reader. Before starting, set your screen reader to use another braille display or none: in NVDA, choose a different display under Braille settings or remove the Dot Pad from automatic detection; in JAWS, do not add the Dot Pad as a braille display. Map in a Box says "Dot Pad connected" when it takes over the device.</p>
+<p><strong>Zoom</strong> works on the Dot Pad too. At the normal 1x zoom the whole country fills the display. Zoom in with <code>Ctrl+Plus</code>, or the up key on the Dot Pad, and the display shows the area around you at 2x, 4x and so on, up to 128x closer than the whole-country view. Your country is raised solid. Each neighbouring country is an outline, separated from yours by a one-pin gap at the border, and the sea is flat. The picture stays still while the marker moves across its middle, and moves to put you back in the centre once you get near an edge. Zoom out with <code>Ctrl+Minus</code> or the Dot Pad's down key, and return to the whole country with <code>Ctrl+0</code>. Pressing <code>F8</code> while zoomed redraws the view around where you are now.</p>
+
+<p><strong>Monarch.</strong> A HumanWare Monarch works the same way. Put it in Braille Terminal mode and connect it by USB or Bluetooth, and Map in a Box finds it on its own. The map uses the top of the Monarch's 96 by 40 pins, and the country name appears in braille on the bottom line, 32 cells wide. Follow mode, the marker and zoom behave as on the Dot Pad. Use the computer's keyboard for everything: Map in a Box does not yet read the Monarch's own keys or touch. Map in a Box writes only to a display that reports the Monarch's full pin array, so other braille displays are left alone.</p>
+
+<p>The Dot Pad or Monarch belongs to Map in a Box, not to your screen reader. Before starting, set your screen reader to use another braille display or none: in NVDA, choose a different display under Braille settings or remove the device from automatic detection; in JAWS, do not add it as a braille display. Map in a Box says "Dot Pad connected" or "Monarch connected" when it takes over the device, and tells you if another program, such as your screen reader, is already using it.</p>
 
 <p>Keys on the Dot Pad:</p>
 <ul>
@@ -182,9 +186,10 @@
   <li><code>F2</code>: turn follow mode on or off.</li>
   <li><code>F4</code>: clear the Dot Pad.</li>
   <li>Pan left and pan right: scroll a long country name on the braille line.</li>
+  <li>Up and down on the navigation keys: zoom in and out.</li>
 </ul>
 
-<p>Both options are also in Settings: clear <strong>Dot Pad follows the current country as you move</strong> to turn off follow mode, or clear <strong>Show F8 country shapes on a connected Dot Pad</strong> to stop using the Dot Pad altogether.</p>
+<p>Both options are also in Settings: clear <strong>Dot Pad or Monarch follows the current country as you move</strong> to turn off follow mode, or clear <strong>Show F8 country shapes on a connected Dot Pad or Monarch</strong> to stop using the Dot Pad altogether.</p>
 
 
 <h2 id="jumping">4. Jumping to a place</h2>

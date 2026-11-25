@@ -27,6 +27,9 @@ project remain applicable.
 - Google Gen AI SDK, Google API Core, and proto-plus — Apache-2.0
 - certifi — MPL-2.0
 - pySerial — BSD-3-Clause
+- hidapi (Python bindings and library) — BSD-3-Clause, one of its licence options
+- liblouis 3.39.0, with its UEB braille tables — LGPL-2.1-or-later; licence text
+  in vendor/liblouis/COPYING.LESSER, source at https://github.com/liblouis/liblouis
 - PyInstaller bootloader — GPL-2.0-or-later with the PyInstaller exception
 
 Bundled and downloaded data

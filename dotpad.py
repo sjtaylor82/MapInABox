@@ -25,6 +25,8 @@ from operator import xor
 
 import numpy as np
 
+import braille
+import monarch
 from logging_utils import miab_log
 
 try:
@@ -169,6 +171,14 @@ def pixels_to_rows(pixels, cell_cols, cell_rows):
 
 # ── Rendering ────────────────────────────────────────────────────────────────
 
+def unwrap_lon(points, centre_lon):
+    """Points as an (n, 2) array with longitudes within 180 degrees of centre_lon."""
+    pts = np.asarray(points, dtype=float).reshape(-1, 2).copy()
+    if centre_lon is not None and len(pts):
+        pts[:, 0] = (pts[:, 0] - centre_lon + 180) % 360 - 180 + centre_lon
+    return pts
+
+
 class ShapeFit:
     """Maps lon/lat onto display dots so that a set of rings fills the display.
 
@@ -197,10 +207,7 @@ class ShapeFit:
         self.off_y = margin + (avail_h - geo_h * self.scale) / 2
 
     def unwrap(self, points):
-        pts = np.asarray(points, dtype=float).reshape(-1, 2).copy()
-        if self.centre_lon is not None and len(pts):
-            pts[:, 0] = (pts[:, 0] - self.centre_lon + 180) % 360 - 180 + self.centre_lon
-        return pts
+        return unwrap_lon(points, self.centre_lon)
 
     def _xy(self, pts):
         return np.column_stack((pts[:, 0] * self.x_scale, -pts[:, 1]))
@@ -209,6 +216,77 @@ class ShapeFit:
         xy = self._xy(pts)
         return np.column_stack(((xy[:, 0] - self.min_x) * self.scale + self.off_x,
                                 (xy[:, 1] - self.min_y) * self.scale + self.off_y))
+
+
+class ViewFit:
+    """Maps lon/lat onto display dots for a fixed window, used when zoomed.
+
+    The window is centred on ``centre_lon``/``centre_lat`` at ``scale`` dots
+    per degree of latitude.  Shapes run off its edges, so rasterising crops
+    them there instead of pinning them to the border.
+    """
+
+    crop = True
+
+    def __init__(self, rings, width, height, centre_lon, centre_lat, scale):
+        self.width, self.height, self.margin = width, height, 0
+        self.centre_lon, self.centre_lat = float(centre_lon), float(centre_lat)
+        self.scale = float(scale)
+        self.x_scale = max(0.2, math.cos(math.radians(self.centre_lat)))
+        self.rings = [r for r in (self.unwrap(ring) for ring in rings) if len(r)]
+        self.ok = True   # an empty window (open sea) is still a valid view
+
+    def unwrap(self, points):
+        return unwrap_lon(points, self.centre_lon)
+
+    def with_rings(self, rings):
+        return ViewFit(rings, self.width, self.height, self.centre_lon,
+                       self.centre_lat, self.scale)
+
+    def bounds(self):
+        """(lon_min, lon_max, lat_min, lat_max) covered by the window."""
+        half_lon = self.width / 2 / (self.scale * self.x_scale)
+        half_lat = self.height / 2 / self.scale
+        return (self.centre_lon - half_lon, self.centre_lon + half_lon,
+                self.centre_lat - half_lat, self.centre_lat + half_lat)
+
+    def to_px(self, pts):
+        return np.column_stack(
+            ((pts[:, 0] - self.centre_lon) * self.x_scale * self.scale + self.width / 2,
+             (self.centre_lat - pts[:, 1]) * self.scale + self.height / 2))
+
+
+def _clip_segments(start, delta, width, height):
+    """Clip segments to the display (plus one dot) so long ones stay cheap."""
+    t0 = np.zeros(len(start))
+    t1 = np.ones(len(start))
+    for axis, limit in ((0, width), (1, height)):
+        p, d = start[:, axis], delta[:, axis]
+        inside = (p >= -1) & (p <= limit + 1)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ta, tb = (-1 - p) / d, (limit + 1 - p) / d
+        flat = d == 0
+        t0 = np.maximum(t0, np.where(flat, np.where(inside, -np.inf, np.inf),
+                                     np.minimum(ta, tb)))
+        t1 = np.minimum(t1, np.where(flat, np.where(inside, np.inf, -np.inf),
+                                     np.maximum(ta, tb)))
+    keep = t0 <= t1
+    return start[keep] + delta[keep] * t0[keep, None], delta[keep] * (t1 - t0)[keep, None]
+
+
+def outline_of(grid, crop=False):
+    """The edge dots of a filled grid.  With ``crop`` the display edge is not an edge."""
+    padded = np.pad(grid, 1, mode="edge" if crop else "constant")
+    interior = (padded[:-2, 1:-1] & padded[2:, 1:-1]
+                & padded[1:-1, :-2] & padded[1:-1, 2:])
+    return grid & ~interior
+
+
+def _touching(grid):
+    """Dots 4-adjacent to any raised dot in ``grid``."""
+    padded = np.pad(grid, 1)
+    return (padded[:-2, 1:-1] | padded[2:, 1:-1]
+            | padded[1:-1, :-2] | padded[1:-1, 2:])
 
 
 def render_rings(rings, width, height, style="filled", centre_lon=None, margin=1):
@@ -250,26 +328,55 @@ def rasterise(fit, style="filled"):
 
     # Trace every coastline too, so peninsulas and strips thinner than a dot
     # still appear, and give otherwise-invisible islands a single dot.
+    crop = getattr(fit, "crop", False)
     for ring in px_rings:
         seg_start = ring
         seg_end = np.roll(ring, -1, axis=0) if len(ring) > 1 else ring
         delta = seg_end - seg_start
+        if crop:
+            seg_start, delta = _clip_segments(seg_start, delta, width, height)
+            if not len(seg_start):
+                continue
         counts = np.ceil(np.hypot(delta[:, 0], delta[:, 1]) / 0.5).astype(int) + 1
-        idx = np.repeat(np.arange(len(ring)), counts)
+        idx = np.repeat(np.arange(len(seg_start)), counts)
         step = np.arange(counts.sum()) - np.repeat(np.cumsum(counts) - counts, counts)
         t = step / np.repeat(np.maximum(counts - 1, 1), counts)
         pts = seg_start[idx] + delta[idx] * t[:, None]
-        # Points exactly on the far edge would otherwise floor into the margin.
-        cols = np.clip(np.floor(pts[:, 0]).astype(int), margin, width - 1 - margin)
-        rows = np.clip(np.floor(pts[:, 1]).astype(int), margin, height - 1 - margin)
+        cols = np.floor(pts[:, 0]).astype(int)
+        rows = np.floor(pts[:, 1]).astype(int)
+        if crop:
+            keep = (cols >= 0) & (cols < width) & (rows >= 0) & (rows < height)
+            cols, rows = cols[keep], rows[keep]
+        else:
+            # Points exactly on the far edge would otherwise floor into the margin.
+            cols = np.clip(cols, margin, width - 1 - margin)
+            rows = np.clip(rows, margin, height - 1 - margin)
         grid[rows, cols] = True
 
     if style == "outline":
-        padded = np.pad(grid, 1, constant_values=False)
-        interior = (padded[:-2, 1:-1] & padded[2:, 1:-1]
-                    & padded[1:-1, :-2] & padded[1:-1, 2:])
-        grid = grid & ~interior
+        grid = outline_of(grid, crop)
     return grid
+
+
+def render_view(fit, current_rings, neighbours, style="filled"):
+    """Draw a zoomed window: the current country and the outlines around it.
+
+    ``neighbours`` is a list of ring lists for the other countries in view.
+    Filled: the current country is solid, with a lowered one-dot gap before
+    each neighbour's outline.  Outline: every country is outlined.
+    """
+    current = (rasterise(fit.with_rings(current_rings), "filled")
+               if current_rings else np.zeros((fit.height, fit.width), bool))
+    others = np.zeros_like(current)
+    lines = np.zeros_like(current)
+    for rings in neighbours:
+        area = rasterise(fit.with_rings(rings), "filled") & ~current
+        if area.any():
+            others |= area
+            lines |= outline_of(area, crop=True)
+    if style == "outline":
+        return outline_of(current, crop=True) | lines
+    return (current & ~_touching(others)) | lines
 
 
 def add_marker(grid, fit, lon, lat):
@@ -321,8 +428,12 @@ _NUMBER = _dots(3, 4, 5, 6)
 _GRADE1 = _dots(5, 6)
 
 
-def text_to_braille(text):
-    """Translate text to uncontracted UEB cells (bit n-1 = dot n)."""
+def text_to_braille(text, capitals=False):
+    """Translate text to uncontracted UEB cells (bit n-1 = dot n).
+
+    Capital signs are left out unless ``capitals`` is set: on a 20-cell line
+    they cost a cell per word and place names are capitalised anyway.
+    """
     text = "".join(c for c in unicodedata.normalize("NFKD", str(text))
                    if not unicodedata.combining(c))
     cells = []
@@ -349,12 +460,12 @@ def text_to_braille(text):
             word = text[i:end]
             if in_number and word[0].lower() in "abcdefghij":
                 cells.append(_GRADE1)
-            if len(word) > 1 and word.isupper():
+            if capitals and len(word) > 1 and word.isupper():
                 cells += [_CAPITAL, _CAPITAL]
                 cells += [_UEB_LETTERS[c.lower()] for c in word]
             else:
                 for c in word:
-                    if c.isupper():
+                    if capitals and c.isupper():
                         cells.append(_CAPITAL)
                     cells.append(_UEB_LETTERS[c.lower()])
             in_number = False
@@ -366,12 +477,22 @@ def text_to_braille(text):
     return cells
 
 
+def place_name_cells(text, contracted=True):
+    """Braille for a place name: UEB grade 2 when asked and liblouis loads."""
+    if contracted:
+        cells = braille.contracted(text)
+        if cells is not None:
+            return cells
+    return text_to_braille(text)
+
+
 # ── Device ───────────────────────────────────────────────────────────────────
 
 class DotPadDevice:
     """One open Dot Pad on a serial port."""
 
     RESPONSE_TIMEOUT = 2.0
+    label = "Dot Pad"
 
     def __init__(self, port, on_keys=None, log_settings=None):
         self.port = port
@@ -498,6 +619,10 @@ class DotPadDevice:
         for index, row in enumerate(rows):
             self.display_line(first + index, row)
 
+    def show(self, cells, pixels):
+        self.show_text(cells)
+        self.show_graphic(pixels)
+
     def show_text(self, cells):
         cols = self.info.text_cols
         if not cols:
@@ -514,6 +639,14 @@ def key_name(group, number):
     return f"group{group:02x}_key{number}"
 
 
+def port_in_use(exc):
+    """True when opening a port failed because another program holds it."""
+    if isinstance(exc, PermissionError):
+        return True
+    text = str(exc).lower()
+    return "access is denied" in text or "permissionerror" in text or "busy" in text
+
+
 def candidate_ports(preferred=""):
     if preferred:
         return [preferred]
@@ -526,12 +659,23 @@ def candidate_ports(preferred=""):
 # ── Controller ───────────────────────────────────────────────────────────────
 
 class DotPadController:
-    """Owns the Dot Pad on a worker thread and maps MIAB content onto it.
+    """Owns a tactile display on a worker thread and maps MIAB content onto it.
 
-    ``announce`` is called (from the worker thread) with text to speak, and
-    ``on_follow_changed`` with the new follow state when F2 toggles it.
-    Keys: F1 toggles filled/outline, F2 toggles follow mode, F4 clears, and
-    the pan keys scroll the braille line.
+    The display is a Dot Pad over USB serial or a Monarch over HID (see
+    monarch.py); both take the same pictures, sized to their own pin area.
+    Key handling below applies to the Dot Pad, whose keys MIAB reads.
+
+    ``announce`` is called (from the worker thread) with text to speak,
+    ``on_follow_changed`` with the new follow state when F2 toggles it, and
+    ``on_zoom`` with +1 or -1 when the Dot Pad's up or down key asks to zoom.
+    Keys: F1 toggles filled/outline, F2 toggles follow mode, F4 clears, the
+    pan keys scroll the braille line, and up/down zoom in and out.
+
+    At 1x the whole country fills the display.  Zoomed in, the display shows
+    a window centred on the cursor, ``zoom`` times closer than that country
+    view, with neighbouring countries outlined.  The window stays put while
+    the marker moves through its middle and re-centres when the marker
+    nears an edge, so the pins do not shift with every step.
 
     In follow mode the shape tracks the country under the cursor and a
     "you are here" marker tracks the cursor itself.  A new country is drawn
@@ -542,14 +686,23 @@ class DotPadController:
     STYLES = ("filled", "outline")
     FOLLOW_SETTLE = 0.5     # seconds in a country before its shape is drawn
     RESCAN_INTERVAL = 5.0   # seconds between USB scans when no Dot Pad is found
+    RECENTRE_EDGE = 0.2     # re-centre once the marker is this close to an edge
 
-    def __init__(self, settings_getter, announce=None, on_follow_changed=None):
+    def __init__(self, settings_getter, announce=None, on_follow_changed=None,
+                 on_zoom=None):
         self._settings = settings_getter
         self._announce = announce or (lambda text: None)
         self._on_follow_changed = on_follow_changed or (lambda value: None)
+        self._on_zoom = on_zoom
+        self._zoom = 1
+        self._zoom_scale = None    # dots per degree at 1x, fixed while zoomed
+        self._view_centre = None
+        self._world = []
+        self._world_boxes = None
         self._queue = queue.Queue()
         self._device = None
         self._last_scan = 0.0
+        self._busy_announced = False
         self._style = "filled"
         self._follow = bool(self._settings().get("dotpad_follow", True))
         self._title = ""
@@ -572,7 +725,8 @@ class DotPadController:
 
     @property
     def enabled(self):
-        return serial is not None and bool(self._settings().get("dotpad_enabled", True))
+        available = serial is not None or monarch.hid is not None
+        return available and bool(self._settings().get("dotpad_enabled", True))
 
     @property
     def following(self):
@@ -608,11 +762,22 @@ class DotPadController:
             self._follow_job_queued = True
         self._queue.put(self._follow_job)
 
+    def set_world(self, countries):
+        """Countries to outline when zoomed: [(name, rings, centre_lon), ...]."""
+        countries = list(countries)
+        self._queue.put(lambda: self._set_world(countries))
+
+    def set_zoom(self, factor):
+        """Follow the map's zoom level: 1 frames the country, more zooms in."""
+        if self.enabled:
+            self._queue.put(lambda: self._set_zoom(factor))
+
     def apply_settings(self):
         follow = bool(self._settings().get("dotpad_follow", True))
         if self.enabled:
             self.connect()
             self._queue.put(lambda: self._set_follow(follow, announce=False))
+            self._queue.put(self._retranslate)
         else:
             self._queue.put(self._disconnect)
 
@@ -634,8 +799,9 @@ class DotPadController:
             except Exception as exc:
                 miab_log("errors", f"Dot Pad: {exc!r}", self._settings())
                 if self._device is not None and not self._device.is_open:
+                    label = self._device.label
                     self._device = None
-                    self._announce("Dot Pad disconnected.")
+                    self._announce(f"{label} disconnected.")
 
     def _connect(self, force=False):
         if self._device is not None and self._device.is_open:
@@ -645,20 +811,37 @@ class DotPadController:
         if not force and now - self._last_scan < self.RESCAN_INTERVAL:
             return None
         self._last_scan = now
-        for port in candidate_ports(self._settings().get("dotpad_port", "")):
-            device = DotPadDevice(port, self._on_keys, self._settings())
+        busy = None
+        devices = [DotPadDevice(port, self._on_keys, self._settings())
+                   for port in candidate_ports(self._settings().get("dotpad_port", ""))]
+        devices += [monarch.MonarchDevice(info, self._on_keys, self._settings())
+                    for info in monarch.candidates()]
+        for device in devices:
             try:
                 device.open()
+            except monarch.NotMonarch:
+                continue          # another HID braille display: not ours
             except Exception as exc:
-                miab_log("errors", f"Dot Pad probe on {port} failed: {exc!r}",
-                         self._settings())
+                if isinstance(exc, monarch.MonarchBusy) or port_in_use(exc):
+                    busy = busy or device.label
+                miab_log("errors", f"{device.label} probe on {device.port!r} "
+                         f"failed: {exc!r}", self._settings())
                 continue
             self._device = device
+            self._busy_announced = False
             miab_log("feature_usage",
-                     f"Dot Pad connected: {device.name} on {port}, {device.info}",
-                     self._settings())
-            self._announce("Dot Pad connected.")
+                     f"{device.label} connected: {device.name} on {device.port!r}, "
+                     f"{device.info}", self._settings())
+            self._announce(f"{device.label} connected.")
             return device
+        # Another program, usually the screen reader's braille driver, has the
+        # device.  Say so on F8 and once while following, rather than failing
+        # silently while the screen reader keeps writing text to it.
+        if busy and (force or not self._busy_announced):
+            self._busy_announced = True
+            self._announce(f"{busy} is in use by another program, probably your "
+                           "screen reader's braille display. Set the screen reader "
+                           "to use no braille display, then press F8.")
         return None
 
     def _disconnect(self, clear=False):
@@ -672,11 +855,74 @@ class DotPadController:
                 pass
         device.close()
 
+    def _set_world(self, countries):
+        self._world = countries
+        self._world_boxes = None
+
+    def _world_in_view(self, bounds):
+        """Ring lists of the other countries whose extent meets ``bounds``."""
+        if self._world_boxes is None:
+            boxes = []
+            for _name, rings, centre_lon in self._world:
+                pts = [unwrap_lon(r, centre_lon) for r in rings]
+                pts = [p for p in pts if len(p)]
+                if not pts:
+                    boxes.append(None)
+                    continue
+                pts = np.concatenate(pts)
+                boxes.append((pts[:, 0].min(), pts[:, 0].max(),
+                              pts[:, 1].min(), pts[:, 1].max()))
+            self._world_boxes = boxes
+        lon0, lon1, lat0, lat1 = bounds
+        centre = (lon0 + lon1) / 2
+        found = []
+        for (name, rings, _c), box in zip(self._world, self._world_boxes):
+            if box is None or name == self._title:
+                continue
+            b_lon0, b_lon1, b_lat0, b_lat1 = box
+            shift = 360 * round((centre - (b_lon0 + b_lon1) / 2) / 360)
+            if (b_lon0 + shift <= lon1 and b_lon1 + shift >= lon0
+                    and b_lat0 <= lat1 and b_lat1 >= lat0):
+                found.append(rings)
+        return found
+
+    def _retranslate(self):
+        """Settings may have switched braille grade: redo the name on show."""
+        if not self._title:
+            return
+        cells = place_name_cells(
+            self._title, bool(self._settings().get("braille_contracted", True)))
+        if cells == self._text_cells:
+            return
+        self._text_cells, self._text_offset = cells, 0
+        device = self._device
+        if device is not None and device.is_open and self._shape is not None:
+            self._draw(device)
+
+    def _set_zoom(self, factor):
+        factor = max(1, int(factor))
+        if factor == self._zoom:
+            return
+        self._zoom = factor
+        if factor == 1:
+            self._zoom_scale = None
+        self._view_centre = None
+        self._base_key = None
+        device = self._device
+        if device is not None and device.is_open:
+            self._draw(device)
+
     def _show_shape(self, title, rings, centre_lon, position=None, force=False):
+        if force:
+            # F8 frames the current country afresh, which also sets the
+            # scale that zooming works from.
+            self._zoom_scale = None
+            self._view_centre = None
         self._title = title
         self._shape = (rings, centre_lon)
         self._base_key = None
-        self._text_cells = text_to_braille(title)
+        self._text_cells = place_name_cells(
+            title, bool(self._settings().get("braille_contracted", True)))
         self._text_offset = 0
         if position is not None:
             self._position = position
@@ -709,24 +955,56 @@ class DotPadController:
         if self._shape is None:
             return
         info = device.info
-        key = (self._title, self._style, info.width, info.height)
+        if self._zoom > 1:
+            key = self._zoomed_view(info)
+        else:
+            key = (self._title, self._style, info.width, info.height)
         if self._base_key != key:
             rings, centre_lon = self._shape
-            fit = ShapeFit(rings, info.width, info.height, centre_lon)
-            self._base = (fit, rasterise(fit, self._style))
+            if self._zoom > 1:
+                fit = ViewFit([], info.width, info.height, *self._view_centre,
+                              self._zoom_scale * self._zoom)
+                pixels = render_view(fit, rings,
+                                     self._world_in_view(fit.bounds()), self._style)
+            else:
+                fit = ShapeFit(rings, info.width, info.height, centre_lon)
+                pixels = rasterise(fit, self._style)
+            self._base = (fit, pixels)
             self._base_key = key
         fit, pixels = self._base
         if self._follow and self._position is not None:
             pixels = add_marker(pixels, fit, *self._position)
-        self._show_text_window(device)
-        device.show_graphic(pixels)
+        device.show(self._text_cells[self._text_offset:], pixels)
+
+    def _zoomed_view(self, info):
+        """Settle the zoomed window's centre and return its cache key."""
+        rings, centre_lon = self._shape
+        if self._zoom_scale is None:
+            self._zoom_scale = ShapeFit(rings, info.width, info.height, centre_lon).scale
+        scale = self._zoom_scale * self._zoom
+        position = self._position
+        if position is None:
+            fit = ShapeFit(rings, info.width, info.height, centre_lon)
+            pts = np.concatenate(fit.rings) if fit.ok else np.zeros((1, 2))
+            position = ((pts[:, 0].min() + pts[:, 0].max()) / 2,
+                        (pts[:, 1].min() + pts[:, 1].max()) / 2)
+        if self._view_centre is None:
+            self._view_centre = tuple(position)
+        else:
+            fit = ViewFit([], info.width, info.height, *self._view_centre, scale)
+            x, y = fit.to_px(fit.unwrap([position]))[0]
+            edge = self.RECENTRE_EDGE
+            if not (edge * info.width <= x <= (1 - edge) * info.width
+                    and edge * info.height <= y <= (1 - edge) * info.height):
+                self._view_centre = tuple(position)
+        return ("zoom", self._title, self._style, info.width, info.height,
+                scale, self._view_centre)
 
     def _show_text_window(self, device):
         device.show_text(self._text_cells[self._text_offset:])
 
     def _clear(self, device):
-        device.show_text([])
-        device.show_graphic(np.zeros((device.info.height, device.info.width), bool))
+        device.show([], np.zeros((device.info.height, device.info.width), bool))
 
     def _set_follow(self, value, announce=True):
         if value == self._follow:
@@ -762,6 +1040,8 @@ class DotPadController:
             self._style = self.STYLES[(index + 1) % len(self.STYLES)]
             self._announce(f"{self._style.capitalize()}.")
             self._draw(device)
+        elif keys in ({"nav_up"}, {"nav_down"}) and self._on_zoom:
+            self._on_zoom(1 if keys == {"nav_up"} else -1)
         elif keys == {"f2"}:
             self._set_follow(not self._follow)
             self._on_follow_changed(self._follow)
@@ -772,6 +1052,6 @@ class DotPadController:
             self._text_cells = []
             self._text_offset = 0
             self._clear(device)
-            self._announce("Dot Pad cleared.")
+            self._announce(f"{device.label} cleared.")
         else:
             self._announce(f"Dot Pad {' plus '.join(sorted(keys))} not assigned.")
