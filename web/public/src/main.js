@@ -1497,7 +1497,8 @@ async function withGoogle(text, results, near) {
     && haversineM(near.lat, near.lon, r.lat, r.lon) < 50000);
   if (named) return results;
   try {
-    const params = new URLSearchParams({ q: text, lat: near.lat.toFixed(3), lon: near.lon.toFixed(3) });
+    // v: bumped when the answer changes, so browsers don't keep an old one.
+    const params = new URLSearchParams({ q: text, lat: near.lat.toFixed(3), lon: near.lon.toFixed(3), v: '2' });
     const res = await fetch(`api/gplace?${params}`, { signal: AbortSignal.timeout(15000) });
     const g = res.ok ? (await res.json()).result : null;
     if (g) return [{ label: g.label, lat: g.lat, lon: g.lon, food: g.food, website: g.website }, ...results];

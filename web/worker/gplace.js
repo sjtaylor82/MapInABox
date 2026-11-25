@@ -45,22 +45,31 @@ export async function googlePlace(url, env) {
   if (!q || !Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
     return json({ error: 'Bad request' }, 400);
   }
-  const params = new URLSearchParams({ q, type: 'places', gl: 'au', ll: `${lat.toFixed(3)},${lon.toFixed(3)}` });
   const fetcher = env.MENU_SEARCH ? (u, o) => env.MENU_SEARCH.fetch(u, o) : fetch;
-  let p = null;
-  try {
+  const ask = async (params) => {
     const res = await fetcher(`${SEARCH}?${params}`, {
       headers: { 'User-Agent': BROWSER_UA, Accept: 'application/json' },
       signal: AbortSignal.timeout(12000),
     });
-    if (!res.ok) return json({ result: null, error: `search ${res.status}` }, 502);
-    p = (await res.json()).place;
-  } catch {
-    return json({ result: null, error: 'search failed' }, 502);
+    if (!res.ok) throw new Error(`search ${res.status}`);
+    const p = (await res.json()).place;
+    return p && Number.isFinite(p.lat) && Number.isFinite(p.lon) && sameName(p.title, q) ? p : null;
+  };
+  let p = null;
+  try {
+    // Near the map position first ("Sorai" from Carina). Google's map search only looks
+    // about as far as a suburb or two, so then all of Australia ("sorai carina" from Sydney).
+    const near = (la, lo) => ask(new URLSearchParams({ q, type: 'places', gl: 'au', ll: `${la.toFixed(3)},${lo.toFixed(3)}` }));
+    p = await near(lat, lon);
+    if (!p) {
+      p = await ask(new URLSearchParams({ q, type: 'places', gl: 'au' }));
+      // That answer has no street address or kind of place: ask again where it is, for them.
+      if (p && (!p.address || !p.category)) p = (await near(p.lat, p.lon).catch(() => null)) || p;
+    }
+  } catch (e) {
+    return json({ result: null, error: String(e.message || 'search failed') }, 502);
   }
-  if (!p || !Number.isFinite(p.lat) || !Number.isFinite(p.lon) || !sameName(p.title, q)) {
-    return json({ result: null }, 200, 7 * 24 * 3600);
-  }
+  if (!p) return json({ result: null }); // not kept: it may be there next time
   // "Sorai, 850 Old Cleveland Rd, Carina QLD 4152": the name and its street address.
   const address = String(p.address || '').replace(/,\s*Australia$/, '');
   const label = [p.title, address].filter(Boolean).join(', ');
