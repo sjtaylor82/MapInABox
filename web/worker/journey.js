@@ -34,6 +34,7 @@ export function journeyRoute(request, url, env, ctx) {
     case '/api/flights': return request.method === 'GET' ? flights(url, env, ctx) : null;
     case '/api/road': return request.method === 'GET' ? road(url, ctx) : null;
     case '/api/routes': return request.method === 'GET' ? drivingRoutes(url, env, ctx) : null;
+    case '/api/drive': return request.method === 'GET' ? drive(url, env, ctx) : null;
     case '/api/walk': return request.method === 'GET' ? walk(url, ctx) : null;
     case '/api/food': return request.method === 'POST' ? food(request) : null;
     case '/api/stations': return request.method === 'GET' ? stations(url, ctx) : null;
@@ -548,3 +549,118 @@ function decodeFlexible(str) {
   }
   return out;
 }
+
+// ── Driving directions ───────────────────────────────────────────────────
+//
+// GET /api/drive?from=lat,lon&to=lat,lon: turn-by-turn driving directions,
+// { source, duration, distance, toll, line, steps: [{ text, distance, lat, lon }] }.
+// Each step's text is the manoeuvre ("Turn right onto Middle Street");
+// distance is how far you then drive before the next one. HERE (with
+// typical traffic and tolls) when it has a key, else OpenStreetMap (OSRM).
+
+async function drive(url, env, ctx) {
+  const from = position(url.searchParams.get('from'));
+  const to = position(url.searchParams.get('to'));
+  if (!from || !to) return json({ error: 'Bad route search.' }, 400);
+  return cachedJson(`https://cache.mapinabox/drive/v3/${from}/${to}`, 1800, ctx, async () => {
+    if (env.HERE_API_KEY) {
+      try {
+        const r = await hereDrive(env.HERE_API_KEY, from, to);
+        if (r) return r;
+      } catch { /* OpenStreetMap below */ }
+    }
+    return osrmDrive(from, to);
+  });
+}
+
+async function hereDrive(key, from, to) {
+  const p = new URLSearchParams({
+    transportMode: 'car', origin: from, destination: to,
+    return: 'summary,polyline,actions,instructions,tolls', currency: 'AUD', lang: 'en-AU', apiKey: key,
+  });
+  const res = await fetch(`https://router.hereapi.com/v8/routes?${p}`, { headers: { 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(15000) });
+  if (!res.ok) throw new Error(`HERE ${res.status}`);
+  const r = ((await res.json()).routes || [])[0];
+  if (!r) return null;
+  let duration = 0;
+  let distance = 0;
+  let toll = 0;
+  let line = [];
+  const steps = [];
+  for (const s of r.sections || []) {
+    duration += (s.summary && s.summary.duration) || 0;
+    distance += (s.summary && s.summary.length) || 0;
+    for (const t of s.tolls || []) {
+      const v = Number((((t.fares || [])[0] || {}).price || {}).value);
+      if (Number.isFinite(v)) toll += v;
+    }
+    const pts = s.polyline ? decodeFlexible(s.polyline) : [];
+    for (const a of s.actions || []) {
+      const at = pts[a.offset] || pts[pts.length - 1] || [null, null];
+      // HERE ends each instruction with "Go for 450 m."; the app says the distance its own way.
+      const text = spellRoads(String(a.instruction || '').replace(/\s*Go for [\d.,]+ ?(m|km)\.?\s*$/i, '').trim());
+      if (text) steps.push({ text, distance: Math.round(a.length || 0), lat: at[0], lon: at[1] });
+    }
+    line = line.concat(pts);
+  }
+  return {
+    source: 'here', duration: Math.round(duration), distance: Math.round(distance),
+    toll: { price: Math.round(toll * 100) / 100, currency: 'AUD' }, line: thinLine(line), steps,
+  };
+}
+
+const OSRM_TURN = {
+  left: 'Turn left', right: 'Turn right', 'slight left': 'Bear left', 'slight right': 'Bear right',
+  'sharp left': 'Turn sharp left', 'sharp right': 'Turn sharp right', straight: 'Go straight on', uturn: 'Make a U-turn',
+};
+
+async function osrmDrive(from, to) {
+  const lonLat = (q) => q.split(',').reverse().join(',');
+  for (const base of OSRM.car) {
+    try {
+      const res = await fetch(`${base}${lonLat(from)};${lonLat(to)}?steps=true&overview=full&geometries=polyline`, {
+        headers: { 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(20000),
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const r = data.routes && data.routes[0];
+      if (data.code !== 'Ok' || !r) continue;
+      const steps = [];
+      for (const leg of r.legs || []) {
+        for (const st of leg.steps || []) {
+          const m = st.maneuver || {};
+          const road = spellRoads(st.name || st.ref || '');
+          const onto = road ? ` onto ${road}` : '';
+          const turn = OSRM_TURN[m.modifier] || 'Continue';
+          let text;
+          if (m.type === 'depart') text = `Head ${compassWord(m.bearing_after)}${road ? ` on ${road}` : ''}`;
+          else if (m.type === 'arrive') text = `Arrive at your destination${m.modifier === 'left' || m.modifier === 'right' ? `, on the ${m.modifier}` : ''}`;
+          else if (m.type === 'roundabout' || m.type === 'rotary') text = `At the roundabout, take the ${ordinal(m.exit || 1)} exit${onto}`;
+          else if (m.type === 'exit roundabout' || m.type === 'exit rotary') continue;
+          else if (m.type === 'on ramp') text = `Take the ramp${onto}`;
+          else if (m.type === 'off ramp') text = `Take the exit${onto}`;
+          else if (m.type === 'fork') text = `Keep ${/left/.test(m.modifier) ? 'left' : 'right'}${onto}`;
+          else if (m.type === 'merge') text = `Merge${onto}`;
+          else if (m.type === 'new name') text = `Continue${onto}`;
+          else text = `${turn}${onto}`;
+          const loc = m.location || [null, null];
+          steps.push({ text, distance: Math.round(st.distance || 0), lat: loc[1], lon: loc[0] });
+        }
+      }
+      return { source: 'osm', duration: Math.round(r.duration), distance: Math.round(r.distance), toll: null, line: thinLine(decodePolyline5(r.geometry)), steps };
+    } catch { /* the next server */ }
+  }
+  throw new Error('The driving route service could not be reached.');
+}
+
+const ordinal = (n) => (['first', 'second', 'third', 'fourth', 'fifth', 'sixth'][n - 1] || `number ${n}`);
+const compassWord = (b) => ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'][Math.round(((Number(b) || 0) % 360) / 45) % 8];
+/** Every road abbreviation in a sentence spelt out: "Turn left onto Middle St" -> "... Middle Street". Only one
+ * at the end of a name (before punctuation, a lower-case word or the end): "St Lucia" stays Saint Lucia. */
+const spellRoads = (text) => String(text)
+  // "Shore St W" -> "Shore Street West"
+  .replace(/\b([A-Z][a-z]{1,3})\.? ([NSEW])(?=$|[\s,.;)/(])/g, (w, t, d) => (ROAD_WORDS[t.toLowerCase()] ? `${ROAD_WORDS[t.toLowerCase()]} ${COMPASS[d]}` : w))
+  .replace(/\b([A-Z][A-Za-z]*)\.?(?=$|[,.;)/]|\s+(?:[a-z(]|$))/g, (w, x) => ROAD_WORDS[x.toLowerCase()] || w)
+  // "toward Ipswich/Gold Coast": read as a list, not "slash".
+  .replace(/\s*\/\s*/g, ', ');
+const COMPASS = { N: 'North', S: 'South', E: 'East', W: 'West' };

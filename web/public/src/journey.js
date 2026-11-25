@@ -404,7 +404,7 @@ async function nearYou(here) {
  */
 async function planDrive() {
   const ends = await driveEnds();
-  if (ends) showDrive(ends.a, ends.b);
+  if (ends) await showDrive(ends.a, ends.b);
 }
 
 /** From and To for a drive: { a, b }, or null (and the reason said) when one can't be found. */
@@ -527,19 +527,44 @@ export async function driveTo(place) {
   );
 }
 
-/** The Apple Maps and Google Maps driving links from a to b. */
-function showDrive(a, b) {
+/**
+ * A drive from a to b: turn-by-turn directions here (HERE, with typical
+ * traffic and tolls, or OpenStreetMap), and the Apple Maps and Google Maps
+ * links for live navigation.
+ */
+async function showDrive(a, b) {
   const s = `${a.lat.toFixed(6)},${a.lon.toFixed(6)}`;
   const d = `${b.lat.toFixed(6)},${b.lon.toFixed(6)}`;
   $('journey-drive-apple').href = `https://maps.apple.com/?saddr=${s}&daddr=${d}&dirflg=d`;
   $('journey-drive-google').href = `https://www.google.com/maps/dir/?api=1&origin=${s}&destination=${d}&travelmode=driving`;
-  $('journey-drive').hidden = false;
   st.drive = { from: { lat: a.lat, lon: a.lon, name: a.label }, to: { lat: b.lat, lon: b.lon, name: b.label } };
-  const km = formatDistance(haversineM(a.lat, a.lon, b.lat, b.lon));
-  const msg = `Driving to ${b.label}, ${km} in a straight line. Open it in Apple Maps or Google Maps for directions.`;
-  setPrompt(msg);
-  say(msg);
-  $('journey-drive-apple').focus();
+  const short = b.label.split(', ')[0];
+  const seq = st.seq;
+  let route = null;
+  try {
+    route = await api(`api/drive?${new URLSearchParams({ from: s, to: d })}`);
+  } catch { /* the links still work */ }
+  if (seq !== st.seq) return;
+  const steps = (route && route.steps) || [];
+  $('journey-drive-title').textContent = `Driving route to ${short}`;
+  $('journey-drive-steps').replaceChildren(...steps.map((x, i) => {
+    const li = document.createElement('li');
+    const last = i === steps.length - 1;
+    li.textContent = `${x.text.replace(/\.?$/, '.')}${!last && x.distance ? ` Drive ${formatDistance(x.distance)}.` : ''}`;
+    return li;
+  }));
+  let msg;
+  if (steps.length) {
+    const toll = !route.toll ? '' : route.toll.price > 0 ? `, toll $${route.toll.price.toFixed(2)}` : ', no tolls';
+    msg = `${durationText(route.duration)}, ${formatDistance(route.distance)}${toll}. ${steps.length} steps.`;
+  } else {
+    msg = `The directions could not be found. ${short} is ${formatDistance(haversineM(a.lat, a.lon, b.lat, b.lon))} away in a straight line. Open it in Apple Maps or Google Maps.`;
+  }
+  $('journey-drive-summary').textContent = msg;
+  showOnly('journey-drive');
+  setPrompt('');
+  say(`Driving route to ${short}. ${msg}`);
+  $('journey-drive-title').focus();
 }
 
 const WALK_MAX_M = 50000; // further than this is not a walk: use Travel options
