@@ -241,7 +241,7 @@ function reopenResults() {
 
 // ── Nearest stations ──────────────────────────────────────────────────────
 //
-// The train, metro and light rail stations nearest to you, nearest first.
+// The train, metro and light rail stations nearest the map position, nearest first.
 // Choose one to walk there, book an Uber to it, or open it in Apple Maps.
 
 // Built-in station lists (data/stations/<country>.json, from OpenStreetMap):
@@ -276,14 +276,9 @@ async function stationsBuiltIn(lat, lon) {
 async function nearestStations() {
   showOnly();
   say('Finding stations near you…');
-  // From where you really are; the map position if the device can't say.
-  let from;
-  try {
-    from = await hooks.myLocation();
-  } catch {
-    const here = hooks.getHere();
-    from = { lat: here.lat, lon: here.lon, label: here.label || 'the map position' };
-  }
+  // From the map position: where you are on the map, real or virtual.
+  const here = hooks.getHere();
+  const from = { lat: here.lat, lon: here.lon, label: here.label || 'the map position' };
   let list = [];
   try {
     list = await stationsBuiltIn(from.lat, from.lon).catch(() => null)
