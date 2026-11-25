@@ -337,7 +337,7 @@ input.picker { width: 100%; height: 2rem; accent-color: var(--accent); }
 #journey-section input[type="text"] { display: block; width: 100%; box-sizing: border-box; padding: 0.4rem; font-size: 1rem; }
 #journey-section button { margin-top: 0.5rem; }
 
-/* Information and Settings: a heading that is a button. */
+/* Information, Settings and Help: a heading that is a button. */
 .expander-heading { margin: 1rem 0 0.5rem; }
 .expander { font: inherit; font-weight: 700; background: none; color: var(--fg); border: 0; padding: 0.25rem 0; min-height: 44px; cursor: pointer; text-align: left; }
 .expander { text-decoration: underline; text-underline-offset: 0.2em; }
@@ -350,9 +350,6 @@ ol.steps li { margin: 0.4rem 0; }
 .result-list li { margin: 0.25rem 0; }
 .result-list button { width: 100%; text-align: left; font-size: 1rem; padding: 0.45rem 0.6rem; }
 
-/* The toolbar: the buttons used most, and More for the rest. */
-#toolbar-more { display: contents; }
-#toolbar-more[hidden] { display: none !important; }
 
 /* Visual Assist off: no big empty map area; the controls come straight after the toolbar. */
 body:not(.visual-assist) #app { grid-template-rows: auto auto auto; }

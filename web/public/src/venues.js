@@ -1,6 +1,6 @@
 // Menus where you are: "Looks like you're at Ruse Bar and Brasserie. Menu?"
-// when the app opens at a food venue, and Menus nearby (under
-// More) for the places to eat around the map position.
+// when the app opens at a food venue, and Menus nearby for the places to
+// eat around the map position.
 //
 // Only speaks up when the location is good (25 metres or better) and one
 // place to eat is clearly nearest. When two to four are about as close,

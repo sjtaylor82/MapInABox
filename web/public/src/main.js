@@ -59,12 +59,6 @@ async function boot() {
   applyLevel();
   applyVisualAssist();
   showMode();
-  // More: the toolbar buttons used less often.
-  $('btn-more').addEventListener('click', () => {
-    const open = $('toolbar-more').hidden;
-    $('toolbar-more').hidden = !open;
-    $('btn-more').setAttribute('aria-expanded', String(open));
-  });
   // Get the Desktop App: only on Windows and Mac computers, where it runs.
   // (An iPad reports itself as a Mac, but has a touch screen.)
   const ua = navigator.userAgent;
@@ -1538,7 +1532,7 @@ function openHelp() {
   $('help-dialog').querySelector('h2').focus();
 }
 
-/** Ctrl+Comma or the Settings button: go to the Settings section. */
+/** Ctrl+Comma: go to the Settings section. */
 function openSettings() {
   setExpanded($('settings-title'), true);
 }
@@ -1562,7 +1556,8 @@ function setExpanded(btn, open) {
   });
   section.querySelector('h2').focus();
 }
-for (const btn of document.querySelectorAll('.expander')) {
+// (Help looks the same but opens its own screen, so it has no aria-controls.)
+for (const btn of document.querySelectorAll('.expander[aria-controls]')) {
   btn.addEventListener('click', () => setExpanded(btn, btn.getAttribute('aria-expanded') !== 'true'));
 }
 
@@ -1753,7 +1748,6 @@ $('set-expert').addEventListener('change', (e) => {
 });
 $('places-menus').addEventListener('click', () => { if (state.started) openMenusNearby(state.lat, state.lon); });
 $('btn-help').addEventListener('click', openHelp);
-$('btn-settings').addEventListener('click', openSettings);
 $('btn-steer').addEventListener('click', toggleSteering);
 $('btn-practice').addEventListener('click', () => {
   if (steering.steeringActive()) startPractice();
