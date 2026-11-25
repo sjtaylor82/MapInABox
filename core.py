@@ -103,7 +103,7 @@ from poi_search import (
 
 import sys as _sys
 APP_NAME      = 'Map in a Box'
-APP_VERSION   = '2026.11.19'
+APP_VERSION   = '2026.11.25'
 
 # Bundled read-only resources — inside the executable bundle or source tree.
 BASE_DIR = RESOURCE_DIR
