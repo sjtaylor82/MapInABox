@@ -493,7 +493,7 @@ async function menuText(url, ctx) {
   try { u = new URL(target); } catch { return json({ error: 'Bad request' }, 400); }
   if (!/^https?:$/.test(u.protocol) || isDelivery(hostOf(u.href))) return json({ error: 'Not readable' }, 400);
   const cache = caches.default;
-  const key = new Request(`https://cache.mapinabox/menutext/v4/${encodeURIComponent(u.href)}`);
+  const key = new Request(`https://cache.mapinabox/menutext/v5/${encodeURIComponent(u.href)}`);
   const hit = await cache.match(key);
   if (hit) return hit;
   // Ordering sites whose menus are built in the browser: read from their menu data.
@@ -531,7 +531,6 @@ function boppleSlug(u) {
 
 /**
  * A Bopple venue's menu as sections of dishes: [{ title, items: [{ name, price, desc }] }].
- * Alcoholic drinks are left out (the app is for school students too).
  */
 async function boppleMenu(slug) {
   const get = (path) => fetch(`https://orders.bopple.me/api/venues/${slug}/menu/${path}`, {
@@ -541,14 +540,11 @@ async function boppleMenu(slug) {
   const [cats, products] = await Promise.all([get('categories'), get('products')]);
   if (!Array.isArray(cats) || !Array.isArray(products)) return [];
   const money = (n) => `$${Number(n).toFixed(2)}`;
-  // Alcohol sections by name too: not every venue marks its drinks as alcoholic.
-  const ALCOHOL = /\b(alcoholic|beers?|wines?|cocktails?|spirits|liquors?|schnapps)\b/i;
-  const sections = cats.filter((c) => c && c.active !== false
-    && !(ALCOHOL.test(c.category_desc || '') && !/non-?\s*alcoholic/i.test(c.category_desc || '')))
+  const sections = cats.filter((c) => c && c.active !== false)
     .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
     .map((c) => ({
       title: String(c.category_desc || '').trim(),
-      items: products.filter((p) => p && p.product_category_id === c.id && !p.alcoholic)
+      items: products.filter((p) => p && p.product_category_id === c.id)
         .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
         .map((p) => {
           const lo = Number(p.price_min ?? p.price);
