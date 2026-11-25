@@ -24,6 +24,21 @@ class LabelTests(unittest.TestCase):
             m.result_label({"kind": "photo", "age": "4 months ago", "url": "https://restaurantguru.com/x"}, "A"),
             "Photos of the menu on RestaurantGuru, newest 4 months ago")
 
+    def test_updated(self):
+        import datetime
+        today = datetime.date(2026, 11, 25)
+        self.assertEqual(m.updated_text("2026-11-12", today), "updated this month")
+        self.assertEqual(m.updated_text("2026-10", today), "updated last month")
+        self.assertEqual(m.updated_text("2026-05-02", today), "updated 6 months ago")
+        self.assertEqual(m.updated_text("2025-02-13", today), "updated 21 months ago")
+        self.assertEqual(m.updated_text("2023-01-01", today), "updated 3 years ago")
+        self.assertEqual(m.updated_text("", today), "")
+        with mock.patch.object(m, "updated_text", return_value="updated 6 months ago"):
+            self.assertEqual(
+                m.result_label({"kind": "own", "pdf": True, "title": "Menu", "updated": "2026-05-02",
+                                "url": "https://x.filesusr.com/a.pdf"}, "Marinara"),
+                "Menu (PDF) on x.filesusr.com, updated 6 months ago")
+
     def test_pdfs_are_opened_not_read(self):
         self.assertFalse(m.can_read_here({"kind": "own", "readable": True, "pdf": True}))
         self.assertFalse(m.can_read_here({"kind": "delivery", "readable": True}))

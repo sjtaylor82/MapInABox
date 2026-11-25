@@ -26,7 +26,7 @@ import urllib.request
 
 SERVER = "https://expert.mapinabox.org"
 # Matches the web page's v=, so both share the server's cached answers.
-_API_VERSION = "4"
+_API_VERSION = "5"
 _HEADERS = {"User-Agent": "MapInABox-desktop", "Accept": "application/json"}
 
 _DELIVERY = {
@@ -100,6 +100,24 @@ def _site(url: str) -> str:
     return host or "link"
 
 
+def updated_text(date: str, today=None) -> str:
+    """When a menu was last changed ('2026-05-02' or '2026-05'): 'updated 7 months ago', or ''."""
+    import datetime
+    import re
+    m = re.match(r"(\d{4})-(\d{2})", date or "")
+    if not m:
+        return ""
+    today = today or datetime.date.today()
+    months = (today.year - int(m.group(1))) * 12 + (today.month - int(m.group(2)))
+    if months <= 0:
+        return "updated this month"
+    if months == 1:
+        return "updated last month"
+    if months < 24:
+        return f"updated {months} months ago"
+    return f"updated {months // 12} years ago"
+
+
 def result_label(result: dict, venue: str) -> str:
     """How a result is listed: "Ahmet's on Uber Eats", "Food Menu (PDF) on ahmets.com"."""
     kind = result.get("kind")
@@ -117,6 +135,8 @@ def result_label(result: dict, venue: str) -> str:
         label = f"{name} (PDF) on {_site(url)}"
     else:
         label = f"{title or 'Menu'} on {_site(url)}"
+    if result.get("updated"):
+        label += f", {updated_text(result['updated'])}"
     if can_read_here(result):
         label += ", can be read here"
     return label
