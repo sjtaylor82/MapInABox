@@ -394,8 +394,8 @@ async function checkOwn(results, name) {
   return (await Promise.all(results.map(async (r) => {
     if (r.kind !== 'own') return [r];
     if (OTHER_SITES.test(hostOf(r.url))) return [];
-    // Bopple's page is built in the browser, but its menu can be read here.
-    if (boppleSlug(r.url)) return [{ ...r, readable: true }];
+    // Ordering pages built in the browser (Bopple, HungryHungry): their menus can be read here.
+    if (isOrderingMenu(r.url)) return [{ ...r, readable: true }];
     const page = await fetchPage(r.url);
     if (!page.ok) return ALIVE_ANYWAY.has(page.status) ? [{ ...r, readable: false }] : []; // a dead link goes
     let path = '';
@@ -414,7 +414,7 @@ async function menu(url, env, ctx) {
   const website = (url.searchParams.get('website') || '').trim().slice(0, 300);
   if (!name) return json({ error: 'Bad request' }, 400);
   const cache = caches.default;
-  const key = new Request(`https://cache.mapinabox/menu/v15/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(suburb.toLowerCase())}`);
+  const key = new Request(`https://cache.mapinabox/menu/v16/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(suburb.toLowerCase())}`);
   const hit = await cache.match(key);
   if (hit) return hit;
 
@@ -493,13 +493,12 @@ async function menuText(url, ctx) {
   try { u = new URL(target); } catch { return json({ error: 'Bad request' }, 400); }
   if (!/^https?:$/.test(u.protocol) || isDelivery(hostOf(u.href))) return json({ error: 'Not readable' }, 400);
   const cache = caches.default;
-  const key = new Request(`https://cache.mapinabox/menutext/v5/${encodeURIComponent(u.href)}`);
+  const key = new Request(`https://cache.mapinabox/menutext/v6/${encodeURIComponent(u.href)}`);
   const hit = await cache.match(key);
   if (hit) return hit;
   // Ordering sites whose menus are built in the browser: read from their menu data.
-  const ordering = boppleSlug(u.href);
-  if (ordering) {
-    const sections = await boppleMenu(ordering);
+  if (isOrderingMenu(u.href)) {
+    const sections = await orderingMenu(u.href);
     if (!sections.length) return json({ error: 'Not readable' }, 502);
     const out = json({ text: '', sections, menu: true }, 200, 24 * 3600);
     ctx.waitUntil(cache.put(key, out.clone()));
@@ -511,6 +510,97 @@ async function menuText(url, ctx) {
   const out = json({ text: page.text.slice(0, 8000), sections, menu: page.menu }, 200, 7 * 24 * 3600);
   ctx.waitUntil(cache.put(key, out.clone()));
   return out;
+}
+
+// ---- Ordering sites ---------------------------------------------------------
+// Their pages are built in the browser, so there's no menu in the page itself,
+// but the menu data behind them can be read directly.
+
+/** Is this a menu page on an ordering site we can read? */
+const isOrderingMenu = (u) => !!(boppleSlug(u) || hungryHungrySlug(u));
+
+/** An ordering site's menu as sections of dishes, or []. */
+async function orderingMenu(u) {
+  if (boppleSlug(u)) return boppleMenu(boppleSlug(u));
+  if (hungryHungrySlug(u)) return hungryHungryMenu(hungryHungrySlug(u));
+  return [];
+}
+
+// HungryHungry: storefront.hungryhungry.com/<venue>/menu. Its settings give
+// the menu's price level and UI numbers; the menu then comes as one file.
+
+/** 'gustosgourmetpizzapasta' for https://storefront.hungryhungry.com/gustosgourmetpizzapasta/menu, else ''. */
+function hungryHungrySlug(u) {
+  try {
+    const x = new URL(u);
+    if (!/^(storefront|order\.platform)\.hungryhungry\.com$/.test(x.hostname)) return '';
+    const slug = x.pathname.split('/').filter(Boolean)[0] || '';
+    return /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(slug) ? slug : '';
+  } catch {
+    return '';
+  }
+}
+
+async function hungryHungryMenu(slug) {
+  const base = 'https://storefront.hungryhungry.com/api/v1';
+  const get = (path, ms) => fetch(`${base}/${path}`, {
+    headers: { 'User-Agent': BROWSER_UA, Accept: 'application/json' },
+    signal: AbortSignal.timeout(ms),
+  }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  const config = await get(`storefront/config?host=storefront.hungryhungry.com&path=${encodeURIComponent(slug)}`, 8000);
+  const ui = config && config.themeObj && config.themeObj.UI_ID;
+  const level = ((JSON.stringify(config || {}).match(/"price_level_id":"(\d+)"/) || [])[1]);
+  if (!ui || !level) return [];
+  const d = await get(`drupal/api/online/menu/${level}/${ui}/en/1`, 15000);
+  return d ? hungryHungrySections(d) : [];
+}
+
+/** HungryHungry's menu file -> sections: its groups (Pasta, Meat Pizza...) with each dish's sizes and prices. */
+function hungryHungrySections(d) {
+  const money = (n) => `$${Number(n).toFixed(2)}`;
+  const priceOf = (it) => Number(it && it.prices && it.prices.base);
+  const groups = d.group || {};
+  const cols = d.collection || {};
+  const items = d.item || {};
+  // Groups in menu order: the categories' content, first appearance wins.
+  const order = [];
+  for (const cat of Object.values(d.menu_map || {})) {
+    if (cat.hidden && cat.hidden !== '0') continue;
+    for (const c of cat.content || []) if (c.type === 'group' && !order.includes(String(c.id))) order.push(String(c.id));
+  }
+  for (const id of Object.keys(groups)) if (!order.includes(id)) order.push(id);
+  const seen = new Set();
+  const sections = [];
+  for (const gid of order) {
+    const g = groups[gid];
+    if (!g || !g.title || gid === '0') continue;
+    const dishes = [];
+    const add = (name, desc, sizes, available) => {
+      name = String(name || '').trim();
+      if (!name || seen.has(`${gid}|${name}`)) return;
+      seen.add(`${gid}|${name}`);
+      const priced = sizes.filter((x) => Number.isFinite(x.price));
+      let price = '';
+      if (priced.length && priced.every((x) => x.price === priced[0].price)) price = money(priced[0].price);
+      else if (priced.length) price = priced.sort((a, b) => a.price - b.price).map((x) => `${x.size || 'one size'} ${money(x.price)}`).join(', ');
+      const note = [String(desc || '').replace(/\s+/g, ' ').trim(), available ? '' : 'Not available now'].filter(Boolean).join('. ');
+      dishes.push({ name, price, desc: note });
+    };
+    for (const c of g.collections || []) {
+      const col = cols[String(c.id)];
+      if (!col) continue;
+      const its = (col.items || []).map((x) => items[String(x.id)]).filter((it) => it && it.visible !== 'hidden');
+      if (!its.length) continue;
+      add(col.title, col.description, its.map((it) => ({ size: (it.attributes && it.attributes.Size) || '', price: priceOf(it) })),
+        its.some((it) => it.availability !== false));
+    }
+    for (const x of Object.values(g.items || {})) {
+      const it = items[String(x.id)];
+      if (it && it.visible !== 'hidden') add(it.title, it.description, [{ size: '', price: priceOf(it) }], it.availability !== false);
+    }
+    if (dishes.length) sections.push({ title: String(g.title).trim(), items: dishes });
+  }
+  return sections;
 }
 
 // ---- Bopple ordering pages --------------------------------------------------
