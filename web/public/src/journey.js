@@ -418,6 +418,7 @@ async function driveEnds() {
   }
   const here = hooks.getHere();
   const seq = ++st.seq;
+  stopDriveGuide(false);
   showOnly();
   $('journey-drive').hidden = true;
   say(`Finding ${to}…`);
@@ -520,6 +521,7 @@ export async function driveTo(place) {
   $('journey-title').scrollIntoView({ block: 'start' });
   st.seq++;
   stopGuiding(false);
+  stopDriveGuide(false);
   showOnly();
   showDrive(
     { lat: me.lat, lon: me.lon, label: me === here ? (here.label || 'the map position') : 'your location' },
@@ -547,12 +549,9 @@ async function showDrive(a, b) {
   if (seq !== st.seq) return;
   const steps = (route && route.steps) || [];
   $('journey-drive-title').textContent = `Driving route to ${short}`;
-  $('journey-drive-steps').replaceChildren(...steps.map((x, i) => {
-    const li = document.createElement('li');
-    const last = i === steps.length - 1;
-    li.textContent = `${x.text.replace(/\.?$/, '.')}${!last && x.distance ? ` Drive ${formatDistance(x.distance)}.` : ''}`;
-    return li;
-  }));
+  showDriveSteps(route);
+  dguide.route = steps.length && route.line && route.line.length > 1 ? route : null;
+  $('journey-drive-guide').hidden = !dguide.route;
   let msg;
   if (steps.length) {
     const toll = !route.toll ? '' : route.toll.price > 0 ? `, toll $${route.toll.price.toFixed(2)}` : ', no tolls';
@@ -565,6 +564,195 @@ async function showDrive(a, b) {
   setPrompt('');
   say(`Driving route to ${short}. ${msg}`);
   $('journey-drive-title').focus();
+}
+
+/** The driving directions as a numbered list: "Turn left onto Middle Road. Drive 3.0 kilometres." */
+function showDriveSteps(route) {
+  const steps = (route && route.steps) || [];
+  $('journey-drive-steps').replaceChildren(...steps.map((x, i) => {
+    const li = document.createElement('li');
+    const last = i === steps.length - 1;
+    li.textContent = `${x.text.replace(/\.?$/, '.')}${!last && x.distance ? ` Drive ${formatDistance(x.distance)}.` : ''}`;
+    return li;
+  }));
+}
+
+// ── Passenger guidance on a drive ─────────────────────────────────────────
+//
+// Follows the car with the phone's GPS along the driving directions and
+// says what's coming, for a passenger: each turn twice (well ahead, further
+// at motorway speed, then just before), the suburbs as you enter them, and
+// arriving. Off the route, it finds a new one from where you are. Like
+// walking guidance, it works while the page is open and the screen on.
+
+const DRIVE_AT_M = 35;          // this close to a manoeuvre: you're at it
+const DRIVE_ARRIVE_M = 60;
+const DRIVE_OFF_M = 90;         // this far from the route line (plus GPS error): off it
+const REROUTE_GAP_MS = 30000;   // at most one new route every 30 seconds
+const SUBURB_EVERY_MS = 10000;  // check the suburb this often
+
+const dguide = { watch: null, wakeLock: null, route: null, line: null, cum: null, stepAlong: [], next: 1,
+  far: -1, near: -1, offCount: 0, lastReroute: 0, suburb: '', suburbAt: 0, pendingSuburb: '', speed: 0, last: null };
+
+/** How far ahead to warn, from the car's speed (metres a second): about 40 and 12 seconds ahead, within limits. */
+function warnDistances(speed) {
+  const v = Math.max(8, speed || 0);
+  return { far: Math.min(1500, Math.max(300, v * 40)), near: Math.min(400, Math.max(80, v * 12)) };
+}
+
+/** "Turn left onto Middle Road" -> "turn left onto Middle Road" (after "In 500 metres, "). */
+const lowerFirst = (t) => t.replace(/^[A-Z](?![A-Z0-9])/, (c) => c.toLowerCase());
+
+function setDriveRoute(route) {
+  dguide.route = route;
+  dguide.line = route.line || [];
+  dguide.cum = cumulative(dguide.line);
+  dguide.stepAlong = route.steps.map((s) => (Number.isFinite(s.lat) ? alongLine(dguide.line, dguide.cum, s.lat, s.lon).along : 0));
+  dguide.next = 1;
+  dguide.far = -1;
+  dguide.near = -1;
+  dguide.offCount = 0;
+}
+
+async function onDrivePosition(pos) {
+  if (dguide.watch == null || !dguide.route) return;
+  const { latitude: lat, longitude: lon, accuracy, speed } = pos.coords;
+  hooks.follow({ lat, lon });
+  // Speed: the GPS's own, else from the last fix.
+  const now = pos.timestamp || Date.now();
+  if (Number.isFinite(speed) && speed >= 0) dguide.speed = speed;
+  else if (dguide.last && now > dguide.last.t) dguide.speed = haversineM(dguide.last.lat, dguide.last.lon, lat, lon) / ((now - dguide.last.t) / 1000);
+  dguide.last = { lat, lon, t: now };
+
+  const steps = dguide.route.steps;
+  const dest = st.drive && st.drive.to;
+  const end = steps[steps.length - 1];
+  const endLat = dest ? dest.lat : end.lat;
+  const endLon = dest ? dest.lon : end.lon;
+  if (haversineM(lat, lon, endLat, endLon) <= DRIVE_ARRIVE_M + Math.min(accuracy || 0, 40)) {
+    const side = (end.text.match(/on the (left|right)/i) || [])[1];
+    say(`You have arrived at ${(dest && dest.name ? dest.name.split(', ')[0] : 'your destination')}${side ? `, on the ${side.toLowerCase()}` : ''}.`);
+    stopDriveGuide(false);
+    return;
+  }
+
+  const at = alongLine(dguide.line, dguide.cum, lat, lon);
+  // Off the route: twice in a row, so one jumpy fix doesn't count.
+  if (at.cross > DRIVE_OFF_M + Math.min(accuracy || 0, 60)) {
+    dguide.offCount += 1;
+    if (dguide.offCount >= 2 && Date.now() - dguide.lastReroute > REROUTE_GAP_MS) {
+      dguide.lastReroute = Date.now();
+      rerouteDrive(lat, lon);
+    }
+    return;
+  }
+  dguide.offCount = 0;
+
+  // Manoeuvres passed (by distance along the route, or by being right at one).
+  let passed = false;
+  while (dguide.next < steps.length - 1
+    && (at.along >= dguide.stepAlong[dguide.next] - 5 || haversineM(lat, lon, steps[dguide.next].lat, steps[dguide.next].lon) <= DRIVE_AT_M)) {
+    dguide.next += 1;
+    passed = true;
+  }
+  const i = dguide.next;
+  const s = steps[i];
+  const ahead = Math.max(0, dguide.stepAlong[i] - at.along);
+  const { far, near } = warnDistances(dguide.speed);
+  const isEnd = i === steps.length - 1;
+  const what = isEnd ? `arrive at ${dest && dest.name ? dest.name.split(', ')[0] : 'your destination'}` : lowerFirst(s.text.replace(/\.$/, ''));
+  if (ahead <= near && dguide.near !== i) {
+    dguide.near = i;
+    dguide.far = i;
+    say(`${ahead < 60 ? 'Now' : `In ${formatDistance(Math.round(ahead / 10) * 10)}`}, ${what}.`);
+    return;
+  }
+  // The far warning only when there's room for two (not straight after the last turn).
+  if (ahead <= far && ahead > near * 2 && dguide.far !== i) {
+    dguide.far = i;
+    say(`In ${formatDistance(Math.round(ahead / 100) * 100)}, ${what}.`);
+    return;
+  }
+  // Just past a manoeuvre onto a long stretch: how long it is.
+  if (passed && ahead > 3000) {
+    const road = (steps[i - 1].text.match(/\b(?:onto|on) (.+?)(?: toward|$|\.)/) || [])[1];
+    say(`${road ? `On ${road} ` : 'Straight on '}for ${formatDistance(Math.round(ahead / 100) * 100)}.`);
+    return;
+  }
+  // The suburbs you pass through, when nothing else is being said.
+  if (now - dguide.suburbAt > SUBURB_EVERY_MS) {
+    dguide.suburbAt = now;
+    const pc = await postcodeAt(lat, lon).catch(() => null);
+    const name = pc && pc.place;
+    // The same new name twice running: entered it (not a brush past its edge).
+    if (name && name !== dguide.suburb) {
+      if (name === dguide.pendingSuburb) {
+        if (dguide.suburb) say(`Entering ${name}.`);
+        dguide.suburb = name;
+        dguide.pendingSuburb = '';
+      } else {
+        dguide.pendingSuburb = name;
+      }
+    }
+  }
+}
+
+async function rerouteDrive(lat, lon) {
+  const dest = st.drive && st.drive.to;
+  if (!dest) return;
+  say('Off the route. Finding a new route from here.');
+  let route = null;
+  try {
+    route = await api(`api/drive?${new URLSearchParams({ from: `${lat.toFixed(6)},${lon.toFixed(6)}`, to: `${dest.lat.toFixed(6)},${dest.lon.toFixed(6)}` })}`);
+  } catch { /* below */ }
+  if (dguide.watch == null) return;
+  if (!route || !route.steps || !route.steps.length) {
+    say('A new route could not be found. Still trying.');
+    dguide.lastReroute = Date.now() - REROUTE_GAP_MS / 2; // try again sooner
+    return;
+  }
+  setDriveRoute(route);
+  showDriveSteps(route);
+  say(`New route: ${durationText(route.duration)}, ${formatDistance(route.distance)}. ${route.steps[1] ? route.steps[1].text : ''}`);
+}
+
+async function startDriveGuide() {
+  if (!dguide.route) return;
+  if (!('geolocation' in navigator)) return say('Location is not available in this browser.');
+  stopDriveGuide(false);
+  stopGuiding(false);
+  setDriveRoute(dguide.route);
+  dguide.suburb = '';
+  dguide.pendingSuburb = '';
+  dguide.suburbAt = 0;
+  dguide.speed = 0;
+  dguide.last = null;
+  try {
+    if ('wakeLock' in navigator) dguide.wakeLock = await navigator.wakeLock.request('screen');
+  } catch { /* the screen may lock */ }
+  dguide.watch = navigator.geolocation.watchPosition((p) => { onDrivePosition(p); }, (err) => {
+    if (err.code === err.PERMISSION_DENIED) {
+      say('Location access was not allowed, so the drive cannot be followed.');
+      stopDriveGuide(false);
+    }
+  }, { enableHighAccuracy: true, maximumAge: 1000, timeout: 30000 });
+  $('journey-drive-guide').textContent = 'Stop passenger guidance';
+  const first = dguide.route.steps[0];
+  say(`Following the drive. ${first ? first.text : ''} Keep this page open and the screen on.`);
+}
+
+function stopDriveGuide(announce = true) {
+  if (dguide.watch != null) navigator.geolocation.clearWatch(dguide.watch);
+  dguide.watch = null;
+  if (dguide.wakeLock) dguide.wakeLock.release().catch(() => {});
+  dguide.wakeLock = null;
+  if ($('journey-drive-guide')) $('journey-drive-guide').textContent = 'Start passenger guidance';
+  if (announce) say('Passenger guidance stopped.');
+}
+
+function toggleDriveGuide() {
+  if (dguide.watch != null) stopDriveGuide(true);
+  else startDriveGuide();
 }
 
 const WALK_MAX_M = 50000; // further than this is not a walk: use Travel options
@@ -1168,6 +1356,7 @@ async function startGuiding() {
   if (!st.walk) return;
   if (!('geolocation' in navigator)) return say('Location is not available in this browser.');
   stopGuiding(false);
+  stopDriveGuide(false);
   guide.next = 1;
   guide.warned = -1;
   guide.off = false;
@@ -1791,6 +1980,7 @@ export function initJourney(h) {
   onSlowClick($('journey-walk-plan'), 'Finding a walking route', walkClick);
   onSlowClick($('journey-drive-plan'), 'Finding the place', planDrive);
   onSlowClick($('journey-suburbs-plan'), 'Finding the ways to drive there', listSuburbs);
+  $('journey-drive-guide').addEventListener('click', toggleDriveGuide);
   onSlowClick($('journey-drive-food'), 'Finding food along the drive', driveFood, { slow: true });
   onSlowClick($('journey-walk-food'), 'Finding food along the walk', walkFood);
   $('journey-guide').addEventListener('click', toggleGuiding);
