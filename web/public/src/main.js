@@ -24,6 +24,7 @@ import { startMonitor, stopMonitor, monitorActive, setMonitorLevel, monitorStatu
 import { speakableHours } from './placedetails.js';
 import { initJourney, walkTo, driveTo } from './journey.js';
 import { openScreen, closeScreen, closeAllScreens } from './screen.js';
+import { lookUpAddresses, placeTextWithAddress } from './addresses.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -567,14 +568,14 @@ async function openPlaces() {
   clearTimeout(slow);
   if (!street.areaReady(lat, lon)) return say('The map data here could not be loaded. Try again in a moment.');
   $('places-pick').hidden = false;
-  listPlaces(true);
+  await listPlaces(true);
 }
 
 const PLACES_RADIUS = 1000; // metres
 const PLACES_MAX = 100;
 
 /** Fill the Place picker with the nearest places in the categories switched on. */
-function listPlaces(focusList) {
+async function listPlaces(focusList) {
   const category = placeCategory();
   const cats = category === 'all' ? null : new Set([category]);
   let radius = PLACES_RADIUS;
@@ -583,6 +584,8 @@ function listPlaces(focusList) {
     radius = 3000; // the country: look further
     found = street.placesNear(state.lat, state.lon, radius, PLACES_MAX, cats);
   }
+  // Street addresses the map doesn't have (Expert looks them up; a second or two).
+  if (level() === 'expert') await lookUpAddresses(found);
   placeResults = found;
   state.placeIdx = 0;
   showPlaceButtons();
@@ -610,7 +613,7 @@ function showPlaceButtons() {
     const li = document.createElement('li');
     const b = document.createElement('button');
     b.type = 'button';
-    b.textContent = street.placeText(p);
+    b.textContent = placeTextWithAddress(p);
     b.addEventListener('click', () => openPlaceScreen(i, b));
     li.append(b);
     return li;
@@ -630,7 +633,7 @@ function openPlaceScreen(i, opener) {
   placeOpener = opener;
   showPlaceLinks();
   $('place-screen-title').textContent = p.name;
-  $('place-summary').textContent = street.placeText(p).split(', ').slice(1).join(', ');
+  $('place-summary').textContent = placeTextWithAddress(p).slice(p.name.length + 2);
   placeView('home');
   $('place-screen').showModal();
   $('place-screen-title').focus();

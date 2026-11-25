@@ -12,6 +12,7 @@ import { settings } from './settings.js';
 import { say } from './speech.js';
 import { showMenu } from './menu.js';
 import { formatDistance } from './geo.js';
+import { shortAddress, lookUpAddresses, placeTextWithAddress } from './addresses.js';
 
 // Places that have a menu (not supermarkets or butchers).
 const EATING = new Set(['restaurant', 'cafe', 'café', 'fast food', 'pub', 'bar', 'biergarten', 'ice cream', 'bakery',
@@ -52,41 +53,8 @@ function recentlyDismissed(places) {
   return places.some((p) => d.keys.includes(placeKey(p)));
 }
 
-/**
- * A place's street address, short: "164 Cavendish Road", or '' when unknown.
- * Its own address on the map, else one looked up (lookUpAddresses), else
- * a house number right beside it (any further and it's often next door's).
- */
-function shortAddress(p) {
-  const own = ((p.details && p.details.address) || '').split(', ')[0];
-  if (/\d/.test(own) && /[a-z]{3}/i.test(own)) return own;
-  if (p.lookedUp) return p.lookedUp;
-  const a = street.nearestAddress(p.lat, p.lon, 12);
-  return a && a.street ? `${a.num} ${a.street}` : '';
-}
-
-/** Look up the addresses the map doesn't have (HERE, through the Worker), six at a time, for up to 8 seconds. */
-async function lookUpAddresses(places) {
-  const todo = places.filter((p) => !/\d/.test(((p.details && p.details.address) || '').split(', ')[0]));
-  const one = async (p) => {
-    const q = new URLSearchParams({ name: p.name, lat: p.lat.toFixed(6), lon: p.lon.toFixed(6) });
-    const r = await fetch(`api/venueaddr?${q}`, { signal: AbortSignal.timeout(8000) }).catch(() => null);
-    const j = r && r.ok ? await r.json().catch(() => ({})) : {};
-    if (j.addr) p.lookedUp = j.addr;
-  };
-  const all = (async () => {
-    for (let i = 0; i < todo.length; i += 6) await Promise.all(todo.slice(i, i + 6).map(one));
-  })();
-  await Promise.race([all, new Promise((r) => setTimeout(r, 8000))]);
-}
-
 /** "Yami Sushi, restaurant, 164 Cavendish Road, 120 metres north" */
-function venueText(p) {
-  const addr = shortAddress(p);
-  if (!addr) return street.placeText(p);
-  const [name, kind, ...rest] = street.placeText(p).split(', ');
-  return [name, kind, addr, ...rest].join(', ');
-}
+const venueText = placeTextWithAddress;
 
 function button(text, onClick) {
   const b = document.createElement('button');
