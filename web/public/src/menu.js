@@ -38,6 +38,8 @@ export function updatedText(date) {
  */
 export async function showMenu(box, place) {
   box.hidden = false;
+  delete box.dataset.reading;
+  box.menuView = null;
   // Shown in the box while the search runs, with a reminder every 10 seconds.
   const wait = document.createElement('p');
   wait.className = 'working-status';
@@ -70,6 +72,10 @@ export async function showMenu(box, place) {
   ul.className = 'result-list';
   const text = document.createElement('div');
   text.className = 'menu-text';
+  // Reading a menu is a view of its own; Back (menuBack) returns to this list.
+  box.menuView = { list: [h, ul], text, opener: null };
+  text.menuBox = box;
+  const opened = (b) => { box.menuView.opener = b; };
   for (const r of results) {
     const li = document.createElement('li');
     // Menu photos: fetched and listed here, not RestaurantGuru's own page (with its adverts and other restaurants).
@@ -77,7 +83,7 @@ export async function showMenu(box, place) {
       const b = document.createElement('button');
       b.type = 'button';
       b.textContent = `Photos of the menu, newest ${r.age || 'of unknown date'}`;
-      b.addEventListener('click', () => getPhoto(r.url, text, place.name));
+      b.addEventListener('click', () => { opened(b); getPhoto(r.url, text, place.name); });
       li.append(b);
       ul.append(li);
       continue;
@@ -100,7 +106,7 @@ export async function showMenu(box, place) {
       const b = document.createElement('button');
       b.type = 'button';
       b.textContent = r.pictures === 1 ? 'Menu picture' : `Menu pictures (${r.pictures})`;
-      b.addEventListener('click', () => getPhoto(r.url, text, place.name));
+      b.addEventListener('click', () => { opened(b); getPhoto(r.url, text, place.name); });
       li.append(' ', b);
     }
     // A menu on the venue's own site that can be read here: a page with prices, or a PDF.
@@ -108,7 +114,7 @@ export async function showMenu(box, place) {
       const b = document.createElement('button');
       b.type = 'button';
       b.textContent = 'Read it here';
-      b.addEventListener('click', () => (r.pdf ? readPdf(r.url, text, place.name) : readMenu(r.url, text, place.name)));
+      b.addEventListener('click', () => { opened(b); return r.pdf ? readPdf(r.url, text, place.name) : readMenu(r.url, text, place.name); });
       li.append(' ', b);
     }
     ul.append(li);
@@ -220,6 +226,7 @@ async function getPhoto(pageUrl, box, name) {
     done();
   }
   if (!versions.length) return showProblem(box, 'The photos of the menu could not be found. Open the link instead.');
+  enterReading(box);
   box.replaceChildren();
   const h = document.createElement('h4');
   h.tabIndex = -1;
@@ -242,6 +249,28 @@ async function getPhoto(pageUrl, box, name) {
   h.focus();
 }
 
+/** Show a menu (or its photos) on its own: the list of menus is hidden until Back. */
+function enterReading(text) {
+  const box = text.menuBox;
+  if (!box || !box.menuView) return;
+  for (const el of box.menuView.list) el.hidden = true;
+  box.dataset.reading = '1';
+}
+
+/**
+ * Back from reading a menu: the list of menus again, on the button that opened it.
+ * Returns true when it went back; false when the list is showing (the caller goes back further).
+ */
+export function menuBack(box) {
+  const v = box && box.menuView;
+  if (!v || box.dataset.reading !== '1') return false;
+  delete box.dataset.reading;
+  v.text.replaceChildren();
+  for (const el of v.list) el.hidden = false;
+  (v.opener && v.opener.isConnected ? v.opener : v.list[0]).focus();
+  return true;
+}
+
 function showProblem(box, message) {
   box.replaceChildren();
   const p = document.createElement('p');
@@ -257,6 +286,7 @@ function speakablePrice(p) {
 
 /** Sections as headings, each with a list of dishes: "Beef burger, $22. With chips." */
 function showSections(box, name, sections) {
+  enterReading(box);
   box.replaceChildren();
   const h = document.createElement('h4');
   h.tabIndex = -1;
@@ -281,6 +311,7 @@ function showSections(box, name, sections) {
 }
 
 function showLines(box, name, text) {
+  enterReading(box);
   box.replaceChildren();
   const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
   const h = document.createElement('h4');

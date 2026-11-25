@@ -9,7 +9,7 @@
 import * as street from './street.js';
 import { settings } from './settings.js';
 import { say } from './speech.js';
-import { showMenu } from './menu.js';
+import { showMenu, menuBack } from './menu.js';
 import { shortAddress, lookUpAddresses } from './addresses.js';
 
 // Places that have a menu (not supermarkets or butchers).
@@ -57,21 +57,38 @@ function button(text, onClick) {
   return b;
 }
 
+let menuOpener = null; // the choice that opened the menu
+
 function openDialog(title) {
   const dlg = $('venue-dialog');
   $('venue-title').textContent = title;
   $('venue-choices').replaceChildren();
+  $('venue-choices').hidden = false;
   $('venue-menu').replaceChildren();
   $('venue-menu').hidden = true;
   if (!dlg.open) dlg.showModal();
   return dlg;
 }
 
-function menuFor(p) {
-  // Leave only the chosen place above its menu.
-  $('venue-choices').replaceChildren();
+function menuFor(p, opener) {
+  // The menu on its own; Back returns to the choices.
+  menuOpener = opener || null;
+  $('venue-choices').hidden = true;
   showMenu($('venue-menu'), { name: p.name, lat: p.lat, lon: p.lon, website: p.details && p.details.website });
 }
+
+// Back: from a menu being read to the list of menus, then to the choices; then it closes.
+$('venue-dialog').stepBack = () => {
+  const box = $('venue-menu');
+  if (box.hidden) return false;
+  if (menuBack(box)) return true;
+  box.hidden = true;
+  box.replaceChildren();
+  $('venue-choices').hidden = false;
+  const to = menuOpener && menuOpener.isConnected ? menuOpener : $('venue-choices').querySelector('button');
+  (to || $('venue-title')).focus();
+  return true;
+};
 
 /**
  * On opening the app at your real location: ask about the menu when you seem
@@ -96,10 +113,10 @@ export async function checkVenue({ lat, lon, accuracy }) {
     const p = guess.at;
     const addr = shortAddress(p);
     openDialog(`Looks like you're at ${p.name}${addr ? `, ${addr}` : ''}.`);
-    $('venue-choices').append(button(`Menu for ${p.name}`, () => menuFor(p)), notHere);
+    $('venue-choices').append(button(`Menu for ${p.name}`, (e) => menuFor(p, e.currentTarget)), notHere);
   } else {
     openDialog('Looks like you\'re at one of these.');
-    for (const p of places) $('venue-choices').append(button([p.name, p.kind, shortAddress(p)].filter(Boolean).join(', '), () => menuFor(p)));
+    for (const p of places) $('venue-choices').append(button([p.name, p.kind, shortAddress(p)].filter(Boolean).join(', '), (e) => menuFor(p, e.currentTarget)));
     $('venue-choices').append(notHere);
   }
   $('venue-choices').querySelector('button').focus();

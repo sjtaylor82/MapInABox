@@ -16,7 +16,7 @@ import * as steering from './steering.js';
 import * as street from './street.js';
 import { makePicker } from './picker.js';
 import { postcodeAt } from './postcode.js';
-import { showMenu } from './menu.js';
+import { showMenu, menuBack } from './menu.js';
 import { checkVenue } from './venues.js';
 import { onSlowClick, working } from './busy.js';
 import { describeLocation } from './placeinfo.js';
@@ -650,6 +650,8 @@ function placeView(view) {
 }
 
 function placeBack() {
+  // From a menu being read, back to the list of menus first.
+  if (!$('place-menu').hidden && menuBack($('place-menu'))) return;
   if (!$('place-home').hidden) return $('place-screen').close();
   placeView('home');
   (placeSubFrom || $('place-screen-title')).focus();
@@ -1710,6 +1712,22 @@ $('places-menu').addEventListener('click', () => {
   showMenu($('place-menu'), { name: p.name, lat: p.lat, lon: p.lon, website: p.details && p.details.website });
 });
 $('place-back').addEventListener('click', placeBack);
+// Escape goes back a step too, as Back does (the place itself closes last).
+$('place-screen').addEventListener('cancel', (e) => {
+  e.preventDefault();
+  placeBack();
+});
+// Jump's Back: from a menu being read to the list of menus, then from the menus to the
+// place's details; only then does Jump close. (Cancel still closes it at once.)
+$('jump-dialog').stepBack = () => {
+  const box = $('jump-menu-box');
+  if (box.hidden) return false;
+  if (menuBack(box)) return true;
+  box.hidden = true;
+  box.replaceChildren();
+  $('jump-menu').focus();
+  return true;
+};
 // Back to the list, onto the place you chose (Escape closes the screen too).
 $('place-screen').addEventListener('close', () => {
   if (placeOpener && placeOpener.isConnected) placeOpener.focus();
@@ -1722,8 +1740,18 @@ for (const id of ['jump-dialog', 'help-dialog', 'venue-dialog']) {
     if (state.started) focusMap();
   });
 }
+// Back at the top goes back a step where the screen has steps (stepBack); Close and Cancel close.
 for (const btn of document.querySelectorAll('[data-close]')) {
-  btn.addEventListener('click', () => btn.closest('dialog').close());
+  btn.addEventListener('click', () => {
+    const dlg = btn.closest('dialog');
+    if (btn.classList.contains('back') && dlg.stepBack && dlg.stepBack()) return;
+    dlg.close();
+  });
+}
+for (const id of ['jump-dialog', 'venue-dialog']) {
+  $(id).addEventListener('cancel', (e) => {
+    if ($(id).stepBack && $(id).stepBack()) e.preventDefault();
+  });
 }
 $('btn-jump').addEventListener('click', () => openJump());
 $('btn-gps').addEventListener('click', toggleMonitor);
