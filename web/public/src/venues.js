@@ -1,6 +1,5 @@
 // Menus where you are: "Looks like you're at Ruse Bar and Brasserie. Menu?"
-// when the app opens at a food venue, and Menus nearby for the places to
-// eat around the map position.
+// when the app opens at a food venue.
 //
 // Only speaks up when the location is good (25 metres or better) and one
 // place to eat is clearly nearest. When two to four are about as close,
@@ -11,8 +10,7 @@ import * as street from './street.js';
 import { settings } from './settings.js';
 import { say } from './speech.js';
 import { showMenu } from './menu.js';
-import { formatDistance } from './geo.js';
-import { shortAddress, lookUpAddresses, placeTextWithAddress } from './addresses.js';
+import { shortAddress, lookUpAddresses } from './addresses.js';
 
 // Places that have a menu (not supermarkets or butchers).
 const EATING = new Set(['restaurant', 'cafe', 'café', 'fast food', 'pub', 'bar', 'biergarten', 'ice cream', 'bakery',
@@ -20,8 +18,6 @@ const EATING = new Set(['restaurant', 'cafe', 'café', 'fast food', 'pub', 'bar'
 const GOOD_FIX_M = 25;   // worse than this, and the phone can't tell next door from here
 const AT_M = 20;         // a place this close may be where you are
 const CLOSE_M = 30;      // places this close are listed when there's no clear winner
-const NEARBY_M = 2000;   // Menus nearby: places to eat within 2 kilometres
-const NEARBY_MAX = 40;    // the nearest 40 of them
 const QUIET_HOURS = 3;   // after "Not here", don't ask about the same place again for a while
 
 const $ = (id) => document.getElementById(id);
@@ -53,9 +49,6 @@ function recentlyDismissed(places) {
   return places.some((p) => d.keys.includes(placeKey(p)));
 }
 
-/** "Yami Sushi, restaurant, 164 Cavendish Road, 120 metres north" */
-const venueText = placeTextWithAddress;
-
 function button(text, onClick) {
   const b = document.createElement('button');
   b.type = 'button';
@@ -85,7 +78,7 @@ function menuFor(p) {
  * to be at a place to eat. Waits for the street data (up to 8 seconds).
  */
 export async function checkVenue({ lat, lon, accuracy }) {
-  // Expert only, like Routes and Menus nearby: Starter is just the map.
+  // Expert only, like Routes: Starter is just the map.
   if (settings.get('level') !== 'expert' || settings.get('venueAsk') === false || !(accuracy <= GOOD_FIX_M)) return;
   await Promise.race([street.ensureArea(lat, lon), new Promise((r) => setTimeout(r, 8000))]);
   if (!street.areaReady(lat, lon) || document.querySelector('dialog[open]')) return;
@@ -110,36 +103,4 @@ export async function checkVenue({ lat, lon, accuracy }) {
     $('venue-choices').append(notHere);
   }
   $('venue-choices').querySelector('button').focus();
-}
-
-/** Menus nearby: the places to eat around a point, nearest first; choose one for its menu. */
-export async function openMenusNearby(lat, lon) {
-  openDialog('Menus nearby');
-  const wait = document.createElement('p');
-  wait.textContent = 'Finding places to eat…';
-  $('venue-choices').append(wait);
-  $('venue-title').focus();
-  await Promise.race([street.ensureRadius(lat, lon, NEARBY_M), new Promise((r) => setTimeout(r, 15000))]);
-  const near = eatingNear(lat, lon, NEARBY_M, NEARBY_MAX);
-  await lookUpAddresses(near);
-  $('venue-choices').replaceChildren();
-  if (!near.length) {
-    const p = document.createElement('p');
-    p.textContent = `No food venues found within ${NEARBY_M / 1000} kilometres.`;
-    $('venue-choices').append(p);
-    say(p.textContent);
-    return;
-  }
-  const ul = document.createElement('ul');
-  ul.className = 'result-list';
-  for (const p of near) {
-    const li = document.createElement('li');
-    li.append(button(venueText(p), () => menuFor(p)));
-    ul.append(li);
-  }
-  $('venue-choices').append(ul);
-  // Where there are many, the nearest 40 may all be well inside 2 kilometres: say how far the list reaches.
-  const reach = formatDistance(Math.max(100, Math.ceil(near[near.length - 1].dist / 100) * 100));
-  $('venue-title').textContent = `Menus nearby: ${near.length} places to eat, within ${reach}`;
-  ul.querySelector('button').focus();
 }

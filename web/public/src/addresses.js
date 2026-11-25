@@ -1,4 +1,4 @@
-// Street addresses for lists of places (Places nearby, Menus nearby):
+// Street addresses for lists of places (Places nearby):
 // "Yami Sushi, restaurant, 164 Cavendish Road, here".
 //
 // A place's own address on the map when it has one; else looked up from HERE

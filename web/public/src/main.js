@@ -17,7 +17,7 @@ import * as street from './street.js';
 import { makePicker } from './picker.js';
 import { postcodeAt } from './postcode.js';
 import { showMenu } from './menu.js';
-import { checkVenue, openMenusNearby } from './venues.js';
+import { checkVenue } from './venues.js';
 import { onSlowClick, working } from './busy.js';
 import { describeLocation } from './placeinfo.js';
 import { startMonitor, stopMonitor, monitorActive, setMonitorLevel, monitorStatus } from './gpsmonitor.js';
@@ -572,7 +572,7 @@ async function openPlaces() {
   await listPlaces(true);
 }
 
-const PLACES_RADIUS = 1000; // metres
+const PLACES_RADIUS = 2000; // metres
 const PLACES_MAX = 100;
 
 /** Fill the Place picker with the nearest places in the categories switched on. */
@@ -591,14 +591,17 @@ async function listPlaces(focusList) {
   state.placeIdx = 0;
   showPlaceButtons();
   if (!found.length) {
-    const why = `No ${category === 'all' ? 'places' : categoryLabel(category).toLowerCase()} found within ${formatDistance(radius)}.`;
+    const why = `No ${category === 'all' ? 'places' : categoryLabel(category).toLowerCase()} found within ${radius / 1000} kilometres.`;
     $('places-prompt').textContent = why;
     $('places-prompt').hidden = false;
     if (focusList) $('places-category').focus();
     return say(why);
   }
   const what = category === 'all' ? 'places' : categoryLabel(category).toLowerCase();
-  const how = `${found.length} ${what} within ${formatDistance(radius)}`;
+  // A full list may all be well inside the search distance (a city centre): say how far it reaches.
+  const full = found.length >= PLACES_MAX;
+  const reach = full ? formatDistance(Math.max(100, Math.ceil(found[found.length - 1].dist / 50) * 50)) : `${radius / 1000} kilometres`;
+  const how = `${full ? 'The nearest ' : ''}${found.length} ${what} within ${reach}`;
   $('places-prompt').hidden = true;
   $('places-list-title').textContent = `${how[0].toUpperCase()}${how.slice(1)}`;
   if (focusList) {
@@ -1746,7 +1749,6 @@ $('set-expert').addEventListener('change', (e) => {
   settings.set('level', e.target.checked ? 'expert' : 'starter');
   applyLevel();
 });
-$('places-menus').addEventListener('click', () => { if (state.started) openMenusNearby(state.lat, state.lon); });
 $('btn-help').addEventListener('click', openHelp);
 $('btn-steer').addEventListener('click', toggleSteering);
 $('btn-practice').addEventListener('click', () => {
