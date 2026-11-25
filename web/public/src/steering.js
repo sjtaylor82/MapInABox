@@ -41,8 +41,17 @@ export function steeringSupported() {
   return typeof window.DeviceOrientationEvent !== 'undefined';
 }
 
+/**
+ * A phone or tablet: touch is its main input. Windows computers often report
+ * touch points (a touch screen, or just its drivers) while the mouse and
+ * keyboard are what's used, so there it counts only when the main pointer is
+ * a finger (tablet mode). An iPad reports itself as a Mac, with touch points.
+ */
 export function isTouchDevice() {
-  return matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
+  if (matchMedia('(pointer: coarse)').matches) return true;
+  const ua = navigator.userAgent;
+  const computer = /Windows NT/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints <= 1);
+  return navigator.maxTouchPoints > 0 && !computer;
 }
 
 /**
