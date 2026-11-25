@@ -620,7 +620,7 @@ function showPlaceButtons() {
   }));
 }
 
-// The place screen: its name, Go there, Details, Menu and Apple Maps.
+// The place screen: its name, Jump to here, Details, Menu and Apple Maps.
 // Details and Menu each replace that on the screen; Back goes back a step,
 // and from the place itself back to the list, onto the place you chose.
 let placeOpener = null;   // the list button that opened the screen

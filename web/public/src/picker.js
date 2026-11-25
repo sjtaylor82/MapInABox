@@ -122,7 +122,7 @@ export function makePicker(input, { items, get, set, shown, browse = false }) {
     if (browse) current.focus();
     else (box.querySelector('input:checked') || box.querySelector('input'))?.focus();
   };
-  // Enter on a choice works as Enter on the old input did (for example, Go there).
+  // Enter on a choice works as Enter on the old input did (for example, Jump to here).
   box.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.target.tagName === 'BUTTON') return;
     e.preventDefault();

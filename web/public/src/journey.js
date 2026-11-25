@@ -1904,7 +1904,7 @@ function withSuburb(p) {
   return `${p.text}, in ${p.suburb}`;
 }
 
-/** The food places as buttons; choosing one picks it for Go there and the links below. */
+/** The food places as buttons; choosing one picks it for Jump to here and the links below. */
 function showFoodList() {
   const ul = $('journey-food-list');
   ul.replaceChildren(...st.food.map((p, i) => {
