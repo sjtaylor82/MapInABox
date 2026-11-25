@@ -258,7 +258,48 @@ function branchLink(home, html, words) {
 }
 
 function asResult(page, name, text = '') {
-  return { kind: 'own', title: page.title || text || `${name} menu`, url: page.url, pdf: !!page.pdf, readable: !!page.readable };
+  // A menu page with no menu text may show the menu as pictures.
+  const pictures = !page.pdf && !page.readable && page.html ? menuPictures(page.html, page.url).length : 0;
+  return { kind: 'own', title: page.title || text || `${name} menu`, url: page.url, pdf: !!page.pdf, readable: !!page.readable, pictures };
+}
+
+const NOT_PICTURE = /logo|icon|favicon|insta|facebook|avatar|badge|sprite|placeholder|payment|award|review|map[-_.]|banner-small/i;
+
+/**
+ * The big pictures on a venue's menu page, which on a page with no menu
+ * text are usually the menu itself (designed menu cards, photos of the
+ * board). The largest size up to 1600 pixels wide of each; logos, icons
+ * and small pictures are left out.
+ */
+function menuPictures(html, base) {
+  const out = [];
+  const seen = new Set();
+  for (const tag of String(html).match(/<img\b[^>]*>/gi) || []) {
+    const attr = (n) => (tag.match(new RegExp(`\\s${n}="([^"]*)"`, 'i')) || [])[1] || '';
+    let best = '';
+    let bestW = 0;
+    for (const set of [attr('data-srcset'), attr('srcset')]) {
+      for (const part of set.split(',')) {
+        const [u, w] = part.trim().split(/\s+/);
+        const n = parseInt(w, 10);
+        if (u && n && ((n <= 1600 && n > bestW) || !bestW)) { best = u; bestW = n; }
+      }
+    }
+    if (!best) best = [attr('data-src'), attr('data-lazy-src'), attr('src')].find((u) => u && !u.startsWith('data:')) || '';
+    if (!best) continue;
+    let u;
+    try { u = new URL(best.replace(/&amp;/g, '&'), base); } catch { continue; }
+    if (!/^https?:$/.test(u.protocol) || !/\.(jpe?g|png|webp)$/i.test(u.pathname)) continue;
+    if (NOT_PICTURE.test(u.pathname) || NOT_PICTURE.test(attr('alt')) || NOT_PICTURE.test(attr('class'))) continue;
+    const w = parseInt(attr('width'), 10) || 0;
+    const h = parseInt(attr('height'), 10) || 0;
+    if ((w || h || bestW) && Math.max(w, h, bestW) < 500) continue;
+    const key = u.pathname.replace(/-\d+x\d+(?=\.\w+$)/, '').toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(u.href);
+  }
+  return out.slice(0, 8);
 }
 
 /**
@@ -371,7 +412,7 @@ async function menu(url, env, ctx) {
   const website = (url.searchParams.get('website') || '').trim().slice(0, 300);
   if (!name) return json({ error: 'Bad request' }, 400);
   const cache = caches.default;
-  const key = new Request(`https://cache.mapinabox/menu/v13/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(suburb.toLowerCase())}`);
+  const key = new Request(`https://cache.mapinabox/menu/v14/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(suburb.toLowerCase())}`);
   const hit = await cache.match(key);
   if (hit) return hit;
 
@@ -571,12 +612,20 @@ function menuVersions(html) {
 async function menuPhotos(url, ctx) {
   let u;
   try { u = new URL(url.searchParams.get('url') || ''); } catch { return json({ error: 'Bad request' }, 400); }
-  if (u.protocol !== 'https:' || !RG_PAGE.test(hostOf(u.href))) return json({ error: 'Bad request' }, 400);
+  if (!/^https?:$/.test(u.protocol)) return json({ error: 'Bad request' }, 400);
   const cache = caches.default;
   const key = new Request(`https://cache.mapinabox/menuphotos/v4/${encodeURIComponent(u.href)}`);
   const hit = await cache.match(key);
   if (hit) return hit;
-  const { versions } = await rgPage(u.href);
+  let versions;
+  if (RG_PAGE.test(hostOf(u.href))) {
+    versions = (await rgPage(u.href)).versions;
+  } else {
+    // The venue's own menu page: its menu pictures.
+    const page = await fetchPage(u.href);
+    const images = page.ok && page.html ? menuPictures(page.html, page.url) : [];
+    versions = images.length ? [{ who: 'site', age: '', images }] : [];
+  }
   if (!versions.length) return json({ error: 'Not readable' }, 502);
   // Newest first.
   versions.sort((a, b) => ageDays(a.age) - ageDays(b.age));
@@ -622,20 +671,24 @@ async function rgPage(pageUrl) {
 async function menuImage(url, ctx) {
   let u;
   try { u = new URL(url.searchParams.get('u') || ''); } catch { return json({ error: 'Bad request' }, 400); }
-  if (u.protocol !== 'https:' || !RG_IMAGE.test(u.hostname)) return json({ error: 'Bad request' }, 400);
+  if (!/^https?:$/.test(u.protocol)) return json({ error: 'Bad request' }, 400);
   const cache = caches.default;
   const key = new Request(`https://cache.mapinabox/menuimage/v1/${encodeURIComponent(u.href)}`);
   const hit = await cache.match(key);
   if (hit) return hit;
   let res;
   try {
-    res = await fetch(u.href, { headers: { 'User-Agent': BROWSER_UA, Referer: 'https://restaurantguru.com/' }, signal: AbortSignal.timeout(15000) });
+    const referer = RG_IMAGE.test(u.hostname) ? 'https://restaurantguru.com/' : `${u.origin}/`;
+    res = await fetch(u.href, { headers: { 'User-Agent': BROWSER_UA, Referer: referer }, signal: AbortSignal.timeout(15000) });
   } catch {
     return json({ error: 'Not readable' }, 502);
   }
   const type = res.headers.get('Content-Type') || '';
-  if (!res.ok || !type.startsWith('image/') || Number(res.headers.get('Content-Length') || 0) > 8e6) return json({ error: 'Not readable' }, 502);
-  const out = new Response(await res.arrayBuffer(), { headers: { 'Content-Type': type, 'Cache-Control': 'public, max-age=2592000' } });
+  // Pictures only (this is not a way to fetch other things), up to 8 MB.
+  if (!res.ok || !/^image\/(jpeg|png|webp)/.test(type) || Number(res.headers.get('Content-Length') || 0) > 8e6) return json({ error: 'Not readable' }, 502);
+  const bytes = await res.arrayBuffer();
+  if (bytes.byteLength > 8e6) return json({ error: 'Too big' }, 502);
+  const out = new Response(bytes, { headers: { 'Content-Type': type, 'Cache-Control': 'public, max-age=2592000' } });
   ctx.waitUntil(cache.put(key, out.clone()));
   return out;
 }

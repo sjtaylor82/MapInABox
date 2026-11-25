@@ -37,7 +37,7 @@ export async function showMenu(box, place) {
   const done = working(null, `Looking for the menu for ${place.name}`, { slow: true });
   const pc = await postcodeAt(place.lat, place.lon).catch(() => null);
   // v: bumped when the answer's shape changes, so browsers don't keep an old copy for a week.
-  const params = new URLSearchParams({ name: place.name, suburb: (pc && pc.place) || '', v: '2' });
+  const params = new URLSearchParams({ name: place.name, suburb: (pc && pc.place) || '', v: '3' });
   if (place.website) params.set('website', place.website);
   let results = [];
   try {
@@ -84,6 +84,14 @@ export async function showMenu(box, place) {
         ? `${place.name} on Facebook (menu photos may be in its posts)`
         : `${r.pdf ? `${r.title && !/\.pdf$/i.test(r.title) ? r.title : 'Menu'} (PDF)` : r.title || 'Menu'} on ${site}`;
     li.append(a);
+    // A menu page whose menu is pictures: list them here, to share to a reading app.
+    if (r.kind === 'own' && !r.readable && !r.pdf && r.pictures) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = r.pictures === 1 ? 'Menu picture' : `Menu pictures (${r.pictures})`;
+      b.addEventListener('click', () => getPhoto(r.url, text, place.name));
+      li.append(' ', b);
+    }
     // A menu on the venue's own site that can be read here: a page with prices, or a PDF.
     if (r.kind === 'own' && (r.readable || r.pdf)) {
       const b = document.createElement('button');
@@ -148,8 +156,9 @@ async function readPdf(url, box, name) {
 
 /** "Muzzas Pies menu 2.jpg" */
 function photoFile(blob, name, n) {
-  const safe = name.replace(/[^\w' -]+/g, '').trim() || 'Menu';
-  return new File([blob], `${safe} menu${n ? ` ${n}` : ''}.jpg`, { type: blob.type || 'image/jpeg' });
+  const safe = name.replace(/[^\w' -]+/g, '').replace(/\s+/g, ' ').trim() || 'Menu';
+  const ext = /png/.test(blob.type) ? 'png' : /webp/.test(blob.type) ? 'webp' : 'jpg';
+  return new File([blob], `${safe} menu${n ? ` ${n}` : ''}.${ext}`, { type: blob.type || 'image/jpeg' });
 }
 
 /** A list item for one photo: "Page 1 of 3", Share the photo (on a phone), Open the photo. */
@@ -203,21 +212,22 @@ async function getPhoto(pageUrl, box, name) {
   box.replaceChildren();
   const h = document.createElement('h4');
   h.tabIndex = -1;
-  h.textContent = `Photos of the ${name} menu`;
+  h.textContent = versions[0].who === 'site' ? `Pictures of the ${name} menu` : `Photos of the ${name} menu`;
   const note = document.createElement('p');
   note.textContent = 'Share a photo to a reading app such as Seeing AI to hear it.';
   box.append(h, note);
-  const describe = (v) => `${v.who === 'owner' ? 'From the owner' : 'From a customer'}${v.age ? `, ${v.age}` : ''}`;
+  const describe = (v) => `${v.who === 'site' ? 'On its website' : v.who === 'owner' ? 'From the owner' : 'From a customer'}${v.age ? `, ${v.age}` : ''}`;
   versions.forEach((v, i) => {
     const sub = document.createElement('h5');
-    sub.textContent = i === 0 ? `Newest menu: ${describe(v)}` : `Older menu: ${describe(v)}`;
+    sub.textContent = versions.length === 1 ? describe(v) : i === 0 ? `Newest menu: ${describe(v)}` : `Older menu: ${describe(v)}`;
     const ul = document.createElement('ul');
     ul.className = 'result-list';
     v.files.forEach((f, j) => ul.append(photoItem(f, v.files.length > 1 ? `Page ${j + 1} of ${v.files.length}` : 'Photo')));
     box.append(sub, ul);
   });
   const photos = versions.reduce((n, v) => n + v.files.length, 0);
-  say(`${photos === 1 ? 'One photo' : `${photos} photos`} of the ${name} menu. Newest: ${describe(versions[0]).toLowerCase()}.`);
+  const what = versions[0].who === 'site' ? 'picture' : 'photo';
+  say(`${photos === 1 ? `One ${what}` : `${photos} ${what}s`} of the ${name} menu. ${versions.length > 1 ? 'Newest: ' : ''}${describe(versions[0]).toLowerCase()}.`);
   h.focus();
 }
 
