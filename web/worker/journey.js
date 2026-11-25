@@ -33,6 +33,7 @@ export function journeyRoute(request, url, env, ctx) {
     case '/api/journey': return request.method === 'GET' ? journey(url, env, ctx) : null;
     case '/api/flights': return request.method === 'GET' ? flights(url, env, ctx) : null;
     case '/api/road': return request.method === 'GET' ? road(url, ctx) : null;
+    case '/api/routes': return request.method === 'GET' ? drivingRoutes(url, env, ctx) : null;
     case '/api/walk': return request.method === 'GET' ? walk(url, ctx) : null;
     case '/api/food': return request.method === 'POST' ? food(request) : null;
     case '/api/stations': return request.method === 'GET' ? stations(url, ctx) : null;
@@ -357,4 +358,193 @@ async function crossings(request) {
     } catch { /* next server */ }
   }
   return json({ error: 'The crossing search service could not be reached.' }, 502);
+}
+
+// ── Driving routes to compare (List suburbs) ─────────────────────────────
+//
+// GET /api/routes?from=lat,lon&to=lat,lon: up to three driving routes,
+// fastest first, each { duration, distance, via: ['Logan Motorway', 'M1'],
+// toll: { price, currency } | null (null = not known), line: [[lat, lon], ...] }.
+// From HERE (alternatives, toll prices, road names) when it has a key, else
+// OpenStreetMap routing (OSRM, no tolls). The app names the suburbs along
+// each line itself, from its postcode list. As the desktop's Suburb Lister.
+
+async function drivingRoutes(url, env, ctx) {
+  const from = position(url.searchParams.get('from'));
+  const to = position(url.searchParams.get('to'));
+  if (!from || !to) return json({ error: 'Bad route search.' }, 400);
+  return cachedJson(`https://cache.mapinabox/routes/v2/${from}/${to}`, 3600, ctx, async () => {
+    if (env.HERE_API_KEY) {
+      try {
+        const routes = await hereRoutes(env.HERE_API_KEY, from, to);
+        if (routes.length) return { source: 'here', routes };
+      } catch { /* OpenStreetMap below */ }
+    }
+    return { source: 'osm', routes: await osrmRoutes(from, to) };
+  });
+}
+
+async function hereRoutes(key, from, to) {
+  const routes = await hereRequest(key, from, to, false);
+  // Every way has a toll: add the best way without one, to compare.
+  if (routes.length && routes.every((r) => r.toll && r.toll.price > 0)) {
+    const free = (await hereRequest(key, from, to, true).catch(() => []))[0];
+    if (free && !(free.toll && free.toll.price > 0)) routes.push({ ...free, noTolls: true });
+  }
+  return routes;
+}
+
+async function hereRequest(key, from, to, avoidTolls) {
+  const p = new URLSearchParams({
+    transportMode: 'car', origin: from, destination: to, alternatives: avoidTolls ? '0' : '2',
+    return: 'summary,polyline,tolls', spans: 'names,routeNumbers,length', currency: 'AUD', lang: 'en-AU', apiKey: key,
+  });
+  if (avoidTolls) p.set('avoid[features]', 'tollRoad');
+  const res = await fetch(`https://router.hereapi.com/v8/routes?${p}`, { headers: { 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(15000) });
+  if (!res.ok) throw new Error(`HERE ${res.status}`);
+  const data = await res.json();
+  return (data.routes || []).map((r) => {
+    let duration = 0;
+    let distance = 0;
+    let tollPrice = 0;
+    let currency = 'AUD';
+    const roads = new Map(); // name -> metres, in order of first use
+    let line = [];
+    for (const s of r.sections || []) {
+      duration += (s.summary && s.summary.duration) || 0;
+      distance += (s.summary && s.summary.length) || 0;
+      for (const t of s.tolls || []) {
+        const fare = (t.fares || [])[0];
+        const price = fare && fare.price;
+        if (price && Number.isFinite(Number(price.value))) {
+          tollPrice += Number(price.value);
+          currency = price.currency || currency;
+        }
+      }
+      for (const sp of s.spans || []) {
+        const name = ((sp.names || [])[0] || {}).value || ((sp.routeNumbers || [])[0] || {}).value || '';
+        if (name) roads.set(name, (roads.get(name) || 0) + (sp.length || 0));
+      }
+      if (s.polyline) line = line.concat(decodeFlexible(s.polyline));
+    }
+    return {
+      duration: Math.round(duration), distance: Math.round(distance),
+      via: mainRoads(roads, distance),
+      toll: { price: Math.round(tollPrice * 100) / 100, currency },
+      line: thinLine(line),
+    };
+  }).sort((a, b) => a.duration - b.duration);
+}
+
+async function osrmRoutes(from, to) {
+  const lonLat = (q) => q.split(',').reverse().join(',');
+  for (const base of OSRM.car) {
+    try {
+      const res = await fetch(`${base}${lonLat(from)};${lonLat(to)}?alternatives=3&steps=true&overview=full&geometries=polyline`, {
+        headers: { 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(20000),
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data.code !== 'Ok' || !data.routes) continue;
+      return data.routes.slice(0, 3).map((r) => {
+        const roads = new Map();
+        for (const leg of r.legs || []) {
+          for (const st of leg.steps || []) {
+            const name = st.name || st.ref || '';
+            if (name) roads.set(name, (roads.get(name) || 0) + (st.distance || 0));
+          }
+        }
+        return {
+          duration: Math.round(r.duration), distance: Math.round(r.distance),
+          via: mainRoads(roads, r.distance), toll: null, line: thinLine(decodePolyline5(r.geometry)),
+        };
+      }).sort((a, b) => a.duration - b.duration);
+    } catch { /* the next server */ }
+  }
+  throw new Error('The driving route service could not be reached.');
+}
+
+/** The roads that carry most of a route (each at least a seventh of it), in the order driven. */
+function mainRoads(roads, total) {
+  const big = [...roads].filter(([, m]) => m >= total / 7);
+  const top = [...big].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([n]) => n);
+  return big.map(([n]) => n).filter((n) => top.includes(n)).map(spellRoad);
+}
+
+const ROAD_WORDS = {
+  rd: 'Road', st: 'Street', ave: 'Avenue', pde: 'Parade', hwy: 'Highway', mwy: 'Motorway', fwy: 'Freeway',
+  dr: 'Drive', tce: 'Terrace', cres: 'Crescent', blvd: 'Boulevard', bvd: 'Boulevard', ln: 'Lane', esp: 'Esplanade', twy: 'Tollway',
+};
+/** "Gateway Mwy" -> "Gateway Motorway" (read aloud as words, not letters). */
+const spellRoad = (n) => n.replace(/\b([A-Za-z]+)\.?(?=$|\s)/g, (w, x) => ROAD_WORDS[x.toLowerCase()] || w);
+
+/** A line with a point about every 250 metres: plenty to name suburbs from, small to send. */
+function thinLine(pts) {
+  const out = [];
+  let last = null;
+  for (const [lat, lon] of pts) {
+    if (last && Math.hypot((lat - last[0]) * 111000, (lon - last[1]) * 111000 * Math.cos((lat * Math.PI) / 180)) < 250) continue;
+    last = [Math.round(lat * 1e5) / 1e5, Math.round(lon * 1e5) / 1e5];
+    out.push(last);
+  }
+  if (pts.length) out.push(pts[pts.length - 1].slice(0, 2));
+  return out;
+}
+
+/** Google-style encoded polyline (OSRM), precision 5 -> [[lat, lon]]. */
+function decodePolyline5(str) {
+  const out = [];
+  let i = 0;
+  let lat = 0;
+  let lon = 0;
+  const next = () => {
+    let result = 0;
+    let shift = 0;
+    let b;
+    do {
+      b = str.charCodeAt(i++) - 63;
+      result += (b & 0x1f) * 2 ** shift;
+      shift += 5;
+    } while (b >= 0x20 && i < str.length);
+    return result % 2 ? -(result + 1) / 2 : result / 2;
+  };
+  while (i < str.length) {
+    lat += next();
+    lon += next();
+    out.push([lat / 1e5, lon / 1e5]);
+  }
+  return out;
+}
+
+/** HERE's flexible polyline -> [[lat, lon]]. */
+function decodeFlexible(str) {
+  const TABLE = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  const values = [];
+  let result = 0;
+  let shift = 0;
+  for (const ch of str) {
+    const v = TABLE.indexOf(ch);
+    if (v < 0) continue;
+    result += (v & 0x1f) * 2 ** shift;
+    if (v & 0x20) {
+      shift += 5;
+    } else {
+      values.push(result);
+      result = 0;
+      shift = 0;
+    }
+  }
+  const header = values[1] || 0;
+  const factor = 10 ** (header & 15);
+  const thirdDim = Math.floor(header / 16) & 7;
+  const signed = (v) => (v % 2 ? -(v + 1) / 2 : v / 2);
+  const out = [];
+  let lat = 0;
+  let lon = 0;
+  for (let i = 2; i + 1 < values.length; i += thirdDim ? 3 : 2) {
+    lat += signed(values[i]);
+    lon += signed(values[i + 1]);
+    out.push([lat / factor, lon / factor]);
+  }
+  return out;
 }

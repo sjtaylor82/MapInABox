@@ -169,7 +169,7 @@ function setPrompt(text) {
 }
 
 function showOnly(...ids) {
-  for (const id of ['journey-options', 'journey-legs', 'journey-food', 'journey-walk', 'journey-drive', 'journey-choices', 'journey-stations']) $(id).hidden = !ids.includes(id);
+  for (const id of ['journey-options', 'journey-legs', 'journey-food', 'journey-walk', 'journey-drive', 'journey-routes', 'journey-choices', 'journey-stations']) $(id).hidden = !ids.includes(id);
 }
 
 // ── Nearest stations ──────────────────────────────────────────────────────
@@ -403,11 +403,18 @@ async function nearYou(here) {
  * directions when the app is installed, or the website when it is not.
  */
 async function planDrive() {
+  const ends = await driveEnds();
+  if (ends) showDrive(ends.a, ends.b);
+}
+
+/** From and To for a drive: { a, b }, or null (and the reason said) when one can't be found. */
+async function driveEnds() {
   const from = $('journey-from').value.trim();
   const to = $('journey-to').value.trim();
   if (!to) {
     $('journey-to').focus();
-    return say('Type where you are going.');
+    say('Type where you are going.');
+    return null;
   }
   const here = hooks.getHere();
   const seq = ++st.seq;
@@ -421,13 +428,88 @@ async function planDrive() {
     else a = from ? await choosePlace(from, await nearYou(here), Infinity, 'start') : { lat: here.lat, lon: here.lon, label: here.label || 'where you are' };
     if (a) b = await chooseDestination(to, a, Infinity);
   } catch { /* reported below */ }
-  if (seq !== st.seq) return;
+  if (seq !== st.seq) return null;
   if (!a || !b) {
     const msg = `${!a ? from : to} was not found. Try a street address or the name of a place.`;
     setPrompt(msg);
+    say(msg);
+    return null;
+  }
+  return { a, b, seq };
+}
+
+// ── List suburbs ──────────────────────────────────────────────────────────
+//
+// The ways to drive there, as the desktop's Suburb Lister: up to three
+// routes, fastest first, with their main roads, tolls and the suburbs they
+// pass through. Routes from HERE (or OpenStreetMap); suburbs from the
+// postcode list, every couple of kilometres along each route.
+
+/** "1 hour 5 minutes" */
+function durationText(s) {
+  const m = Math.max(1, Math.round(s / 60));
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  const part = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  return h ? [part(h, 'hour'), mm && part(mm, 'minute')].filter(Boolean).join(' ') : part(mm, 'minute');
+}
+
+/** The suburbs a route passes through, in order: a name every 2 to 8 kilometres, depending on its length. */
+async function suburbsAlong(line, distance) {
+  const step = distance < 20000 ? 1500 : distance < 80000 ? 2500 : 8000;
+  const names = [];
+  let since = step;
+  for (let i = 0; i < line.length; i++) {
+    if (i) since += haversineM(line[i - 1][0], line[i - 1][1], line[i][0], line[i][1]);
+    if (since < step && i !== line.length - 1) continue;
+    since = 0;
+    const pc = await postcodeAt(line[i][0], line[i][1]).catch(() => null);
+    const name = pc && pc.place;
+    if (name && !names.includes(name)) names.push(name);
+  }
+  return names;
+}
+
+async function listSuburbs() {
+  const ends = await driveEnds();
+  if (!ends) return;
+  const { a, b, seq } = ends;
+  const short = b.label.split(', ')[0];
+  let data = null;
+  try {
+    const q = new URLSearchParams({ from: `${a.lat},${a.lon}`, to: `${b.lat},${b.lon}` });
+    data = await api(`api/routes?${q}`);
+  } catch { /* below */ }
+  if (seq !== st.seq) return;
+  const routes = (data && data.routes) || [];
+  if (!routes.length) {
+    const msg = `No driving route to ${short} was found.`;
+    setPrompt(msg);
     return say(msg);
   }
-  showDrive(a, b);
+  const items = [];
+  for (const [i, r] of routes.entries()) {
+    const suburbs = await suburbsAlong(r.line || [], r.distance);
+    const slower = r.duration - routes[0].duration;
+    const head = i === 0 ? `Route 1, fastest: ${durationText(r.duration)}`
+      : `Route ${i + 1}${r.noTolls ? ', avoiding tolls' : ''}: ${durationText(r.duration)}${slower >= 60 ? `, ${durationText(slower)} slower` : ''}`;
+    const toll = !r.toll ? 'Tolls not known' : r.toll.price > 0 ? `Toll $${r.toll.price.toFixed(2)}` : 'No tolls';
+    items.push([
+      `${head}, ${formatDistance(r.distance)}${r.via.length ? `, via ${listJoin(r.via)}` : ''}.`,
+      `${toll}.`,
+      suburbs.length ? `Through ${listJoin(suburbs)}.` : '',
+    ].filter(Boolean).join(' '));
+  }
+  if (seq !== st.seq) return;
+  $('journey-routes-list').replaceChildren(...items.map((t) => {
+    const li = document.createElement('li');
+    li.textContent = t;
+    return li;
+  }));
+  $('journey-routes-title').textContent = `${routes.length === 1 ? 'One way' : `${routes.length} ways`} to drive to ${short}`;
+  showOnly('journey-routes');
+  setPrompt('');
+  $('journey-routes-title').focus();
 }
 
 /** Drive from where you are to a place already found (Jump's Drive there). */
@@ -1671,14 +1753,19 @@ export function initJourney(h) {
   const enter = (id, fn) => $(id).addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); fn(); }
   });
-  enter('journey-from', walkClick);
-  enter('journey-to', walkClick);
+  // Return in From or To doesn't pick a way to travel: it moves on, to To, then to the choices.
+  enter('journey-from', () => $('journey-to').focus());
+  enter('journey-to', () => {
+    $('journey-walk-plan').focus();
+    say('Choose Walking route, Drive, List suburbs or Travel options.');
+  });
   enter('journey-option-list', chooseOption);
   onSlowClick($('journey-plan'), 'Finding ways to make the trip', plan, { slow: true });
   onSlowClick($('journey-stations-find'), 'Finding stations near you', nearestStations);
   onSlowClick($('journey-station-walk'), 'Finding a walking route', walkToStation);
   onSlowClick($('journey-walk-plan'), 'Finding a walking route', walkClick);
   onSlowClick($('journey-drive-plan'), 'Finding the place', planDrive);
+  onSlowClick($('journey-suburbs-plan'), 'Finding the ways to drive there', listSuburbs);
   onSlowClick($('journey-drive-food'), 'Finding food along the drive', driveFood, { slow: true });
   onSlowClick($('journey-walk-food'), 'Finding food along the walk', walkFood);
   $('journey-guide').addEventListener('click', toggleGuiding);

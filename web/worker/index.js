@@ -23,7 +23,7 @@ const SEARCH_TTL = 7 * 24 * 3600;
 // while developing). mapinabox.org is Starter only, and schools block the
 // expert address, so these can't be reached from a student's device.
 const EXPERT_APIS = new Set(['/api/menu', '/api/menutext', '/api/menupdf', '/api/menuphotos', '/api/menuimage', '/api/venueaddr', '/api/stations', '/api/journey',
-  '/api/flights', '/api/walk', '/api/road', '/api/food', '/api/crossings']);
+  '/api/flights', '/api/walk', '/api/road', '/api/routes', '/api/food', '/api/crossings']);
 // wrangler dev presents requests as the first custom domain, so testing the
 // Expert features on this computer needs `--var DEV_EXPERT:1`.
 const isExpertHost = (url, env) => /^expert\./.test(url.hostname) || !!(env && env.DEV_EXPERT);

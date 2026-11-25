@@ -85,6 +85,7 @@
         <input id="journey-to" type="text" autocomplete="off" spellcheck="false">
         <button type="button" id="journey-walk-plan">Walking route</button>
         <button type="button" id="journey-drive-plan">Drive</button>
+        <button type="button" id="journey-suburbs-plan">List suburbs</button>
         <button type="button" id="journey-plan">Travel options</button>
         <p id="journey-prompt"></p>
         <div id="journey-choices" hidden>
@@ -96,6 +97,10 @@
           <a id="journey-drive-google" target="_blank" rel="noopener">Drive with Google Maps</a>
           <button type="button" id="journey-drive-food">Find food along the drive</button>
         </p>
+        <div id="journey-routes" hidden>
+          <h3 id="journey-routes-title" tabindex="-1">Ways to drive there</h3>
+          <ul id="journey-routes-list" class="result-list"></ul>
+        </div>
         <div id="journey-walk" hidden>
           <h3 id="journey-walk-title" tabindex="-1">Walking route</h3>
           <p id="journey-walk-summary"></p>
@@ -360,6 +365,7 @@
     </table>
     <h3>Journey planner</h3>
     <p>The Journey planner button, or the Journey planner section under the map, plans a trip with Rome2Rio: flights, trains, buses, ferries and driving. Type where you are going, and where from (leave From empty to start where you are on the map), then choose Plan journey. Swipe up or down on Option (or use the arrow keys) to hear each way, with its time and price; choose Show steps to go through its legs one by one, or Read all to hear the whole plan. For a flight, the flights on the travel date are listed, non-stop first. Rome2Rio's times and prices are estimates, not timetables.</p>
+    <p>List suburbs gives up to three ways to drive there, fastest first: how long each takes, its main roads, its tolls, and the suburbs it passes through. When every way has a toll, the best way without tolls is added. Routes come from HERE, or from OpenStreetMap when HERE is busy.</p>
     <p>Find food along the way lists food venues from OpenStreetMap in journey order: within 100 metres of the road for drive, bus and walk legs, and near each station, airport and stop. Choose one to hear it on the map, open it in Apple Maps, or search for it on Uber Eats or DoorDash.</p>
     <p>Some browsers keep F6 for themselves. If F6 does nothing, use I.</p>
     <p><a href="https://github.com/sjtaylor82/MapInABox/releases/latest">Download Map in a Box for Windows and macOS</a>, with street mode, walking routes, transport and much more.</p>
