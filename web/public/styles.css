@@ -181,7 +181,7 @@ button[aria-pressed="true"] {
 #app {
   height: 100%;
   display: grid;
-  grid-template-rows: auto minmax(55vh, 1fr) auto auto;
+  grid-template-rows: auto auto minmax(55vh, 1fr) auto auto;
   overflow-y: auto;
 }
 
@@ -216,10 +216,10 @@ button[aria-pressed="true"] {
 @media (min-width: 900px) {
   #app {
     grid-template-columns: 1fr 20rem;
-    grid-template-rows: auto 1fr auto;
+    grid-template-rows: auto auto 1fr auto;
     overflow: hidden;
   }
-  #toolbar, #app-foot { grid-column: 1 / -1; }
+  #where-line, #toolbar, #app-foot { grid-column: 1 / -1; }
   #panel { overflow-y: auto; }
 }
 
@@ -434,3 +434,7 @@ dialog.screen button { margin: 0.25rem 0.5rem 0.25rem 0; }
 body.screen-on #app { display: block; height: auto; overflow: visible; }
 body.screen-on #panel { overflow: visible; max-width: 48rem; }
 .screen-back { display: block; margin: 0 0 0.75rem; }
+
+/* Where you are, at the top of the main screen. */
+#where-line { margin: 0; padding: 0.5rem 16px; font-size: 1.25rem; font-weight: 700; background: var(--panel); border-bottom: 2px solid var(--muted); }
+#where-line:empty { display: none; }

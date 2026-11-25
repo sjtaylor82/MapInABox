@@ -50,6 +50,11 @@ const state = {
 async function boot() {
   initSpeech();
   initMapView($('map-canvas'), $('map-caption'));
+  // Where you are, at the top of the page: whatever the map's caption says, always there
+  // (the caption is inside the map, which is hidden when the Map switch is off).
+  const where = () => { $('where-line').textContent = $('map-caption').textContent; };
+  new MutationObserver(where).observe($('map-caption'), { childList: true, characterData: true, subtree: true });
+  where();
   applyLook();
   applyLevel();
   applyVisualAssist();
@@ -386,10 +391,12 @@ function showMode() {
   if (steering.isTouchDevice()) {
     // Phones and tablets: no "World map, web application". The map just holds
     // where you are, which VoiceOver reads when focus moves to it.
+    // Where you are is at the top of the page, so the map itself is left out.
     for (const a of ['role', 'aria-label', 'aria-describedby']) $('map').removeAttribute(a);
-    $('map-caption').removeAttribute('aria-hidden');
+    $('map').setAttribute('aria-hidden', 'true');
   } else {
     // Computers: an application, so screen readers pass the arrow keys to the map.
+    $('map').removeAttribute('aria-hidden');
     $('map').setAttribute('role', 'application');
     $('map').setAttribute('aria-label', inStreet ? 'Street map' : 'World map');
   }
