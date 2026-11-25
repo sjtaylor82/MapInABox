@@ -129,7 +129,10 @@ function pageText(lines, width) {
     const s = Math.round(l.size * 10) / 10;
     bySize.set(s, (bySize.get(s) || 0) + 1);
   }
-  const normal = [...bySize].reduce((a, b) => (b[1] > a[1] ? b : a))[0];
+  // The usual size: the middle one of all the lines. (The most common size can be a
+  // big quote or slogan set over many short lines, which made real headings look small.)
+  const ordered = lines.map((l) => Math.round(l.size * 10) / 10).sort((a, b) => a - b);
+  const normal = ordered[Math.floor(ordered.length / 2)];
   const isHeading = (l) => {
     const s = Math.round(l.size * 10) / 10;
     return s >= normal * 1.015 && bySize.get(s) <= 0.2 * lines.length && l.text.length < 40
@@ -192,5 +195,10 @@ export async function pdfText(bytes) {
   } finally {
     doc.destroy();
   }
+  // A folded menu often starts with its outside: the back page and the cover, with
+  // few prices (Marinara: kids menu and notes, then the inside with everything else).
+  // Such a first page is read last, so the menu starts where the dishes do.
+  const prices = (t) => t.split('\n').filter((l) => /(?:^|\s)\$?\d{1,3}[.,]\d{1,2}\s*$|\$\s?\d/.test(l)).length;
+  if (pages.length > 1 && prices(pages[0]) * 3 < Math.max(...pages.slice(1).map(prices))) pages.push(pages.shift());
   return pages.join('\n\n');
 }
