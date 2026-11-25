@@ -5,6 +5,7 @@
 //
 //   GET /api/health              { ok: true }
 //   GET /api/search?q=&lat=&lon= Photon place search, cached for a week
+//   GET /api/gplace?q=&lat=&lon= A place on Google Maps, for Jump (Expert): see gplace.js
 //   GET /api/tile/14/x/y         One OpenFreeMap vector tile (OpenStreetMap
 //                                streets and places), cached for a week
 //   /api/journey, /api/flights, /api/road, /api/food  The journey planner
@@ -15,6 +16,7 @@ import { OVERPASS, detailsQuery, pickDetails } from '../public/src/placedetails.
 import { AREA_SERVERS, areaQuery, areaData } from '../public/src/overpassarea.js';
 import { journeyRoute } from './journey.js';
 import { menuRoute } from './menu.js';
+import { googlePlace } from './gplace.js';
 
 const PHOTON = 'https://photon.komoot.io/api/';
 const SEARCH_TTL = 7 * 24 * 3600;
@@ -22,7 +24,7 @@ const SEARCH_TTL = 7 * 24 * 3600;
 // Expert features answer only at expert.mapinabox.org (and on this computer
 // while developing). mapinabox.org is Starter only, and schools block the
 // expert address, so these can't be reached from a student's device.
-const EXPERT_APIS = new Set(['/api/menu', '/api/menutext', '/api/menupdf', '/api/menuphotos', '/api/menuimage', '/api/venueaddr', '/api/stations', '/api/journey',
+const EXPERT_APIS = new Set(['/api/gplace', '/api/menu', '/api/menutext', '/api/menupdf', '/api/menuphotos', '/api/menuimage', '/api/venueaddr', '/api/stations', '/api/journey',
   '/api/flights', '/api/walk', '/api/road', '/api/routes', '/api/drive', '/api/food', '/api/crossings']);
 // wrangler dev presents requests as the first custom domain, so testing the
 // Expert features on this computer needs `--var DEV_EXPERT:1`.
@@ -45,6 +47,7 @@ export default {
     if (url.pathname === '/api/search') return search(url, ctx);
     if (url.pathname === '/api/reverse') return reverse(url, ctx);
     if (url.pathname === '/api/geocode') return geocode(url, env, ctx);
+    if (url.pathname === '/api/gplace') return googlePlace(url, env);
     const tile = url.pathname.match(/^\/api\/tile\/(\d+)\/(\d+)\/(\d+)$/);
     if (tile) return mapTile(Number(tile[1]), Number(tile[2]), Number(tile[3]), ctx);
     if (url.pathname === '/api/place') return placeDetails(url, env, ctx);

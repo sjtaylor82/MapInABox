@@ -1483,6 +1483,28 @@ async function jumpNear() {
   return state;
 }
 
+/**
+ * Expert: a place OpenStreetMap doesn't have (Sorai in Carina: on Uber Eats and
+ * Google, not on the map), from Google Maps, when the online search found nothing
+ * by that name within 50 kilometres. Asked only then: each new question uses the
+ * search service's shared daily allowance.
+ */
+async function withGoogle(text, results, near) {
+  if (level() !== 'expert' || !near || !Number.isFinite(near.lat)) return results;
+  const fold = (t) => String(t || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '');
+  const first = fold(text).split(/[^a-z0-9]+/).find(Boolean) || '';
+  const named = results.some((r) => fold(r.label).includes(first) && Number.isFinite(r.lat)
+    && haversineM(near.lat, near.lon, r.lat, r.lon) < 50000);
+  if (named) return results;
+  try {
+    const params = new URLSearchParams({ q: text, lat: near.lat.toFixed(3), lon: near.lon.toFixed(3) });
+    const res = await fetch(`api/gplace?${params}`, { signal: AbortSignal.timeout(15000) });
+    const g = res.ok ? (await res.json()).result : null;
+    if (g) return [{ label: g.label, lat: g.lat, lon: g.lon, food: g.food, website: g.website }, ...results];
+  } catch { /* the online results are enough */ }
+  return results;
+}
+
 async function runJumpSearch() {
   const text = $('jump-input').value.trim();
   if (!text) return;
@@ -1493,11 +1515,14 @@ async function runJumpSearch() {
   if (!results.length && text.length >= 4) {
     say('No local match. Searching online…');
     local = false;
+    const near = await jumpNear();
     try {
-      results = await online.searchOnline(text, await jumpNear());
+      results = await online.searchOnline(text, near);
     } catch {
-      return say('Online search failed. Check the internet connection and try again.');
+      results = await withGoogle(text, [], near);
+      if (!results.length) return say('Online search failed. Check the internet connection and try again.');
     }
+    results = await withGoogle(text, results, near);
   }
   if (!results.length) return say(`${text} not found.`);
   // One match goes straight there; in Expert it's listed, so Details can be asked first.
@@ -1513,7 +1538,9 @@ async function chooseJump(r) {
   if (r.online) {
     say('Searching online…');
     try {
-      const more = await online.searchOnline($('jump-input').value.trim(), await jumpNear());
+      const near = await jumpNear();
+      const typed = $('jump-input').value.trim();
+      const more = await withGoogle(typed, await online.searchOnline(typed, near), near);
       if (!more.length) return say('Nothing found online.');
       setJumpResults(more);
       $('jump-results').focus();
