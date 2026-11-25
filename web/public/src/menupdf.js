@@ -142,16 +142,35 @@ function pageText(lines, width) {
     const merged = [];
     for (const l of col) {
       const prev = merged[merged.length - 1];
-      // A dish wrapped onto the next line.
-      if (prev && !prev.heading && !isHeading(l) && l.y - prev.y < 1.8 * l.size && !/\d\s*$/.test(prev.text)
+      // Printed on the same line (a dish, then its sizes and prices further along): one line.
+      // (Not after a price: "Glenfiddich / Laphroaig $27" and "Nikka / Hakushu $33" side by side are two.)
+      if (prev && !prev.heading && !isHeading(l) && Math.abs(l.y - prev.y) < 2 && Math.abs(l.size - prev.size) < 0.6
+        && !/\d\s*$/.test(prev.text)) {
+        prev.text += ` ${l.text}`;
+        prev.size = Math.max(prev.size, l.size);
+        continue;
+      }
+      // A dish wrapped onto the next line: same size of text (a dish name larger than the
+      // description before it is a new dish, even in lower case: "paradiso 25.90").
+      if (prev && !prev.heading && !isHeading(l) && Math.abs(l.size - prev.size) < 0.6
+        && l.y - prev.y < 1.8 * l.size && !/\d\s*$/.test(prev.text)
         && (/[,&/+]$|\b(w|with|and|or|of)$/.test(prev.text) || /^[a-z(]/.test(l.text))) {
         prev.text += ` ${l.text}`;
         prev.y = l.y;
         continue;
       }
-      merged.push({ text: l.text, y: l.y, heading: isHeading(l) });
+      merged.push({ text: l.text, y: l.y, size: l.size, heading: isHeading(l) });
     }
-    for (const l of merged) out.push((l.heading ? '## ' : '') + l.text);
+    // Smaller text straight after a dish (or after its description) is its description:
+    // marked '> ' for menustructure. Only where the menu uses smaller type for these;
+    // a line ending in a price is a dish or an extra, not a description.
+    for (let i = 1; i < merged.length; i++) {
+      const l = merged[i];
+      const prev = merged[i - 1];
+      if (l.heading || prev.heading || /\d\s*$/.test(l.text)) continue;
+      if (l.size < prev.size - 0.6 || (prev.desc && Math.abs(l.size - prev.size) < 0.6)) l.desc = true;
+    }
+    for (const l of merged) out.push((l.heading ? '## ' : l.desc ? '> ' : '') + l.text);
     out.push('');
   }
   return out.join('\n').trim();

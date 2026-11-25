@@ -162,7 +162,7 @@ async function readPdf(url, box, name) {
   }
   const sections = structure(text);
   if (pricedCount(sections) >= 3) return showSections(box, name, sections);
-  showLines(box, name, text.replace(/^## /gm, '').replace(/^--- Page \d+ ---$/gm, ''));
+  showLines(box, name, text.replace(/^(?:## |> )/gm, '').replace(/^--- Page \d+ ---$/gm, ''));
 }
 
 /** "Muzzas Pies menu 2.jpg" */

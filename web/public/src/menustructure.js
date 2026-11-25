@@ -35,6 +35,8 @@ function strip(s, chars) {
 }
 
 const priceOnly = (line) => line.length <= 80 && PRICE_ONLY.test(line);
+// Just a size and its price, on the line after a dish: "main 41.50", "large $24".
+const SIZE_PRICE = /^(?:main|entr[eéÈ]e|small|medium|large|regular|half|full|single|double|glass|bottle|share|kids?)\s*[-:]?\s*\$?\s?\d{1,3}(?:[.,]\d{2})?$/i;
 // Where a wine is from, on the line after it: "Valdobbiadene, ITALY", "Clare Valley, SA", "Tuscany, Italy".
 // (The place is never all capitals: an all-capitals menu's "…PAPRIKA, SERVED WITH" isn't one.)
 const PLACE_LINE = /^(?=[^,]*[a-z])[A-Z][^,\d$]{1,40},\s*[A-Z][A-Za-z.]*(?:\s[A-Z][A-Za-z.]*)?(?:\s*[[(][a-z ]{2,20}[\])])?$/;
@@ -121,6 +123,11 @@ function group(lines) {
     if (kind === 'section') {
       sections.push({ title: line, items: [] });
       pending = '';
+    } else if (kind === 'desc') {
+      // A description the PDF reader recognised (smaller type after a dish).
+      if (last) last.desc = last.desc ? `${last.desc} ${line}` : line;
+      else items.push({ name: line, price: '', desc: '' });
+      if (last) delete last.place;
     } else if (kind === 'dish') {
       // A heading that is only a price: the dish's words come after it.
       if (priceOnly(line)) items.push({ name: '', price: strip(line, ' ,|'), desc: '', heading: true });
@@ -147,6 +154,8 @@ function group(lines) {
       }
     } else if (priceOnly(line)) {
       if (last) last.price = last.price ? strip(`${last.price} ${line}`, ' ,') : strip(line, ' ,|');
+    } else if (last && last.price && SIZE_PRICE.test(line)) {
+      last.price += `, ${line}`; // the same dish in another size: "entrée 31.90", then "main 41.50"
     } else if (PRICE.test(line)) {
       const first = line.search(PRICE);
       const name = strip(line.slice(0, first), ' .-–:|,');
@@ -255,6 +264,7 @@ export function fromText(text) {
   const marked = raw.some((l) => l.startsWith('## ')); // the PDF reader marked headings by text size
   const lines = raw.map((line, i) => {
     if (line.startsWith('## ')) return ['section', line.slice(3).trim()];
+    if (line.startsWith('> ')) return ['desc', line.slice(2).trim()]; // marked by the PDF reader
     const next = raw[i + 1] || '';
     const heading = !marked && line.length <= 28 && !PRICE.test(line) && !/\d/.test(line)
       && PRICE.test(next) && !priceOnly(next) && next.length > line.length;
