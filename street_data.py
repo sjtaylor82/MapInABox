@@ -439,11 +439,13 @@ def _load_road_cache_by_coord(
     lat: float,
     lon: float,
     include_named_suburb_entries: bool = True,
+    max_dist_m: float = 7000.0,
 ) -> dict:
     """Load cached road data by coordinate grid cell (no suburb constraint).
-    Checks the exact cell, then adjacent cells (±0.1 degrees = ~11km),
-    validating any adjacent-cell hit is within 7km of the target so it
-    doesn't silently return a distant/unrelated area's data."""
+    Checks the exact cell, then adjacent cells (±0.1 degrees = ~11km).
+    Any hit must have its centre within max_dist_m of the target, so it
+    doesn't silently return a distant/unrelated area's data. A grid cell
+    is about 11km across, so even the exact cell's area can be well away."""
     index = _load_index(cache_dir)
     key = _index_key(lat, lon)
     fname = index.get(key)
@@ -473,10 +475,10 @@ def _load_road_cache_by_coord(
                                 dlat_m = (lat - cache_lat) * 111000
                                 dlon_m = (lon - cache_lon) * 111000 * math.cos(math.radians(lat))
                                 dist = math.sqrt(dlat_m**2 + dlon_m**2)
-                                # Only use if within 7km (typical cache radius)
-                                if dist < 7000:
+                                if dist < max_dist_m:
                                     miab_log("street", f"[Street] Found cache in adjacent cell {adj_key}, {dist:.0f}m from center", None)
                                     if data.get("_version") == _CACHE_VERSION:
+                                        data["_cache_file"] = fname
                                         return data
                         except Exception:
                             pass
@@ -488,7 +490,12 @@ def _load_road_cache_by_coord(
             try:
                 with open(path, encoding="utf-8") as f:
                     data = json.load(f)
-                if data.get("_version") == _CACHE_VERSION:
+                cache_lat = data.get("cache_center_lat")
+                cache_lon = data.get("cache_center_lon")
+                near = (cache_lat is None or cache_lon is None
+                        or dist_metres(lat, lon, cache_lat, cache_lon) < max_dist_m)
+                if data.get("_version") == _CACHE_VERSION and near:
+                    data["_cache_file"] = fname
                     return data
             except Exception:
                 pass
@@ -531,7 +538,7 @@ def _load_road_cache_by_coord(
     if backfilled:
         _save_centers_index(cache_dir, centers)
 
-    best_key, best_dist = None, 7000.0
+    best_key, best_dist = None, float(max_dist_m)
     for cand_key, (clat, clon) in centers.items():
         if cand_key == key:
             continue  # already checked above
@@ -552,6 +559,7 @@ def _load_road_cache_by_coord(
                         data = json.load(f)
                     if data.get("_version") == _CACHE_VERSION:
                         miab_log("street", f"[Street] Found cache via centre-index scan ({best_key}), {best_dist:.0f}m away", None)
+                        data["_cache_file"] = cand_fname
                         return data
                 except Exception:
                     pass
@@ -571,6 +579,11 @@ def _road_size_tags(tags: dict) -> dict:
     if str(tags.get("oneway", "")).strip().lower() in ("yes", "true", "1", "-1"):
         out["oneway"] = True
     return out
+
+
+# A named suburb with no cache of its own reuses a coordinate (radius) cache
+# only if that cache's centre is this close to the suburb's middle.
+_SUBURB_FALLBACK_MAX_M = 1500.0
 
 
 def _load_road_cache(cache_dir: str, lat: float, lon: float,
@@ -608,6 +621,7 @@ def _load_road_cache(cache_dir: str, lat: float, lon: float,
                                 None,
                             )
                             return {}
+                        data["_cache_file"] = fname
                         return data
                 except Exception:
                     pass
@@ -617,8 +631,14 @@ def _load_road_cache(cache_dir: str, lat: float, lon: float,
         # cache rather than giving up and re-hitting Overpass every time;
         # the distance check in _load_road_cache_by_coord still guards
         # against silently returning a distant/unrelated area's data.
+        # Tighter here: lat/lon is the suburb's middle, and a radius cache
+        # reaches about 3km from its centre, so a centre within 1.5km still
+        # covers a suburb's streets. Further off (Mount Gravatt East from a
+        # Coorparoo-centred cache, 4km away) half the suburb's streets were
+        # missing and jumping to them failed.
         coord_hit = _load_road_cache_by_coord(
-            cache_dir, lat, lon, include_named_suburb_entries=False)
+            cache_dir, lat, lon, include_named_suburb_entries=False,
+            max_dist_m=_SUBURB_FALLBACK_MAX_M)
         if coord_hit:
             return coord_hit
         return {}
@@ -657,6 +677,26 @@ def _save_road_cache(cache_dir: str, lat: float, lon: float, entry: dict,
             json.dump(entry, f, ensure_ascii=False)
     except Exception as _e:
         miab_log("errors", f"[Street] Cache save FAILED: {_e}", None)
+
+
+def _rewrite_road_cache_file(cache_dir: str, entry: dict) -> None:
+    """Save an updated cache entry back into the file it was loaded from.
+
+    The loaders note that file in entry["_cache_file"]. Saving through
+    _save_road_cache instead would file it under the current suburb's name
+    and centre: an area borrowed from a nearby cache (centred elsewhere)
+    then disagreed with its index centre, was ignored on every later visit,
+    and the suburb was never served from cache again (Carina).
+    """
+    fname = entry.pop("_cache_file", None)
+    if not fname:
+        return
+    try:
+        entry["_version"] = _CACHE_VERSION
+        with open(os.path.join(cache_dir, fname), "w", encoding="utf-8") as f:
+            json.dump(entry, f, ensure_ascii=False)
+    except Exception as _e:
+        miab_log("errors", f"[Street] Cache rewrite FAILED: {_e}", None)
 
 
 def _cache_is_stale(entry: dict) -> bool:
@@ -787,10 +827,7 @@ class StreetFetcher:
                 # server on every single visit forever, not just once.
                 entry["addresses"] = addrs
                 entry["address_source"] = address_source
-                _save_road_cache(
-                    self._cache_dir, centre_lat, centre_lon, entry,
-                    suburb_name=suburb_name, used_boundary=bool(suburb_name),
-                )
+                _rewrite_road_cache_file(self._cache_dir, entry)
             natural_features = entry.get("natural_features", [])
             interpolations = entry.get("interpolations", [])
             stale = _cache_is_stale(entry)
