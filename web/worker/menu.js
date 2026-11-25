@@ -159,6 +159,31 @@ async function search(env, q) {
 }
 
 /**
+ * The venue's own website from its Google Maps listing, or ''. The web
+ * results often leave it out (Marinara, Hawthorne: only its Facebook page and
+ * directories came up), and the venue's site is where its menu usually is.
+ * Only when the listing is this venue, and the site isn't a delivery,
+ * listing or social site.
+ */
+async function mapsWebsite(env, name, suburb, t) {
+  const params = new URLSearchParams({ q: `${name}${suburb ? ` ${suburb}` : ''}`, type: 'places', gl: 'au' });
+  const fetcher = env.MENU_SEARCH ? (u, o) => env.MENU_SEARCH.fetch(u, o) : fetch;
+  const res = await fetcher(`${SEARCH}?${params}`, {
+    headers: { 'User-Agent': BROWSER_UA, Accept: 'application/json' },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!res.ok) return '';
+  const p = (await res.json()).place;
+  if (!p || !p.website) return '';
+  const title = compactOf(p.title);
+  const words = t.distinctive.filter((w) => title.includes(w)).length;
+  if (!((t.compact && title.includes(t.compact)) || (t.distinctive.length && words >= Math.min(2, t.distinctive.length)))) return '';
+  const host = hostOf(p.website);
+  if (!host || isDelivery(host) || LISTING_SITES.test(host)) return '';
+  return p.website;
+}
+
+/**
  * GET a page: { ok, status, url, pdf, title, html, text, menu, readable }.
  * `menu` is the menu check: at least 4 lines with prices, or 4 priced dishes.
  */
@@ -411,10 +436,10 @@ async function checkOwn(results, name) {
 async function menu(url, env, ctx) {
   const name = (url.searchParams.get('name') || '').trim().slice(0, 120);
   const suburb = (url.searchParams.get('suburb') || '').trim().slice(0, 80);
-  const website = (url.searchParams.get('website') || '').trim().slice(0, 300);
+  let website = (url.searchParams.get('website') || '').trim().slice(0, 300);
   if (!name) return json({ error: 'Bad request' }, 400);
   const cache = caches.default;
-  const key = new Request(`https://cache.mapinabox/menu/v16/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(suburb.toLowerCase())}`);
+  const key = new Request(`https://cache.mapinabox/menu/v17/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(suburb.toLowerCase())}`);
   const hit = await cache.match(key);
   if (hit) return hit;
 
@@ -456,6 +481,9 @@ async function menu(url, env, ctx) {
   });
   // No menu page on the venue's own site in the search: look on the site itself.
   if (!results.some((r) => r.kind === 'own' && r.readable)) {
+    // No website for the venue: its Google Maps listing may have one. Asked
+    // only now, since each lookup counts against the search service's daily cap.
+    if (!website) website = await mapsWebsite(env, name, suburb, t).catch(() => '');
     const hosts = [];
     if (website) hosts.push(hostOf(website));
     for (const item of raw) {
