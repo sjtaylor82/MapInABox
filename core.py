@@ -3228,7 +3228,7 @@ class MapNavigator(
                 read = wx.Button(scroll, label="Read it here")
                 read.SetName(f"Read {label[:60]} here")
                 read.Bind(wx.EVT_BUTTON,
-                          lambda e, u=url: self._read_menu_here(dlg, restaurant_name, u))
+                          lambda e, it=item: self._read_menu_here(dlg, restaurant_name, it))
                 row.Add(read, 0, wx.LEFT, 5)
                 link_sizer.Add(row, 0, wx.ALL | wx.EXPAND, 5)
             else:
@@ -3251,13 +3251,17 @@ class MapNavigator(
         dlg.ShowModal()
         dlg.Destroy()
 
-    def _read_menu_here(self, parent, restaurant_name: str, url: str) -> None:
-        """Read a venue's menu page in the app: the menu server lays it out
-        as sections of dishes with prices, shown in a text box to arrow through."""
-        self._poi_detail_announce("Reading the menu...")
+    def _read_menu_here(self, parent, restaurant_name: str, result: dict) -> None:
+        """Read a venue's menu in the app, shown in a text box to arrow through:
+        a menu page laid out by the menu server as sections of dishes with
+        prices, or pictures of the menu read by Windows' text recognition."""
+        pictures = menu_service.is_picture_menu(result)
+        self._poi_detail_announce(
+            "Reading the menu pictures. This can take a few seconds..." if pictures
+            else "Reading the menu...")
 
         def _worker():
-            menu = menu_service.read_menu(url)
+            menu = menu_service.read_result(result)
             wx.CallAfter(_show, menu)
 
         def _show(menu):
@@ -3265,7 +3269,8 @@ class MapNavigator(
                 return
             if menu is None:
                 self._poi_detail_announce(
-                    "This menu page can't be read here. Open the link instead.")
+                    "The pictures of this menu couldn't be read. Open the link instead." if pictures
+                    else "This menu page can't be read here. Open the link instead.")
                 return
             heading, lines = menu
             label = f"{restaurant_name} menu" + (f": {heading}" if heading else "")
