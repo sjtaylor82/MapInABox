@@ -340,9 +340,8 @@ export async function walkTo(place) {
   const here = hooks.getHere();
   const me = await nearYou(here);
   $('journey-to').value = place.label;
-  $('journey-title').scrollIntoView({ block: 'start' });
   // Somewhere to be while the route is found (it then moves to the route's heading).
-  $('journey-title').focus();
+  openJourney();
   return planWalk('', place.label, {
     a: { lat: me.lat, lon: me.lon, label: me === here ? (here.label || 'the map position') : 'your location' },
     b: { lat: place.lat, lon: place.lon, label: place.label },
@@ -593,7 +592,7 @@ export async function driveTo(place) {
   const here = hooks.getHere();
   const me = await nearYou(here);
   $('journey-to').value = place.label;
-  $('journey-title').scrollIntoView({ block: 'start' });
+  openJourney();
   st.seq++;
   stopGuiding(false);
   stopDriveGuide(false);
@@ -2070,10 +2069,9 @@ export function initJourney(h) {
   datePicker.refresh();
 }
 
-/** The Journey toolbar button: go to the journey planner. */
+/** Open the Navigation screen (from Jump's Walk there and Drive there, for example). */
 export function openJourney() {
-  $('journey-section').open = true;
-  const h = $('journey-title');
-  h.scrollIntoView({ block: 'start' });
-  h.focus();
+  const b = $('nav-toggle');
+  if (b && b.getAttribute('aria-expanded') !== 'true') b.click();
+  else $('journey-title').focus();
 }

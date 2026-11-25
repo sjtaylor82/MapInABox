@@ -558,6 +558,8 @@ function categoryLabel(key) {
 /** P, or Find places: list the places around you in the Places nearby picker. */
 async function openPlaces() {
   const expert = level() === 'expert';
+  // P on the map: Places nearby opens on its screen first, so Back from the list goes there.
+  if ($('places-toggle').getAttribute('aria-expanded') !== 'true' && (state.mode === 'street' || expert)) $('places-toggle').click();
   if (state.mode !== 'street' && !expert) return say('Places nearby are in street mode. Press F11 first.');
   // Places a kilometre away can be in the next map area: load those first.
   // (On the world map in Expert, the map data around the map position loads now.)
