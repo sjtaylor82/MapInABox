@@ -60,6 +60,8 @@ export function makePicker(input, { items, get, set, shown, browse = false }) {
     current.className = 'browse-current';
     current.tabIndex = -1;
     current.setAttribute('aria-live', 'polite');
+    // Activating it (a double tap with VoiceOver, a click) does what Enter does: Jump's Go, for example.
+    current.addEventListener('click', () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
     box.append(current, prev, next);
     const move = (d) => {
       if (!list.length) return;

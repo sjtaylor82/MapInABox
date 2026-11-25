@@ -36,7 +36,6 @@
       <a id="link-desktop" class="toolbar-link" href="https://github.com/sjtaylor82/mapinabox/releases/latest" target="_blank" rel="noopener" hidden>Get the Desktop App</a>
       <button id="btn-more" type="button" aria-expanded="false" aria-controls="toolbar-more">More</button>
       <div id="toolbar-more" hidden>
-        <button id="btn-menus" type="button" data-expert>Menus nearby</button>
         <button id="btn-help" type="button">Help <span class="key" aria-hidden="true">(F1)</span></button>
         <button id="btn-settings" type="button">Settings <span class="key" aria-hidden="true">(Ctrl+,)</span></button>
         <button id="btn-steer" type="button" aria-pressed="false" hidden>Steering</button>
@@ -86,7 +85,7 @@
         <button type="button" id="journey-walk-plan">Walking route</button>
         <button type="button" id="journey-drive-plan">Drive</button>
         <button type="button" id="journey-suburbs-plan">List suburbs</button>
-        <button type="button" id="journey-plan">Travel options</button>
+        <button type="button" id="journey-plan">Public transport and flights</button>
         <p id="journey-prompt"></p>
         <div id="journey-choices" hidden>
           <h3 id="journey-choices-title" tabindex="-1">Choose a destination</h3>
@@ -154,13 +153,14 @@
       </div>
 
 
-      <div class="panel-section" id="places-section" data-street-only hidden>
+      <div class="panel-section" id="places-section" data-street-only data-expert-anywhere hidden>
         <h2 id="places-title" tabindex="-1">Places nearby</h2>
         <p id="places-prompt" hidden></p>
         <label for="places-category" class="picker-label">Category</label>
         <input id="places-category" type="range" class="picker">
         <p id="places-category-value" class="picker-value" aria-hidden="true"></p>
         <button type="button" id="places-find">Find places <span class="key" aria-hidden="true">(P)</span></button>
+        <button type="button" id="places-menus" data-expert>Menus nearby</button>
         <div id="places-pick" hidden>
           <label for="places-list" class="picker-label">Place</label>
           <input id="places-list" type="range" class="picker">

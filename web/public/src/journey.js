@@ -755,7 +755,7 @@ function toggleDriveGuide() {
   else startDriveGuide();
 }
 
-const WALK_MAX_M = 50000; // further than this is not a walk: use Travel options
+const WALK_MAX_M = 50000; // further than this is not a walk: use Public transport and flights
 
 const TURN = {
   left: 'turn left', right: 'turn right', 'slight left': 'bear left', 'slight right': 'bear right',
@@ -1116,7 +1116,7 @@ async function planWalk(from, to, known = null) {
   if (!a || !b) {
     const msg = !a
       ? `${from} was not found. Try a street address or the name of a place.`
-      : `${to} was not found within ${formatDistance(WALK_MAX_M)} of ${from || 'the map position'}. Type a From near it, jump the map there first, or choose Travel options.`;
+      : `${to} was not found within ${formatDistance(WALK_MAX_M)} of ${from || 'the map position'}. Type a From near it, jump the map there first, or choose Public transport and flights.`;
     setPrompt(msg);
     return say(msg);
   }
@@ -1971,7 +1971,7 @@ export function initJourney(h) {
   enter('journey-from', () => $('journey-to').focus());
   enter('journey-to', () => {
     $('journey-walk-plan').focus();
-    say('Choose Walking route, Drive, List suburbs or Travel options.');
+    say('Choose Walking route, Drive, List suburbs, or Public transport and flights.');
   });
   enter('journey-option-list', chooseOption);
   onSlowClick($('journey-plan'), 'Finding ways to make the trip', plan, { slow: true });

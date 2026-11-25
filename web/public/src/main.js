@@ -393,7 +393,7 @@ function showMode() {
   }
   $('map-hint').textContent = steering.isTouchDevice() ? ''
     : inStreet ? 'Arrow keys move. P places nearby. F11 world map. Escape leaves the map.' : 'Arrow keys move. F11 street mode. F1 help. Escape leaves the map.';
-  for (const el of document.querySelectorAll('[data-street-only]')) el.hidden = !inStreet;
+  showStreetOnly();
   showTiltMove();
   showStreetSteer();
   setStreetDrawer(inStreet ? street.drawStreets : null);
@@ -557,13 +557,15 @@ function categoryLabel(key) {
 
 /** P, or Find places: list the places around you in the Places nearby picker. */
 async function openPlaces() {
-  if (state.mode !== 'street') return say('Places nearby are in street mode. Press F11 first.');
-  if (!street.areaReady(state.lat, state.lon)) return say('The streets are still loading.');
+  const expert = level() === 'expert';
+  if (state.mode !== 'street' && !expert) return say('Places nearby are in street mode. Press F11 first.');
   // Places a kilometre away can be in the next map area: load those first.
+  // (On the world map in Expert, the map data around the map position loads now.)
   const { lat, lon } = state;
   let slow = setTimeout(() => say('Finding places…'), 800);
-  await street.ensureRadius(lat, lon, PLACES_RADIUS);
+  await Promise.race([street.ensureRadius(lat, lon, PLACES_RADIUS), new Promise((r) => setTimeout(r, 20000))]);
   clearTimeout(slow);
+  if (!street.areaReady(lat, lon)) return say('The map data here could not be loaded. Try again in a moment.');
   $('places-pick').hidden = false;
   listPlaces(true);
 }
@@ -1233,8 +1235,21 @@ function applyMapOn() {
 }
 
 /** Show or hide what only Expert has. */
+/**
+ * Parts for street mode only: shown in street mode. Places nearby
+ * (data-expert-anywhere) is shown anywhere in Expert, so after jumping to a
+ * place its food, menus and other places are right there.
+ */
+function showStreetOnly() {
+  const inStreet = state.mode === 'street';
+  for (const el of document.querySelectorAll('[data-street-only]')) {
+    el.hidden = !(inStreet || (el.hasAttribute('data-expert-anywhere') && level() === 'expert'));
+  }
+}
+
 function applyLevel() {
   document.documentElement.dataset.level = level();
+  showStreetOnly();
   if ($('set-map')) applyMapOn();
   if (level() !== 'expert' && monitorActive()) stopMonitor();
 }
@@ -1668,7 +1683,7 @@ $('set-expert').addEventListener('change', (e) => {
   settings.set('level', e.target.checked ? 'expert' : 'starter');
   applyLevel();
 });
-$('btn-menus').addEventListener('click', () => { if (state.started) openMenusNearby(state.lat, state.lon); });
+$('places-menus').addEventListener('click', () => { if (state.started) openMenusNearby(state.lat, state.lon); });
 $('btn-help').addEventListener('click', openHelp);
 $('btn-settings').addEventListener('click', openSettings);
 $('btn-steer').addEventListener('click', toggleSteering);
