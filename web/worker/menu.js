@@ -394,6 +394,8 @@ async function checkOwn(results, name) {
   return (await Promise.all(results.map(async (r) => {
     if (r.kind !== 'own') return [r];
     if (OTHER_SITES.test(hostOf(r.url))) return [];
+    // Bopple's page is built in the browser, but its menu can be read here.
+    if (boppleSlug(r.url)) return [{ ...r, readable: true }];
     const page = await fetchPage(r.url);
     if (!page.ok) return ALIVE_ANYWAY.has(page.status) ? [{ ...r, readable: false }] : []; // a dead link goes
     let path = '';
@@ -412,7 +414,7 @@ async function menu(url, env, ctx) {
   const website = (url.searchParams.get('website') || '').trim().slice(0, 300);
   if (!name) return json({ error: 'Bad request' }, 400);
   const cache = caches.default;
-  const key = new Request(`https://cache.mapinabox/menu/v14/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(suburb.toLowerCase())}`);
+  const key = new Request(`https://cache.mapinabox/menu/v15/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(suburb.toLowerCase())}`);
   const hit = await cache.match(key);
   if (hit) return hit;
 
@@ -491,15 +493,75 @@ async function menuText(url, ctx) {
   try { u = new URL(target); } catch { return json({ error: 'Bad request' }, 400); }
   if (!/^https?:$/.test(u.protocol) || isDelivery(hostOf(u.href))) return json({ error: 'Not readable' }, 400);
   const cache = caches.default;
-  const key = new Request(`https://cache.mapinabox/menutext/v2/${encodeURIComponent(u.href)}`);
+  const key = new Request(`https://cache.mapinabox/menutext/v4/${encodeURIComponent(u.href)}`);
   const hit = await cache.match(key);
   if (hit) return hit;
+  // Ordering sites whose menus are built in the browser: read from their menu data.
+  const ordering = boppleSlug(u.href);
+  if (ordering) {
+    const sections = await boppleMenu(ordering);
+    if (!sections.length) return json({ error: 'Not readable' }, 502);
+    const out = json({ text: '', sections, menu: true }, 200, 24 * 3600);
+    ctx.waitUntil(cache.put(key, out.clone()));
+    return out;
+  }
   const page = await fetchPage(u.href);
   if (!page.ok || page.pdf) return json({ error: 'Not readable' }, 502);
   const sections = structure(page.text, page.html);
   const out = json({ text: page.text.slice(0, 8000), sections, menu: page.menu }, 200, 7 * 24 * 3600);
   ctx.waitUntil(cache.put(key, out.clone()));
   return out;
+}
+
+// ---- Bopple ordering pages --------------------------------------------------
+// bopple.app/<venue>/menu is built in the browser from orders.bopple.me's
+// menu data, which can be read directly.
+
+/** 'bavarian-sizzle' for https://bopple.app/bavarian-sizzle/menu, else ''. */
+function boppleSlug(u) {
+  try {
+    const x = new URL(u);
+    if (!/(^|\.)bopple\.app$/.test(x.hostname)) return '';
+    const slug = x.pathname.split('/').filter(Boolean)[0] || '';
+    return /^[a-z0-9-]+$/i.test(slug) ? slug : '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * A Bopple venue's menu as sections of dishes: [{ title, items: [{ name, price, desc }] }].
+ * Alcoholic drinks are left out (the app is for school students too).
+ */
+async function boppleMenu(slug) {
+  const get = (path) => fetch(`https://orders.bopple.me/api/venues/${slug}/menu/${path}`, {
+    headers: { 'User-Agent': BROWSER_UA, Accept: 'application/json' },
+    signal: AbortSignal.timeout(10000),
+  }).then((r) => (r.ok ? r.json() : [])).catch(() => []);
+  const [cats, products] = await Promise.all([get('categories'), get('products')]);
+  if (!Array.isArray(cats) || !Array.isArray(products)) return [];
+  const money = (n) => `$${Number(n).toFixed(2)}`;
+  // Alcohol sections by name too: not every venue marks its drinks as alcoholic.
+  const ALCOHOL = /\b(alcoholic|beers?|wines?|cocktails?|spirits|liquors?|schnapps)\b/i;
+  const sections = cats.filter((c) => c && c.active !== false
+    && !(ALCOHOL.test(c.category_desc || '') && !/non-?\s*alcoholic/i.test(c.category_desc || '')))
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
+    .map((c) => ({
+      title: String(c.category_desc || '').trim(),
+      items: products.filter((p) => p && p.product_category_id === c.id && !p.alcoholic)
+        .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
+        .map((p) => {
+          const lo = Number(p.price_min ?? p.price);
+          const hi = Number(p.price_max ?? p.price);
+          const price = !Number.isFinite(lo) ? '' : hi > lo ? `from ${money(lo)}` : money(lo);
+          const desc = [String(p.product_desc || '').replace(/\s+/g, ' ').trim(), p.availability_desc && String(p.availability_desc).trim()]
+            .filter(Boolean).join('. ');
+          return { name: String(p.product_name || '').trim(), price, desc };
+        })
+        .filter((i) => i.name),
+    }))
+    .filter((x) => x.title && x.items.length);
+  return sections;
 }
 
 /** A PDF menu, passed through for the browser to read (up to 10 MB). */
