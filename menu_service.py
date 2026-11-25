@@ -100,22 +100,18 @@ def _site(url: str) -> str:
     return host or "link"
 
 
-def updated_text(date: str, today=None) -> str:
-    """When a menu was last changed ('2026-05-02' or '2026-05'): 'updated 7 months ago', or ''."""
-    import datetime
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def updated_text(date: str) -> str:
+    """When a menu was last changed: '2026-11-12' -> 'updated 12 Nov 2026',
+    '2026-10' -> 'updated Oct 2026', or ''."""
     import re
-    m = re.match(r"(\d{4})-(\d{2})", date or "")
-    if not m:
+    m = re.match(r"(\d{4})-(\d{2})(?:-(\d{2}))?", date or "")
+    if not m or not 1 <= int(m.group(2)) <= 12:
         return ""
-    today = today or datetime.date.today()
-    months = (today.year - int(m.group(1))) * 12 + (today.month - int(m.group(2)))
-    if months <= 0:
-        return "updated this month"
-    if months == 1:
-        return "updated last month"
-    if months < 24:
-        return f"updated {months} months ago"
-    return f"updated {months // 12} years ago"
+    day = f"{int(m.group(3))} " if m.group(3) else ""
+    return f"updated {day}{_MONTHS[int(m.group(2)) - 1]} {m.group(1)}"
 
 
 def result_label(result: dict, venue: str) -> str:
@@ -130,16 +126,18 @@ def result_label(result: dict, venue: str) -> str:
     if kind == "photo":
         age = result.get("age")
         return f"Photos of the menu on RestaurantGuru, newest {age or 'of unknown date'}"
+    # The menu, when it was updated, then the site:
+    # "Food Menu (PDF), updated 12 Nov 2026 (ahmets.com)".
     if result.get("pdf"):
         name = title if title and not title.lower().endswith(".pdf") else "Menu"
-        label = f"{name} (PDF) on {_site(url)}"
+        label = f"{name} (PDF)"
     else:
-        label = f"{title or 'Menu'} on {_site(url)}"
+        label = title or "Menu"
     if result.get("updated"):
         label += f", {updated_text(result['updated'])}"
     if can_read_here(result):
         label += ", can be read here"
-    return label
+    return f"{label} ({_site(url)})"
 
 
 def summary(results: list[dict], venue: str) -> str:

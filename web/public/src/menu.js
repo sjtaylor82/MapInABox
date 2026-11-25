@@ -23,15 +23,13 @@ function where(url) {
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-/** When a menu was last changed ('2026-05-02' or '2026-05'): 'updated 7 months ago', or ''. */
-export function updatedText(date, now = new Date()) {
-  const m = /^(\d{4})-(\d{2})/.exec(date || '');
-  if (!m) return '';
-  const months = (now.getFullYear() - Number(m[1])) * 12 + (now.getMonth() + 1 - Number(m[2]));
-  if (months <= 0) return 'updated this month';
-  if (months === 1) return 'updated last month';
-  if (months < 24) return `updated ${months} months ago`;
-  return `updated ${Math.floor(months / 12)} years ago`;
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** When a menu was last changed: '2026-11-12' -> 'updated 12 Nov 2026', '2026-10' -> 'updated Oct 2026', or ''. */
+export function updatedText(date) {
+  const m = /^(\d{4})-(\d{2})(?:-(\d{2}))?/.exec(date || '');
+  if (!m || !MONTHS[Number(m[2]) - 1]) return '';
+  return `updated ${m[3] ? `${Number(m[3])} ` : ''}${MONTHS[Number(m[2]) - 1]} ${m[1]}`;
 }
 
 /**
@@ -93,8 +91,9 @@ export async function showMenu(box, place) {
       ? `${place.name} on ${site}`
       : r.kind === 'facebook'
         ? `${place.name} on Facebook (menu photos may be in its posts)`
-        : `${r.pdf ? `${r.title && !/\.pdf$/i.test(r.title) ? r.title : 'Menu'} (PDF)` : r.title || 'Menu'} on ${site}`
-          + (r.updated ? `, ${updatedText(r.updated)}` : '');
+        // The menu, when it was updated, then the site: "Food Menu (PDF), updated 12 Nov 2026 (ahmets.com)".
+        : `${r.pdf ? `${r.title && !/\.pdf$/i.test(r.title) ? r.title : 'Menu'} (PDF)` : r.title || 'Menu'}`
+          + `${r.updated ? `, ${updatedText(r.updated)}` : ''} (${site})`;
     li.append(a);
     // A menu page whose menu is pictures: list them here, to share to a reading app.
     if (r.kind === 'own' && !r.readable && !r.pdf && r.pictures) {

@@ -15,29 +15,24 @@ class LabelTests(unittest.TestCase):
         self.assertEqual(
             m.result_label({"kind": "own", "pdf": True, "readable": True, "title": "Food Menu",
                             "url": "https://ahmets.com/menu.pdf"}, "Ahmet's"),
-            "Food Menu (PDF) on ahmets.com")
+            "Food Menu (PDF) (ahmets.com)")
         self.assertEqual(
             m.result_label({"kind": "own", "readable": True, "title": "Menu",
                             "url": "https://www.sitar.com.au/menu"}, "Sitar"),
-            "Menu on sitar.com.au, can be read here")
+            "Menu, can be read here (sitar.com.au)")
         self.assertEqual(
             m.result_label({"kind": "photo", "age": "4 months ago", "url": "https://restaurantguru.com/x"}, "A"),
             "Photos of the menu on RestaurantGuru, newest 4 months ago")
 
     def test_updated(self):
-        import datetime
-        today = datetime.date(2026, 11, 25)
-        self.assertEqual(m.updated_text("2026-11-12", today), "updated this month")
-        self.assertEqual(m.updated_text("2026-10", today), "updated last month")
-        self.assertEqual(m.updated_text("2026-05-02", today), "updated 6 months ago")
-        self.assertEqual(m.updated_text("2025-02-13", today), "updated 21 months ago")
-        self.assertEqual(m.updated_text("2023-01-01", today), "updated 3 years ago")
-        self.assertEqual(m.updated_text("", today), "")
-        with mock.patch.object(m, "updated_text", return_value="updated 6 months ago"):
-            self.assertEqual(
-                m.result_label({"kind": "own", "pdf": True, "title": "Menu", "updated": "2026-05-02",
-                                "url": "https://x.filesusr.com/a.pdf"}, "Marinara"),
-                "Menu (PDF) on x.filesusr.com, updated 6 months ago")
+        self.assertEqual(m.updated_text("2026-11-12"), "updated 12 Nov 2026")
+        self.assertEqual(m.updated_text("2026-10"), "updated Oct 2026")
+        self.assertEqual(m.updated_text("2026-13"), "")
+        self.assertEqual(m.updated_text(""), "")
+        self.assertEqual(
+            m.result_label({"kind": "own", "pdf": True, "title": "Menu", "updated": "2026-11-12",
+                            "url": "https://ahmets.com/menu.pdf"}, "Ahmet's"),
+            "Menu (PDF), updated 12 Nov 2026 (ahmets.com)")
 
     def test_pdfs_are_opened_not_read(self):
         self.assertFalse(m.can_read_here({"kind": "own", "readable": True, "pdf": True}))
