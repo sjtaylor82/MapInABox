@@ -187,6 +187,64 @@ async function mapsWebsite(env, name, suburb, t) {
  * GET a page: { ok, status, url, pdf, title, html, text, menu, readable }.
  * `menu` is the menu check: at least 4 lines with prices, or 4 priced dishes.
  */
+/**
+ * When a menu was last changed, as 'YYYY-MM-DD' (or 'YYYY-MM' from a web
+ * address), or ''. Tried in turn: a date inside the file (a PDF's own
+ * modified date, a page's "modified" tag), the server's Last-Modified (for a
+ * web page only if over a day old: many sites stamp every page "now"), and a
+ * /2026/10/ in the address (WordPress uploads).
+ */
+function menuDate({ inner = '', lastModified = '', url = '', pdf = false }) {
+  const now = Date.now();
+  const ok = (t) => Number.isFinite(t) && t > Date.UTC(2000, 0, 1) && t <= now + 86400000;
+  const iso = (t) => new Date(t).toISOString().slice(0, 10);
+  if (inner) {
+    // PDF: D:20261112075109+01'00'. Page or XMP: 2026-11-12T07:51:09+01:00.
+    const m = inner.match(/^D:(\d{4})(\d{2})(\d{2})/) || inner.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) {
+      const t = Date.UTC(+m[1], +m[2] - 1, +m[3]);
+      if (ok(t)) return iso(t);
+    }
+  }
+  if (lastModified) {
+    const t = Date.parse(lastModified);
+    if (ok(t) && (pdf || now - t > 86400000)) return iso(t);
+  }
+  const m = url.match(/\/((?:19|20)\d{2})\/(0[1-9]|1[0-2])\//);
+  if (m && ok(Date.UTC(+m[1], +m[2] - 1, 1))) return `${m[1]}-${m[2]}`;
+  return '';
+}
+
+/** A PDF's own modified (or created) date, from the start of the file: XMP, then its info. */
+function pdfInnerDate(bytes) {
+  const s = new TextDecoder('latin1').decode(bytes);
+  const m = s.match(/<xmp:ModifyDate>\s*([^<]+)/) || s.match(/\/ModDate\s*\(([^)]+)\)/)
+    || s.match(/<xmp:CreateDate>\s*([^<]+)/) || s.match(/\/CreationDate\s*\(([^)]+)\)/);
+  return m ? m[1].trim() : '';
+}
+
+/** The first `max` bytes of a response body; the rest isn't downloaded. */
+async function firstBytes(res, max) {
+  const reader = res.body.getReader();
+  const parts = [];
+  let n = 0;
+  while (n < max) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value);
+    n += value.length;
+  }
+  reader.cancel().catch(() => {});
+  const out = new Uint8Array(Math.min(n, max));
+  let at = 0;
+  for (const p of parts) {
+    const take = Math.min(p.length, out.length - at);
+    out.set(p.subarray(0, take), at);
+    at += take;
+  }
+  return out;
+}
+
 async function fetchPage(u) {
   try {
     const res = await fetch(u, { headers: { 'User-Agent': BROWSER_UA, Accept: 'text/html,application/pdf,*/*' }, redirect: 'follow', signal: AbortSignal.timeout(7000) });
@@ -197,9 +255,11 @@ async function fetchPage(u) {
     }
     const path = new URL(final).pathname.toLowerCase();
     const pdf = (res.headers.get('Content-Type') || '').toLowerCase().includes('pdf') || path.endsWith('.pdf');
+    const lastModified = res.headers.get('Last-Modified') || '';
     if (pdf) {
-      res.body?.cancel();
-      return { ok: true, url: final, pdf: true, title: '', html: '', text: '', menu: true, readable: true };
+      const inner = res.body ? pdfInnerDate(await firstBytes(res, 131072).catch(() => new Uint8Array())) : '';
+      const updated = menuDate({ inner, lastModified, url: final, pdf: true });
+      return { ok: true, url: final, pdf: true, title: '', html: '', text: '', menu: true, readable: true, updated };
     }
     const html = (await res.text()).slice(0, 600000);
     const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
@@ -208,7 +268,11 @@ async function fetchPage(u) {
     const menu = looksLikeMenu(text) || pricedCount(structure(text, html)) >= 4;
     // A "page not found" page sent as if it were fine.
     if (!menu && SOFT_404.test(title || text.slice(0, 300))) return { ok: false, status: 404, url: final };
-    return { ok: true, url: final, pdf: false, title, html, text, menu, readable: menu };
+    const tag = html.match(/(?:article:modified_time|og:updated_time)["'][^>]*content=["']([^"']+)/i)
+      || html.match(/content=["']([^"']+)["'][^>]*(?:article:modified_time|og:updated_time)/i)
+      || html.match(/"dateModified"\s*:\s*"([^"]+)"/);
+    const updated = menuDate({ inner: tag ? tag[1] : '', lastModified, url: final });
+    return { ok: true, url: final, pdf: false, title, html, text, menu, readable: menu, updated };
   } catch {
     return { ok: false, status: 0, url: u };
   }
@@ -285,7 +349,7 @@ function branchLink(home, html, words) {
 function asResult(page, name, text = '') {
   // A menu page with no menu text may show the menu as pictures.
   const pictures = !page.pdf && !page.readable && page.html ? menuPictures(page.html, page.url).length : 0;
-  return { kind: 'own', title: page.title || text || `${name} menu`, url: page.url, pdf: !!page.pdf, readable: !!page.readable, pictures };
+  return { kind: 'own', title: page.title || text || `${name} menu`, url: page.url, pdf: !!page.pdf, readable: !!page.readable, pictures, updated: page.updated || '' };
 }
 
 const NOT_PICTURE = /logo|icon|favicon|insta|facebook|avatar|badge|sprite|placeholder|payment|award|review|map[-_.]|banner-small/i;
@@ -400,11 +464,16 @@ async function hubMenus(page, name) {
   for (const c of menuLinks(page.url, page.html)) {
     if (urlKey(c.url) === urlKey(page.url)) continue;
     if (/\.pdf$/i.test(new URL(c.url).pathname)) {
-      if (out.length < 5) out.push({ kind: 'own', title: c.text || `${name} menu`, url: c.url, pdf: true, readable: true });
+      if (out.length < 5) out.push({ kind: 'own', title: c.text || `${name} menu`, url: c.url, pdf: true, readable: true, updated: menuDate({ url: c.url }) });
     } else if (pages.length < 2 && (MENU_WORD.test(c.text) || MEAL_WORDS.test(c.text))) {
       pages.push(c);
     }
   }
+  // When each PDF was last changed: only the start of each is read.
+  await Promise.all(out.map(async (r) => {
+    const p = await fetchPage(r.url);
+    if (p.ok && p.updated) r.updated = p.updated;
+  }));
   for (const [p, c] of await Promise.all(pages.map((c) => fetchPage(c.url).then((p) => [p, c])))) {
     if (p.ok && p.menu) out.push({ ...asResult(p, name), title: c.text || p.title });
   }
@@ -439,7 +508,7 @@ async function menu(url, env, ctx) {
   let website = (url.searchParams.get('website') || '').trim().slice(0, 300);
   if (!name) return json({ error: 'Bad request' }, 400);
   const cache = caches.default;
-  const key = new Request(`https://cache.mapinabox/menu/v17/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(suburb.toLowerCase())}`);
+  const key = new Request(`https://cache.mapinabox/menu/v18/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(suburb.toLowerCase())}`);
   const hit = await cache.match(key);
   if (hit) return hit;
 

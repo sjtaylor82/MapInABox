@@ -23,6 +23,17 @@ function where(url) {
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
+/** When a menu was last changed ('2026-05-02' or '2026-05'): 'updated 7 months ago', or ''. */
+export function updatedText(date, now = new Date()) {
+  const m = /^(\d{4})-(\d{2})/.exec(date || '');
+  if (!m) return '';
+  const months = (now.getFullYear() - Number(m[1])) * 12 + (now.getMonth() + 1 - Number(m[2]));
+  if (months <= 0) return 'updated this month';
+  if (months === 1) return 'updated last month';
+  if (months < 24) return `updated ${months} months ago`;
+  return `updated ${Math.floor(months / 12)} years ago`;
+}
+
 /**
  * Find and show the menu for a place in `box` (an empty element).
  * place: { name, lat, lon, website }
@@ -37,7 +48,7 @@ export async function showMenu(box, place) {
   const done = working(null, `Looking for the menu for ${place.name}`, { slow: true });
   const pc = await postcodeAt(place.lat, place.lon).catch(() => null);
   // v: bumped when the answer's shape changes, so browsers don't keep an old copy for a week.
-  const params = new URLSearchParams({ name: place.name, suburb: (pc && pc.place) || '', v: '4' });
+  const params = new URLSearchParams({ name: place.name, suburb: (pc && pc.place) || '', v: '5' });
   if (place.website) params.set('website', place.website);
   let results = [];
   try {
@@ -82,7 +93,8 @@ export async function showMenu(box, place) {
       ? `${place.name} on ${site}`
       : r.kind === 'facebook'
         ? `${place.name} on Facebook (menu photos may be in its posts)`
-        : `${r.pdf ? `${r.title && !/\.pdf$/i.test(r.title) ? r.title : 'Menu'} (PDF)` : r.title || 'Menu'} on ${site}`;
+        : `${r.pdf ? `${r.title && !/\.pdf$/i.test(r.title) ? r.title : 'Menu'} (PDF)` : r.title || 'Menu'} on ${site}`
+          + (r.updated ? `, ${updatedText(r.updated)}` : '');
     li.append(a);
     // A menu page whose menu is pictures: list them here, to share to a reading app.
     if (r.kind === 'own' && !r.readable && !r.pdf && r.pictures) {
