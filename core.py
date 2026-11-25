@@ -552,6 +552,7 @@ from favourites import (
 from street_data import StreetFetcher
 from ai_client import AIClient, MAX_SOURCE_CHARS
 from serper import SerperClient
+import menu_service
 from opensky import OpenSkyClient
 from aviationstack import AviationStackClient, fmt_dep, fmt_arr
 from priceline import PricelineClient
@@ -2772,12 +2773,36 @@ class MapNavigator(
             return
 
         suburb = self._menu_lookup_suburb(poi)
+        tags = poi.get("tags") or {}
+        website = (poi.get("website") or tags.get("website")
+                   or tags.get("contact:website") or "").strip()
 
-        # In-app menu results via the search proxy; fall back to the keyless
-        # browser handoff when nothing usable comes back.
+        # The web edition's menu search, on the Map in a Box server (see
+        # menu_service.py). If the server can't be reached, the desktop's own
+        # search below; if it found nothing, the browser handoff.
+        self._poi_detail_announce(
+            f"Searching for {name} menu. This can take up to half a minute...")
+
+        def _ask_server():
+            try:
+                results = menu_service.find_menus(name, suburb, website)
+            except menu_service.MenuServiceUnavailable as exc:
+                miab_log("errors", f"[Menu] server unavailable, searching here: {exc}", None)
+                self._lookup_menu_links_locally(poi, name, suburb)
+                return
+            miab_log("feature_usage", f"[Menu] server found {len(results)} result(s) for {name!r}", None)
+            if results:
+                wx.CallAfter(self._show_menu_links_dialog, name, results)
+            else:
+                wx.CallAfter(self._open_place_menu_search, name, suburb)
+
+        import threading
+        threading.Thread(target=_ask_server, daemon=True).start()
+
+    def _lookup_menu_links_locally(self, poi: dict, name: str, suburb: str) -> None:
+        """The desktop's own menu search, for when the server can't be reached.
+        Runs on a background thread."""
         if self._serper.is_configured:
-            self._poi_detail_announce(f"Searching for {name} menu...")
-
             def _worker():
                 results = []
                 try:
@@ -2811,11 +2836,10 @@ class MapNavigator(
                     # Nothing usable (or proxy down) — keyless browser fallback.
                     wx.CallAfter(self._open_place_menu_search, name, suburb)
 
-            import threading
-            threading.Thread(target=_worker, daemon=True).start()
+            _worker()
             return
 
-        self._open_place_menu_search(name, suburb)
+        wx.CallAfter(self._open_place_menu_search, name, suburb)
 
     def _menu_lookup_suburb(self, poi: dict) -> str:
         """Pick the most specific suburb/city hint we already know for a POI."""
@@ -3166,7 +3190,11 @@ class MapNavigator(
                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
                         size=(700, 500))
         sizer = wx.BoxSizer(wx.VERTICAL)
-        title = wx.StaticText(dlg, label=f"Menu results for {restaurant_name}: {len(results)} found")
+        # Results from the menu server have a kind; the desktop's own search's don't.
+        from_server = any(isinstance(r, dict) and r.get("kind") for r in results)
+        heading = (menu_service.summary(results, restaurant_name) if from_server
+                   else f"Menu results for {restaurant_name}: {len(results)} found")
+        title = wx.StaticText(dlg, label=heading)
         title_font = title.GetFont()
         title_font.MakeBold()
         title.SetFont(title_font)
@@ -3174,16 +3202,30 @@ class MapNavigator(
 
         scroll = wx.ScrolledWindow(dlg)
         link_sizer = wx.BoxSizer(wx.VERTICAL)
+        first_btn = None
         for i, item in enumerate(results, 1):
             if isinstance(item, dict):
-                label = (item.get("title") or item.get("url") or "").strip()
-                url   = (item.get("url") or "").strip()
+                url = (item.get("url") or "").strip()
+                label = (menu_service.result_label(item, restaurant_name) if item.get("kind")
+                         else (item.get("title") or url).strip())
             else:
                 label = url = str(item)
-            btn = wx.Button(scroll, label=f"{i}. {label[:90]}{'...' if len(label) > 90 else ''}")
+            btn = wx.Button(scroll, label=f"{i}. {label[:110]}{'...' if len(label) > 110 else ''}")
             btn.SetToolTip(url)
             btn.Bind(wx.EVT_BUTTON, lambda e, u=url: webbrowser.open(u))
-            link_sizer.Add(btn, 0, wx.ALL | wx.EXPAND, 5)
+            first_btn = first_btn or btn
+            if isinstance(item, dict) and menu_service.can_read_here(item):
+                # Read the menu right here, as dishes with prices.
+                row = wx.BoxSizer(wx.HORIZONTAL)
+                row.Add(btn, 1, wx.EXPAND)
+                read = wx.Button(scroll, label="Read it here")
+                read.SetName(f"Read {label[:60]} here")
+                read.Bind(wx.EVT_BUTTON,
+                          lambda e, u=url: self._read_menu_here(dlg, restaurant_name, u))
+                row.Add(read, 0, wx.LEFT, 5)
+                link_sizer.Add(row, 0, wx.ALL | wx.EXPAND, 5)
+            else:
+                link_sizer.Add(btn, 0, wx.ALL | wx.EXPAND, 5)
         scroll.SetSizer(link_sizer)
         scroll.SetScrollRate(5, 5)
         sizer.Add(scroll, 1, wx.EXPAND | wx.ALL, 8)
@@ -3195,8 +3237,55 @@ class MapNavigator(
         dlg.Bind(wx.EVT_CHAR_HOOK,
                  lambda e: (self._suppress_map_focus_repeat(800), dlg.EndModal(wx.ID_CLOSE))[1]
                  if e.GetKeyCode() == wx.WXK_ESCAPE else e.Skip())
+        if first_btn:
+            first_btn.SetFocus()
+        if from_server:
+            wx.CallLater(300, self._poi_detail_announce, heading)
         dlg.ShowModal()
         dlg.Destroy()
+
+    def _read_menu_here(self, parent, restaurant_name: str, url: str) -> None:
+        """Read a venue's menu page in the app: the menu server lays it out
+        as sections of dishes with prices, shown in a text box to arrow through."""
+        self._poi_detail_announce("Reading the menu...")
+
+        def _worker():
+            menu = menu_service.read_menu(url)
+            wx.CallAfter(_show, menu)
+
+        def _show(menu):
+            if not parent:  # the results dialog was closed meanwhile
+                return
+            if menu is None:
+                self._poi_detail_announce(
+                    "This menu page can't be read here. Open the link instead.")
+                return
+            heading, lines = menu
+            label = f"{restaurant_name} menu" + (f": {heading}" if heading else "")
+            dlg = wx.Dialog(parent, title=f"{restaurant_name} menu",
+                            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
+                            size=(700, 560))
+            sizer = wx.BoxSizer(wx.VERTICAL)
+            text_label = wx.StaticText(dlg, label=label)
+            sizer.Add(text_label, 0, wx.ALL | wx.EXPAND, 8)
+            ctrl = wx.TextCtrl(dlg, value="\n".join(lines),
+                               style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP)
+            ctrl.SetName(label)
+            sizer.Add(ctrl, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
+            close = wx.Button(dlg, wx.ID_CLOSE, "Close (Escape)")
+            sizer.Add(close, 0, wx.ALIGN_RIGHT | wx.ALL, 8)
+            dlg.SetSizer(sizer)
+            close.Bind(wx.EVT_BUTTON, lambda e: dlg.EndModal(wx.ID_CLOSE))
+            dlg.Bind(wx.EVT_CHAR_HOOK,
+                     lambda e: dlg.EndModal(wx.ID_CLOSE)
+                     if e.GetKeyCode() == wx.WXK_ESCAPE else e.Skip())
+            ctrl.SetInsertionPoint(0)
+            ctrl.SetFocus()
+            dlg.ShowModal()
+            dlg.Destroy()
+
+        import threading
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _open_place_menu_search(self, name: str, suburb: str = "") -> None:
         """Open a Google search for the venue's menu in the browser — keyless.

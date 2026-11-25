@@ -67,6 +67,7 @@ Core features that do not require the user to provide an API key may contact:
 - MobilityData and OurAirports public datasets for transit and airport data.
 - `samtaylor9.nfshost.com` for GNAF address lookup in Australia when GNAF address data is enabled.
 - Google Search, Bing, DuckDuckGo, Google Maps, Uber (`m.uber.com`), venue websites, and provider websites when the user explicitly opens a search result, menu, review page, map page, donation page, ride booking link, or other external browser link.
+- `expert.mapinabox.org` (Map in a Box's own web server) to find a food venue's menu and read menu pages, when the user asks for a menu with `Ctrl+Alt+6`. The venue's name, suburb and website are sent.
 - `miab-menu-search.miab.workers.dev` for best-effort menu and website discovery features, and for built-in AI features: image descriptions, narrative walking briefings, and extra shopping-centre information. AI requests, including any image being described, are forwarded to Groq.
 
 Optional features are only contacted when the user supplies the relevant key or chooses the relevant action:
