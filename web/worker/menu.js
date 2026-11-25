@@ -382,7 +382,8 @@ function menuPictures(html, base) {
     for (const set of [attr('data-srcset'), attr('srcset')]) {
       for (const part of set.split(',')) {
         const [u, w] = part.trim().split(/\s+/);
-        const n = parseInt(w, 10);
+        // "900w", or "1x"/"2x" with the width in the address (Next.js: "&w=1080").
+        const n = /w$/i.test(w || '') ? parseInt(w, 10) : parseInt((/[?&](?:amp;)?w=(\d+)/.exec(u || '') || [])[1], 10);
         if (u && n && ((n <= 1600 && n > bestW) || !bestW)) { best = u; bestW = n; }
       }
     }
@@ -390,17 +391,23 @@ function menuPictures(html, base) {
     if (!best) continue;
     let u;
     try { u = new URL(best.replace(/&amp;/g, '&'), base); } catch { continue; }
-    if (!/^https?:$/.test(u.protocol) || !/\.(jpe?g|png|webp)$/i.test(u.pathname)) continue;
-    if (NOT_PICTURE.test(u.pathname) || NOT_PICTURE.test(attr('alt')) || NOT_PICTURE.test(attr('class'))) continue;
+    // A picture served through an image service (Next.js's /_next/image?url=/menu-board/menu-02.jpg):
+    // the picture's own address is in the query.
+    const inner = u.searchParams.get('url') || '';
+    const file = /\/_next\/image$|\/_vercel\/image$/.test(u.pathname) ? inner : u.pathname;
+    if (!/^https?:$/.test(u.protocol) || !/\.(jpe?g|png|webp)$/i.test(file.split('?')[0])) continue;
+    if (NOT_PICTURE.test(file) || NOT_PICTURE.test(attr('alt')) || NOT_PICTURE.test(attr('class'))) continue;
     const w = parseInt(attr('width'), 10) || 0;
     const h = parseInt(attr('height'), 10) || 0;
     if ((w || h || bestW) && Math.max(w, h, bestW) < 500) continue;
-    const key = u.pathname.replace(/-\d+x\d+(?=\.\w+$)/, '').toLowerCase();
+    const key = file.replace(/-\d+x\d+(?=\.\w+$)/, '').toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(u.href);
+    out.push({ href: u.href, file });
   }
-  return out.slice(0, 8);
+  // When some are named as the menu ("menu-02-breakfast.jpg"), those are the menu: the rest are decoration.
+  const named = out.filter((p) => /menu/i.test(p.file.split('/').pop()));
+  return (named.length ? named : out).map((p) => p.href).slice(0, 8);
 }
 
 /**
@@ -520,7 +527,7 @@ async function menu(url, env, ctx) {
   let website = (url.searchParams.get('website') || '').trim().slice(0, 300);
   if (!name) return json({ error: 'Bad request' }, 400);
   const cache = caches.default;
-  const key = new Request(`https://cache.mapinabox/menu/v19/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(suburb.toLowerCase())}`);
+  const key = new Request(`https://cache.mapinabox/menu/v20/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(suburb.toLowerCase())}`);
   const hit = await cache.match(key);
   if (hit) return hit;
 
