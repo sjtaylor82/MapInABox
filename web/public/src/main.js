@@ -557,10 +557,8 @@ function categoryLabel(key) {
 
 /** P, or Find places: list the places around you in the Places nearby picker. */
 async function openPlaces() {
-  const expert = level() === 'expert';
   // P on the map: Places nearby opens on its screen first, so Back from the list goes there.
-  if ($('places-toggle').getAttribute('aria-expanded') !== 'true' && (state.mode === 'street' || expert)) $('places-toggle').click();
-  if (state.mode !== 'street' && !expert) return say('Places nearby are in street mode. Press F11 first.');
+  if ($('places-toggle').getAttribute('aria-expanded') !== 'true') $('places-toggle').click();
   // Places a kilometre away can be in the next map area: load those first.
   // (On the world map in Expert, the map data around the map position loads now.)
   const { lat, lon } = state;
@@ -1280,13 +1278,13 @@ function applyMapOn() {
 /** Show or hide what only Expert has. */
 /**
  * Parts for street mode only: shown in street mode. Places nearby
- * (data-expert-anywhere) is shown anywhere in Expert, so after jumping to a
- * place its food, menus and other places are right there.
+ * (data-anywhere) is shown on the world map too, so after jumping to a
+ * place its food and other places are right there.
  */
 function showStreetOnly() {
   const inStreet = state.mode === 'street';
   for (const el of document.querySelectorAll('[data-street-only]')) {
-    el.hidden = !(inStreet || (el.hasAttribute('data-expert-anywhere') && level() === 'expert'));
+    el.hidden = !(inStreet || el.hasAttribute('data-anywhere'));
   }
 }
 
