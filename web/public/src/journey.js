@@ -1879,7 +1879,7 @@ function foodLabel(i) {
   return `${withSuburb(p)}. ${i + 1} of ${st.food.length}.`;
 }
 
-/** Apple Maps, Uber Eats and DoorDash links for the chosen food place, as in Places nearby. */
+/** The Apple Maps link for the chosen food place, as in Places nearby. */
 function showFoodLinks() {
   $('journey-food-menu-box').hidden = true;
   const p = st.food[st.foodIdx];
@@ -1888,10 +1888,6 @@ function showFoodLinks() {
   const q = encodeURIComponent(p.name);
   $('journey-food-maps').href = `https://maps.apple.com/?q=${q}&ll=${p.lat},${p.lon}`;
   $('journey-food-maps').textContent = `Open ${p.name} in Apple Maps`;
-  $('journey-food-ubereats').href = `https://www.ubereats.com/search?q=${q}`;
-  $('journey-food-ubereats').textContent = `Search Uber Eats for ${p.name}`;
-  $('journey-food-doordash').href = `https://www.doordash.com/search/store/${q}/`;
-  $('journey-food-doordash').textContent = `Search DoorDash for ${p.name}`;
 }
 
 function goToFood() {

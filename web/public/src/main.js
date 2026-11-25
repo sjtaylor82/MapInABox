@@ -599,73 +599,72 @@ function listPlaces(focusList) {
   say(`${how}. ${street.placeText(found[0])}.`);
 }
 
-/**
- * The places as a list of buttons, nearest first. Pressing one opens its
- * actions right under it (Go there, Details, Menu, Apple Maps, Uber Eats,
- * DoorDash); pressing it again closes them. Focus stays on the button.
- */
+/** The places as a list of buttons, nearest first. Pressing one opens that place on a screen of its own. */
 function showPlaceButtons() {
-  const actions = $('places-actions');
-  actions.hidden = true;
-  $('places-pick').append(actions); // out of the list before it's rebuilt
   $('places-buttons').replaceChildren(...placeResults.map((p, i) => {
     const li = document.createElement('li');
     const b = document.createElement('button');
     b.type = 'button';
     b.textContent = street.placeText(p);
-    b.setAttribute('aria-expanded', 'false');
-    b.addEventListener('click', () => togglePlace(i, li, b));
+    b.addEventListener('click', () => openPlaceScreen(i, b));
     li.append(b);
     return li;
   }));
 }
 
-function togglePlace(i, li, b) {
-  const wasOpen = b.getAttribute('aria-expanded') === 'true';
-  for (const x of $('places-buttons').querySelectorAll('button[aria-expanded="true"]')) x.setAttribute('aria-expanded', 'false');
-  const actions = $('places-actions');
-  if (wasOpen) {
-    actions.hidden = true;
-    return;
-  }
+// The place screen: its name, Go there, Details, Menu and Apple Maps.
+// Details and Menu each replace that on the screen; Back goes back a step,
+// and from the place itself back to the list, onto the place you chose.
+let placeOpener = null;   // the list button that opened the screen
+let placeSubFrom = null;  // the button that opened Details or Menu
+
+function openPlaceScreen(i, opener) {
+  const p = placeResults[i];
+  if (!p) return;
   state.placeIdx = i;
+  placeOpener = opener;
   showPlaceLinks();
-  li.append(actions);
-  actions.hidden = false;
-  b.setAttribute('aria-expanded', 'true');
+  $('place-screen-title').textContent = p.name;
+  $('place-summary').textContent = street.placeText(p).split(', ').slice(1).join(', ');
+  placeView('home');
+  $('place-screen').showModal();
+  $('place-screen-title').focus();
 }
 
-/**
- * Links for the chosen place. Apple Maps has hours, phone, directions and,
- * where a restaurant really delivers, an "Order" button. Uber Eats and
- * DoorDash have no public way to check a restaurant is on them, so their
- * links search for it by name; on a phone they open the app if it is installed.
- */
+function placeView(view) {
+  $('place-home').hidden = view !== 'home';
+  $('place-details').hidden = view !== 'details';
+  $('place-menu').hidden = view !== 'menu';
+}
+
+function placeBack() {
+  if (!$('place-home').hidden) return $('place-screen').close();
+  placeView('home');
+  (placeSubFrom || $('place-screen-title')).focus();
+}
+
+/** The Apple Maps link and Menu button for the chosen place. Apple Maps has hours, phone and directions. */
 function showPlaceLinks() {
-  $('place-details').hidden = true;
-  $('place-menu').hidden = true;
   const p = placeResults[state.placeIdx || 0];
-  $('places-links').hidden = !p;
   if (!p) return;
   const q = encodeURIComponent(p.name);
   $('place-maps').href = `https://maps.apple.com/?q=${q}&ll=${p.lat},${p.lon}`;
   $('place-maps').textContent = `Open ${p.name} in Apple Maps`;
-  const food = p.category === 'food';
-  $('places-menu').hidden = !food;
-  $('place-ubereats').hidden = !food;
-  $('place-doordash').hidden = !food;
-  if (food) {
-    $('place-ubereats').href = `https://www.ubereats.com/search?q=${q}`;
-    $('place-ubereats').textContent = `Search Uber Eats for ${p.name}`;
-    $('place-doordash').href = `https://www.doordash.com/search/store/${q}/`;
-    $('place-doordash').textContent = `Search DoorDash for ${p.name}`;
-  }
+  // The menu search finds its Uber Eats, DoorDash or own menu, when it has one.
+  $('places-menu').hidden = p.category !== 'food';
 }
 
 /** Phone, hours and website for the chosen place, looked up in OpenStreetMap. */
 async function placeDetails() {
   const p = placeResults[state.placeIdx || 0];
   if (!p) return;
+  placeSubFrom = $('places-details');
+  placeView('details');
+  $('place-details-text').textContent = `Looking up ${p.name}…`;
+  $('place-call').hidden = true;
+  $('place-web').hidden = true;
+  $('place-details-title').textContent = `Details: ${p.name}`;
+  $('place-details-title').focus();
   let d = p.details; // already here when the street data came from Overpass
   if (!d || !d.phone || !d.hours) {
     // Ask the server: it checks OpenStreetMap and fills the gaps from HERE.
@@ -716,8 +715,8 @@ async function placeDetails() {
     $('place-web').href = d.website.split(';')[0];
     $('place-web').textContent = `${p.name} website`;
   }
-  $('place-details').hidden = false;
-  say(text);
+  $('place-details-text').tabIndex = -1;
+  $('place-details-text').focus();
 }
 
 function choosePlace() {
@@ -725,7 +724,10 @@ function choosePlace() {
   if (!p) return;
   // The list stays open, so details for the place are still a button away.
   $('places-prompt').hidden = true;
+  placeOpener = null; // going to the map, not back to the list
+  if ($('place-screen').open) $('place-screen').close();
   focusMap();
+  if (state.mode !== 'street') return jumpTo(p.lat, p.lon, `${p.name}, ${p.kind}.`);
   state.lat = p.lat;
   state.lon = p.lon;
   state.streetName = '';
@@ -1668,7 +1670,15 @@ $('places-go').addEventListener('click', choosePlace);
 $('places-details').addEventListener('click', placeDetails);
 $('places-menu').addEventListener('click', () => {
   const p = placeResults[state.placeIdx || 0];
-  if (p) showMenu($('place-menu'), { name: p.name, lat: p.lat, lon: p.lon, website: p.details && p.details.website });
+  if (!p) return;
+  placeSubFrom = $('places-menu');
+  placeView('menu');
+  showMenu($('place-menu'), { name: p.name, lat: p.lat, lon: p.lon, website: p.details && p.details.website });
+});
+$('place-back').addEventListener('click', placeBack);
+// Back to the list, onto the place you chose (Escape closes the screen too).
+$('place-screen').addEventListener('close', () => {
+  if (placeOpener && placeOpener.isConnected) placeOpener.focus();
 });
 onSlowClick($('places-find'), 'Finding places', () => (state.started ? openPlaces() : null));
 for (const id of ['jump-dialog', 'help-dialog', 'venue-dialog']) {

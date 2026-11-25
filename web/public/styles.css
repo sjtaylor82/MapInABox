@@ -424,6 +424,7 @@ button.is-working { opacity: 0.6; cursor: progress; }
 
 .switch[hidden] { display: none; }
 
-/* Places nearby: the chosen place's actions, under its button. */
-.place-actions { margin: 0.25rem 0 0.75rem 1rem; }
-.place-actions > button { margin: 0.25rem 0.5rem 0.25rem 0; }
+/* A screen of its own (a place from Places nearby): the whole window, Back at the top. */
+dialog.screen { width: 100vw; height: 100dvh; max-width: none; max-height: none; margin: 0; border: 0; border-radius: 0; padding: 1rem 16px 2rem; box-sizing: border-box; }
+dialog.screen .back { margin-bottom: 0.75rem; }
+dialog.screen button { margin: 0.25rem 0.5rem 0.25rem 0; }
