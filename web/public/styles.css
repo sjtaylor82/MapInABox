@@ -423,3 +423,7 @@ button.is-working { opacity: 0.6; cursor: progress; }
 .working-status { margin: 0.25rem 0 0.5rem; font-weight: 700; }
 
 .switch[hidden] { display: none; }
+
+/* Places nearby: the chosen place's actions, under its button. */
+.place-actions { margin: 0.25rem 0 0.75rem 1rem; }
+.place-actions > button { margin: 0.25rem 0.5rem 0.25rem 0; }

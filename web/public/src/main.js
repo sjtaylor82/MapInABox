@@ -541,7 +541,6 @@ function takeCorner(m) {
 // ── Places nearby ─────────────────────────────────────────────────────────
 
 let placeResults = [];
-let placesPicker = null;
 
 let categoryTimer = null;
 
@@ -571,7 +570,7 @@ async function openPlaces() {
 }
 
 const PLACES_RADIUS = 1000; // metres
-const PLACES_MAX = 200;
+const PLACES_MAX = 100;
 
 /** Fill the Place picker with the nearest places in the categories switched on. */
 function listPlaces(focusList) {
@@ -585,10 +584,7 @@ function listPlaces(focusList) {
   }
   placeResults = found;
   state.placeIdx = 0;
-  placesPicker.refresh();
-  showPlaceLinks();
-  $('places-list').hidden = !found.length;
-  $('places-go').hidden = !found.length;
+  showPlaceButtons();
   if (!found.length) {
     const why = `No ${category === 'all' ? 'places' : categoryLabel(category).toLowerCase()} found within ${formatDistance(radius)}.`;
     $('places-prompt').textContent = why;
@@ -599,8 +595,44 @@ function listPlaces(focusList) {
   const what = category === 'all' ? 'places' : categoryLabel(category).toLowerCase();
   const how = `${found.length} ${what} within ${formatDistance(radius)}`;
   $('places-prompt').hidden = true;
-  if (focusList) $('places-list').focus();
+  if (focusList) $('places-buttons').querySelector('button').focus();
   say(`${how}. ${street.placeText(found[0])}.`);
+}
+
+/**
+ * The places as a list of buttons, nearest first. Pressing one opens its
+ * actions right under it (Go there, Details, Menu, Apple Maps, Uber Eats,
+ * DoorDash); pressing it again closes them. Focus stays on the button.
+ */
+function showPlaceButtons() {
+  const actions = $('places-actions');
+  actions.hidden = true;
+  $('places-pick').append(actions); // out of the list before it's rebuilt
+  $('places-buttons').replaceChildren(...placeResults.map((p, i) => {
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = street.placeText(p);
+    b.setAttribute('aria-expanded', 'false');
+    b.addEventListener('click', () => togglePlace(i, li, b));
+    li.append(b);
+    return li;
+  }));
+}
+
+function togglePlace(i, li, b) {
+  const wasOpen = b.getAttribute('aria-expanded') === 'true';
+  for (const x of $('places-buttons').querySelectorAll('button[aria-expanded="true"]')) x.setAttribute('aria-expanded', 'false');
+  const actions = $('places-actions');
+  if (wasOpen) {
+    actions.hidden = true;
+    return;
+  }
+  state.placeIdx = i;
+  showPlaceLinks();
+  li.append(actions);
+  actions.hidden = false;
+  b.setAttribute('aria-expanded', 'true');
 }
 
 /**
@@ -1517,13 +1549,6 @@ function setUpPickers() {
       if (!$('places-pick').hidden) categoryTimer = setTimeout(() => listPlaces(false), 900);
     },
   });
-  placesPicker = makePicker($('places-list'), {
-    browse: true,
-    shown: $('places-value'),
-    items: () => placeResults.map((p, i) => ({ value: i, label: `${street.placeText(p)}. ${i + 1} of ${placeResults.length}` })),
-    get: () => state.placeIdx || 0,
-    set: (i) => { state.placeIdx = i; showPlaceLinks(); },
-  });
   jumpPicker = makePicker($('jump-results'), {
     browse: true,
     shown: $('jump-results-value'),
@@ -1639,9 +1664,6 @@ for (const [id, go] of [['jump-walk', walkTo], ['jump-drive', driveTo]]) {
     go({ lat: r.lat, lon: r.lon, label: String(r.label).split(', ').slice(0, 2).join(', ') });
   });
 }
-$('places-list').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') { e.preventDefault(); choosePlace(); }
-});
 $('places-go').addEventListener('click', choosePlace);
 $('places-details').addEventListener('click', placeDetails);
 $('places-menu').addEventListener('click', () => {

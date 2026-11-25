@@ -162,9 +162,8 @@
         <button type="button" id="places-find">Find places <span class="key" aria-hidden="true">(P)</span></button>
         <button type="button" id="places-menus" data-expert>Menus nearby</button>
         <div id="places-pick" hidden>
-          <label for="places-list" class="picker-label">Place</label>
-          <input id="places-list" type="range" class="picker">
-          <p id="places-value" class="picker-value" aria-hidden="true"></p>
+          <ul id="places-buttons" class="result-list"></ul>
+          <div id="places-actions" class="place-actions" hidden>
           <button type="button" id="places-go">Go there</button>
           <button type="button" id="places-details">Details: address, phone, hours</button>
           <button type="button" id="places-menu" hidden data-expert>Menu</button>
@@ -181,6 +180,7 @@
             <a id="place-ubereats" target="_blank" rel="noopener" hidden data-expert>Search Uber Eats</a>
             <a id="place-doordash" target="_blank" rel="noopener" hidden data-expert>Search DoorDash</a>
           </p>
+          </div>
         </div>
       </div>
 
