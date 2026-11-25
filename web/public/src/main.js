@@ -1398,14 +1398,12 @@ function setJumpResults(results) {
   jumpResults = results;
   state.jumpIdx = 0;
   $('jump-pick').hidden = !results.length;
-  $('jump-go').hidden = !results.length;
   jumpPicker.refresh();
   closeJumpDetails();
 }
 
-/** Back to the list: Details shows again for whichever result you move to. */
+/** Back to the list: choosing a result shows its Details again. */
 function closeJumpDetails() {
-  $('jump-details').hidden = !jumpResults.length;
   $('jump-details-box').hidden = true;
   $('jump-menu-box').hidden = true;
   $('jump-menu-box').replaceChildren();
@@ -1468,7 +1466,6 @@ async function jumpDetails() {
   // Food places: their menu, as in Places nearby.
   $('jump-menu').hidden = !(r.food || (d && d.cuisine));
   $('jump-menu').textContent = `Menu for ${name}`;
-  $('jump-details').hidden = true; // you're in Details now
   $('jump-details-box').hidden = false;
   $('jump-details-text').tabIndex = -1;
   $('jump-details-text').focus();
@@ -1702,10 +1699,19 @@ $('jump-input').addEventListener('keydown', (e) => {
 });
 setUpPickers();
 
-$('jump-results').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    chooseSelected();
+// Choosing a result (Enter, or tapping it) shows its Details, with Jump to here among them;
+// "Search online" searches.
+$('jump-results').addEventListener('keydown', async (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  const r = jumpResults[state.jumpIdx || 0];
+  if (!r) return;
+  if (r.online) return chooseJump(r);
+  const done = working(null, 'Looking it up', { speak: false });
+  try {
+    await jumpDetails();
+  } finally {
+    done();
   }
 });
 function chooseSelected() {
@@ -1713,7 +1719,6 @@ function chooseSelected() {
   if (r) chooseJump(r);
 }
 $('jump-go').addEventListener('click', chooseSelected);
-onSlowClick($('jump-details'), 'Looking it up', jumpDetails);
 $('jump-menu').addEventListener('click', () => {
   const r = jumpResults[state.jumpIdx || 0];
   if (!r) return;
@@ -1752,12 +1757,20 @@ $('place-screen').addEventListener('cancel', (e) => {
 // place's details; only then does Jump close. (Cancel still closes it at once.)
 $('jump-dialog').stepBack = () => {
   const box = $('jump-menu-box');
-  if (box.hidden) return false;
-  if (menuBack(box)) return true;
-  box.hidden = true;
-  box.replaceChildren();
-  $('jump-menu').focus();
-  return true;
+  if (!box.hidden) {
+    if (menuBack(box)) return true;
+    box.hidden = true;
+    box.replaceChildren();
+    $('jump-menu').focus();
+    return true;
+  }
+  // From a result's Details back to the results, on that result.
+  if (!$('jump-details-box').hidden) {
+    closeJumpDetails();
+    $('jump-results').focus();
+    return true;
+  }
+  return false;
 };
 // Back to the list, onto the place you chose (Escape closes the screen too).
 $('place-screen').addEventListener('close', () => {
