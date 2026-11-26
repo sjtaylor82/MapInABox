@@ -6,6 +6,7 @@
 //   GET /api/health              { ok: true }
 //   GET /api/search?q=&lat=&lon= Photon place search, cached for a week
 //   GET /api/gplace?q=&lat=&lon= A place on Google Maps, for Jump (Expert): see gplace.js
+//   GET /api/near?q=&lat=&lon=   Places of a kind near a point, for Jump's "pizza in Cleveland": see near.js
 //   GET /api/tile/14/x/y         One OpenFreeMap vector tile (OpenStreetMap
 //                                streets and places), cached for a week
 //   /api/journey, /api/flights, /api/road, /api/food  The journey planner
@@ -17,6 +18,7 @@ import { AREA_SERVERS, areaQuery, areaData } from '../public/src/overpassarea.js
 import { journeyRoute } from './journey.js';
 import { menuRoute } from './menu.js';
 import { googlePlace } from './gplace.js';
+import { placesNear } from './near.js';
 
 const PHOTON = 'https://photon.komoot.io/api/';
 const SEARCH_TTL = 7 * 24 * 3600;
@@ -48,6 +50,7 @@ export default {
     if (url.pathname === '/api/reverse') return reverse(url, ctx);
     if (url.pathname === '/api/geocode') return geocode(url, env, ctx);
     if (url.pathname === '/api/gplace') return googlePlace(url, env);
+    if (url.pathname === '/api/near') return placesNear(url, ctx);
     const tile = url.pathname.match(/^\/api\/tile\/(\d+)\/(\d+)\/(\d+)$/);
     if (tile) return mapTile(Number(tile[1]), Number(tile[2]), Number(tile[3]), ctx);
     if (url.pathname === '/api/place') return placeDetails(url, env, ctx);

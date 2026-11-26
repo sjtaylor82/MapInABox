@@ -1503,11 +1503,74 @@ async function withGoogle(text, results, near) {
   return results;
 }
 
+/** "pizza in Cleveland", "chinese near Coorparoo": { kind, where }, or null. */
+function kindInPlace(text) {
+  const m = /^(.{2,40}?)\s+(?:in|near|around)\s+(.{3,60})$/i.exec(text);
+  return m ? { kind: m[1].trim(), where: m[2].trim() } : null;
+}
+
+/** The suburb or town called `where`, the one nearest you: Cleveland in Queensland, not Ohio. */
+async function findArea(where, near) {
+  const from = near && Number.isFinite(near.lat) ? near : state;
+  const nearest = (list) => list.filter((r) => Number.isFinite(r.lat) && !r.country)
+    .sort((a, b) => haversineM(from.lat, from.lon, a.lat, a.lon) - haversineM(from.lat, from.lon, b.lat, b.lon))[0];
+  const area = (r) => ({ lat: r.lat, lon: r.lon, name: String(r.label).split(', ')[0] });
+  const local = searchLocal(where, 50);
+  const exact = nearest(local.filter((r) => r.rank === 1));
+  if (exact) return area(exact);
+  // Not in the built-in list (Carina is, as "Carina Heights", only partly): the online
+  // search, for a place of just that name; then the nearest partial match.
+  const found = (await online.searchOnline(where, from).catch(() => [])).filter((r) => Number.isFinite(r.lat));
+  const fold = (t) => String(t || '').toLowerCase().trim();
+  const named = nearest(found.filter((r) => fold(String(r.label).split(', ')[0]) === fold(where)));
+  if (named) return area(named);
+  const partial = nearest(local);
+  if (partial) return area(partial);
+  return found[0] ? area(found[0]) : null;
+}
+
+/**
+ * "pizza in Cleveland": places of that kind around the suburb, nearest its middle
+ * first, from the map data (cuisine, what the place is, or its name). True when it
+ * showed them (or said why not); false to search for the words as usual (a place
+ * whose name has "in" in it).
+ */
+async function jumpKindIn({ kind, where }) {
+  const area = await findArea(where, await jumpNear());
+  if (!area) return false;
+  say(`Looking for ${kind} in ${area.name}…`);
+  let list = [];
+  try {
+    const params = new URLSearchParams({ q: kind, lat: area.lat.toFixed(4), lon: area.lon.toFixed(4) });
+    const res = await fetch(`api/near?${params}`, { signal: AbortSignal.timeout(40000) });
+    if (res.status === 502) {
+      say('The map data service is busy. Try again in a moment.');
+      return true;
+    }
+    if (res.ok) list = (await res.json()).results || [];
+  } catch {
+    return false;
+  }
+  if (!list.length) return false;
+  const results = list.map((p) => ({
+    label: [p.name, p.kind, [p.number, p.street].filter(Boolean).join(' '),
+      `${formatDistance(p.dist)} from ${area.name}`].filter(Boolean).join(', '),
+    lat: p.lat, lon: p.lon, food: p.food, website: p.website,
+  }));
+  setJumpResults(results);
+  $('jump-results').focus();
+  say(`${results.length} found for ${kind} in ${area.name}, nearest the middle first. ${results[0].label}.`);
+  return true;
+}
+
 async function runJumpSearch() {
   const text = $('jump-input').value.trim();
   if (!text) return;
   const coords = parseCoordinates(text);
   if (coords) return chooseJump({ label: `${coords.lat}, ${coords.lon}`, ...coords });
+  // "pizza in Cleveland", "chinese near Coorparoo", "pharmacy around Carina".
+  const kindIn = kindInPlace(text);
+  if (kindIn && await jumpKindIn(kindIn)) return;
   let results = searchLocal(text);
   let local = true;
   if (!results.length && text.length >= 4) {
